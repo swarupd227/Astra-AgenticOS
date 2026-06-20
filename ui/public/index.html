@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ASTRA AgenticOS</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" id="hljs-theme" href="vendor/hljs-dark.css" />
+  <script src="vendor/marked.min.js"></script>
+  <script src="vendor/highlight.min.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-mark" id="brand-mark"></div>
+      <div class="brand-text">
+        <div class="brand-title">ASTRA AgenticOS</div>
+        <div class="brand-sub">Agentic SDLC for .NET</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="project-switch" id="project-switch">
+        <button class="project-btn" id="project-btn" aria-haspopup="true">
+          <span class="pj-ico" id="pj-ico"></span>
+          <span class="pj-text"><span class="pj-label">Project</span><span class="pj-name" id="project-name">…</span></span>
+          <span class="pj-chev" id="pj-chev"></span>
+        </button>
+        <div class="project-menu" id="project-menu" hidden></div>
+      </div>
+      <div class="status-pill" id="status"><span class="dot"></span><span id="status-text">connecting…</span></div>
+      <button class="icon-btn" id="artifacts-btn" aria-label="Artifacts" title="Artifacts">
+        <span class="badge" id="artifacts-count" hidden>0</span>
+      </button>
+      <button class="icon-btn" id="theme-toggle" aria-label="Toggle light / dark"></button>
+    </div>
+  </header>
+
+  <div class="app-body">
+    <aside class="sidebar">
+      <div class="sidebar-label">Agents</div>
+      <div id="agent-list" class="agent-list"></div>
+      <div class="sidebar-footer">
+        <div class="grounding-chip" id="grounding-chip"></div>
+        <p>The same MCP server VS&nbsp;Code uses. Every tool call runs against real source.</p>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div id="conversation" class="conversation"></div>
+
+      <div class="composer-wrap">
+        <form id="composer" class="composer">
+          <textarea id="input" rows="1" placeholder="Select an agent to begin…" disabled></textarea>
+          <button id="send" type="submit" class="send-btn" disabled aria-label="Send"></button>
+        </form>
+        <div class="composer-hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for newline</div>
+      </div>
+    </main>
+  </div>
+
+  <!-- New project modal -->
+  <div class="modal-backdrop" id="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-label="New project">
+      <div class="modal-head">
+        <div class="modal-title">New project</div>
+        <button class="icon-btn sm" id="modal-close" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="seg" id="type-seg">
+          <button type="button" class="seg-btn active" data-type="local">Local folder</button>
+          <button type="button" class="seg-btn" data-type="git">Git repository</button>
+        </div>
+
+        <label class="field">
+          <span class="field-label">Project name</span>
+          <input id="np-name" type="text" placeholder="e.g. Payments Service" />
+        </label>
+
+        <label class="field" id="field-local">
+          <span class="field-label">Folder path (absolute)</span>
+          <input id="np-path" type="text" placeholder="C:\\src\\my-app" />
+        </label>
+
+        <label class="field" id="field-git" hidden>
+          <span class="field-label">Repository URL</span>
+          <input id="np-repo" type="text" placeholder="https://github.com/org/repo.git" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">Sub-folder to index <span class="opt">(optional)</span></span>
+          <input id="np-sub" type="text" placeholder="src" />
+        </label>
+
+        <div class="modal-error" id="np-error" hidden></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost" id="np-cancel">Cancel</button>
+        <button class="btn primary" id="np-create">Create &amp; index</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Artifacts drawer -->
+  <div class="drawer-backdrop" id="drawer-backdrop" hidden>
+    <aside class="drawer" id="artifacts-drawer" role="dialog" aria-label="Artifacts">
+      <div class="drawer-head">
+        <div>
+          <div class="drawer-title">Artifacts</div>
+          <div class="drawer-sub" id="drawer-sub">Generated deliverables for this project</div>
+        </div>
+        <button class="icon-btn sm" id="drawer-close" aria-label="Close"></button>
+      </div>
+      <div class="drawer-list" id="artifacts-list"></div>
+    </aside>
+  </div>
+
+  <!-- Artifact viewer -->
+  <div class="modal-backdrop" id="viewer-backdrop" hidden>
+    <div class="modal viewer" role="dialog" aria-modal="true" aria-label="Artifact">
+      <div class="modal-head">
+        <div class="modal-title" id="viewer-title">Artifact</div>
+        <div style="display:flex; gap:8px; align-items:center">
+          <a class="btn ghost sm" id="viewer-download" href="#">Download</a>
+          <button class="icon-btn sm" id="viewer-close" aria-label="Close"></button>
+        </div>
+      </div>
+      <div class="modal-body viewer-body" id="viewer-body"></div>
+    </div>
+  </div>
+
+  <!-- Busy overlay (cloning / indexing) -->
+  <div class="busy-overlay" id="busy-overlay" hidden>
+    <div class="busy-card">
+      <span class="spin big"></span>
+      <div class="busy-title" id="busy-title">Working…</div>
+      <div class="busy-sub" id="busy-sub">This can take a moment on a large codebase.</div>
+    </div>
+  </div>
+
+  <script src="icons.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

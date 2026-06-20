@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "sdlc-ui",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "ui", "start"],
+      "port": 5173
+    }
+  ]
+}

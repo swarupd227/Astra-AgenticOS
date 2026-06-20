@@ -1,0 +1,15 @@
+{
+  "servers": {
+    "sdlc-agents": {
+      "type": "stdio",
+      "command": "dotnet",
+      "args": [
+        "${workspaceFolder}/src/SdlcAgents.Mcp/bin/Release/net9.0/SdlcAgents.Mcp.dll"
+      ],
+      "env": {
+        "NOPCOMMERCE_ROOT": "${workspaceFolder}/demo/nopCommerce/src",
+        "ARTIFACTS_DIR": "${workspaceFolder}/artifacts"
+      }
+    }
+  }
+}

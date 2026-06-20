@@ -1,0 +1,24 @@
+{
+  "name": "astra-agenticos-ui",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ASTRA AgenticOS — visual UI driving the SDLC agents against any project (local folder or git repo) via the same C# MCP server.",
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "dev": "tsx watch src/server.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.2",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "express": "^4.21.2",
+    "gray-matter": "^4.0.3"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.0",
+    "playwright": "^1.61.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0"
+  }
+}

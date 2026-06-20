@@ -1,0 +1,39 @@
+# Build output
+bin/
+obj/
+*.user
+
+# Node (UI)
+node_modules/
+npm-debug.log*
+*.log
+
+# Runtime state (UI projects + cloned repos)
+ui/projects.json
+workspace/
+
+# Recorded demo videos (large binaries)
+ui/recordings/
+
+# Demo target codebase (cloned by scripts/setup.ps1) — external, reproducible
+demo/nopCommerce/
+
+# Generated agent outputs (reproducible by running the agents)
+artifacts/*
+!artifacts/.gitkeep
+
+# Secrets — never commit
+.env
+*.env
+!*.env.example
+
+# Demo codebase (cloned via scripts/setup.ps1)
+demo/nopCommerce/
+
+# Generated artifacts (BRDs, ADRs, tests produced during the demo)
+artifacts/*
+!artifacts/.gitkeep
+
+# IDE
+.vs/
+*.suo
