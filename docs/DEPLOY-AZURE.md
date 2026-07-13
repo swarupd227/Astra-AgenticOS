@@ -41,7 +41,40 @@ git clone https://github.com/swarupd227/Astra-AgenticOS.git
 az acr build -r $ACR -t $IMAGE ./Astra-AgenticOS
 ```
 
-## 3. App Service plan + Web App for Containers
+## 3. Deploy on Azure Container Apps  (recommended)
+
+Works on subscriptions that have **no dedicated App Service VM quota** (the common case), and gives an
+HTTPS URL. Keep **1 always-on replica** — ASTRA builds its code index in memory, so scale-to-zero would
+re-index on every cold start.
+
+```bash
+az extension add -n containerapp --upgrade
+az provider register -n Microsoft.App --wait
+az provider register -n Microsoft.OperationalInsights --wait
+
+az containerapp env create -n astra-env -g $RG -l $LOC
+
+ACR_LOGIN=$(az acr show -n $ACR --query loginServer -o tsv)
+az containerapp create -n astra -g $RG --environment astra-env \
+  --image $ACR_LOGIN/$IMAGE \
+  --registry-server $ACR_LOGIN \
+  --registry-username $(az acr credential show -n $ACR --query username -o tsv) \
+  --registry-password $(az acr credential show -n $ACR --query 'passwords[0].value' -o tsv) \
+  --target-port 5173 --ingress external \
+  --cpu 1.0 --memory 2.0Gi --min-replicas 1 --max-replicas 1 \
+  --secrets anthropic-key="$ANTHROPIC_KEY" \
+  --env-vars ANTHROPIC_API_KEY=secretref:anthropic-key MODEL=claude-sonnet-4-6
+
+echo "App URL:  https://$(az containerapp show -n astra -g $RG --query properties.configuration.ingress.fqdn -o tsv)"
+```
+
+- If indexing a large repo OOMs, bump to `--cpu 2.0 --memory 4.0Gi`.
+- Update the key later: `az containerapp secret set -n astra -g $RG --secrets anthropic-key=<newkey>` then
+  `az containerapp revision restart ...` — or just use the in-app **Settings** gear.
+
+---
+
+## 3-ALT. App Service (only if you have Basic B1+ VM quota)
 
 ```bash
 # Linux plan. B2 (3.5 GB) recommended — the image bundles Node + the .NET runtime.
@@ -132,6 +165,33 @@ az container create -g $RG -n astra \
 az container show -g $RG -n astra --query ipAddress.fqdn -o tsv
 # URL:  http://<fqdn>:5173
 ```
+
+## Troubleshooting
+
+**`Operation cannot be completed without additional quota … Total VMs: 0`** — your subscription has no
+dedicated App Service compute. Use **Container Apps** (§3) or **ACI** (both avoid that quota), or request
+a quota increase (portal → *Quotas*), or use a pay-as-you-go subscription.
+
+**`az acr build` fails to push: `dial tcp: lookup <acr>.azurecr.io … no such host`** — the build ran but
+the push hit a DNS/network blip. Options:
+
+```bash
+# 1) Confirm the registry exists, then simply retry the build:
+az acr show -n $ACR -o table
+az acr build -r $ACR -t $IMAGE ./Astra-AgenticOS
+
+# 2) Or push the image you already built LOCALLY (your machine has Docker + the image):
+#    get creds in Cloud Shell:
+az acr credential show -n $ACR -o table
+#    then on your LOCAL machine:
+docker login $ACR.azurecr.io -u <username> -p <password>
+docker tag astra-agenticos:latest $ACR.azurecr.io/astra-agenticos:latest
+docker push $ACR.azurecr.io/astra-agenticos:latest
+```
+
+**App won't start / 5173** — make sure `WEBSITES_PORT=5173` (App Service) or `--target-port 5173`
+(Container Apps) is set. Check logs: `az containerapp logs show -n astra -g $RG --follow` or
+`az webapp log tail -g $RG -n $APP`.
 
 ## Tear down
 
