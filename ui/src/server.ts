@@ -33,7 +33,7 @@ function loadDotEnv() {
 }
 loadDotEnv();
 const PORT = Number(process.env.PORT ?? 5173);
-const MODEL = process.env.MODEL ?? "claude-sonnet-4-6";
+let MODEL = process.env.MODEL ?? "claude-sonnet-4-6";
 // Large enough that document-generating agents (BRD, big test files) don't get
 // truncated mid-tool-argument. Configurable via env.
 const MAX_TOKENS = Number(process.env.MAX_TOKENS ?? 16000);
@@ -358,7 +358,31 @@ async function callMcpTool(name: string, args: Record<string, unknown>) {
 // ---------------------------------------------------------------------------
 // Agentic loop — Claude picks tools, MCP executes, events stream to the UI
 // ---------------------------------------------------------------------------
-const anthropic = new Anthropic({ maxRetries: 4 }); // reads ANTHROPIC_API_KEY
+let anthropic = new Anthropic({ maxRetries: 4 }); // reads ANTHROPIC_API_KEY
+
+// Update the key/model at runtime (from the in-app Settings panel) and best-effort
+// persist to ui/.env so it survives a restart.
+function applySettings({ apiKey, model }: { apiKey?: string; model?: string }) {
+  if (typeof apiKey === "string" && apiKey.trim()) {
+    process.env.ANTHROPIC_API_KEY = apiKey.trim();
+    anthropic = new Anthropic({ apiKey: apiKey.trim(), maxRetries: 4 });
+  }
+  if (typeof model === "string" && model.trim()) {
+    MODEL = model.trim();
+    process.env.MODEL = MODEL;
+  }
+  try {
+    const envPath = path.join(__dirname, "..", ".env");
+    const lines = [
+      process.env.ANTHROPIC_API_KEY ? `ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY}` : "",
+      `MODEL=${MODEL}`,
+      `PORT=${PORT}`,
+    ].filter(Boolean);
+    fs.writeFileSync(envPath, lines.join("\n") + "\n");
+  } catch (e) {
+    console.error("[settings] could not persist ui/.env:", (e as Error).message);
+  }
+}
 
 // Deep agents (threat model, code-gen, orchestrator) need many tool-call turns
 // before they synthesise. Too low a cap truncates them mid-analysis. Configurable.
@@ -563,6 +587,21 @@ app.get("/api/health", (_req, res) => {
     hasApiKey: Boolean(process.env.ANTHROPIC_API_KEY),
     activeProject: p ? publicProject(p) : null,
   });
+});
+
+// ---- Settings API (in-app key / model) -----------------------------------
+function settingsView() {
+  const k = process.env.ANTHROPIC_API_KEY || "";
+  return { hasApiKey: Boolean(k), keyHint: k ? "…" + k.slice(-4) : "", model: MODEL };
+}
+app.get("/api/settings", (_req, res) => res.json(settingsView()));
+app.post("/api/settings", (req, res) => {
+  try {
+    applySettings(req.body ?? {});
+    res.json({ ok: true, ...settingsView() });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 // ---- Projects API --------------------------------------------------------

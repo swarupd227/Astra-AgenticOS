@@ -31,6 +31,7 @@
       <button class="icon-btn" id="artifacts-btn" aria-label="Artifacts" title="Artifacts">
         <span class="badge" id="artifacts-count" hidden>0</span>
       </button>
+      <button class="icon-btn" id="settings-btn" aria-label="Settings" title="Settings"></button>
       <button class="icon-btn" id="theme-toggle" aria-label="Toggle light / dark"></button>
     </div>
   </header>
@@ -96,6 +97,33 @@
       <div class="modal-foot">
         <button class="btn ghost" id="np-cancel">Cancel</button>
         <button class="btn primary" id="np-create">Create &amp; index</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings modal -->
+  <div class="modal-backdrop" id="settings-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Settings">
+      <div class="modal-head">
+        <div class="modal-title">Settings</div>
+        <button class="icon-btn sm" id="settings-close" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <label class="field">
+          <span class="field-label">Anthropic API key</span>
+          <input id="set-key" type="password" autocomplete="off" placeholder="sk-ant-..." />
+        </label>
+        <div class="set-hint" id="set-keyhint"></div>
+        <label class="field">
+          <span class="field-label">Model</span>
+          <input id="set-model" type="text" placeholder="claude-sonnet-4-6" />
+        </label>
+        <div class="set-hint">Your key is stored locally on the server (in <code>ui/.env</code>) and never sent anywhere except Anthropic.</div>
+        <div class="modal-error" id="set-error" hidden></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost" id="set-cancel">Cancel</button>
+        <button class="btn primary" id="set-save">Save</button>
       </div>
     </div>
   </div>

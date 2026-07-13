@@ -66,6 +66,8 @@ async function boot() {
   $("#pj-chev").innerHTML = icon("chevron", 15);
   $("#modal-close").innerHTML = icon("x", 16);
   $("#artifacts-btn").insertAdjacentHTML("afterbegin", icon("inbox", 18));
+  $("#settings-btn").innerHTML = icon("settings", 18);
+  $("#settings-close").innerHTML = icon("x", 16);
   $("#drawer-close").innerHTML = icon("x", 16);
   $("#viewer-close").innerHTML = icon("x", 16);
   let saved = "dark"; try { saved = localStorage.getItem("sdlc-theme") || "dark"; } catch {}
@@ -74,6 +76,7 @@ async function boot() {
 
   initProjectUI();
   initArtifactsUI();
+  initSettingsUI();
 
   applyStatus("connecting…", "warn");
   agents = await (await fetch("/api/agents")).json();
@@ -246,6 +249,49 @@ async function afterProjectChange() {
 
 function showBusy(title, sub) { $("#busy-title").textContent = title; $("#busy-sub").textContent = sub || ""; $("#busy-overlay").hidden = false; }
 function hideBusy() { $("#busy-overlay").hidden = true; }
+
+// ---------- settings (API key / model) ----------
+function initSettingsUI() {
+  $("#settings-btn").onclick = openSettings;
+  $("#settings-close").onclick = closeSettings;
+  $("#set-cancel").onclick = closeSettings;
+  $("#settings-backdrop").onclick = (e) => { if (e.target === $("#settings-backdrop")) closeSettings(); };
+  $("#set-save").onclick = saveSettings;
+}
+async function openSettings() {
+  $("#set-error").hidden = true;
+  $("#set-key").value = "";
+  try {
+    const s = await (await fetch("/api/settings")).json();
+    $("#set-model").value = s.model || "";
+    $("#set-keyhint").textContent = s.hasApiKey
+      ? `A key is set (ends ${s.keyHint}). Leave blank to keep it.`
+      : "No key set yet — paste one to enable the agents.";
+  } catch { $("#set-keyhint").textContent = ""; }
+  $("#settings-backdrop").hidden = false;
+  $("#set-key").focus();
+}
+function closeSettings() { $("#settings-backdrop").hidden = true; }
+async function saveSettings() {
+  const body = {};
+  const key = $("#set-key").value.trim();
+  const model = $("#set-model").value.trim();
+  if (key) body.apiKey = key;
+  if (model) body.model = model;
+  $("#set-save").disabled = true;
+  try {
+    const r = await (await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    })).json();
+    if (!r.ok) throw new Error(r.error || "Could not save");
+    closeSettings();
+    await refreshHealth();
+  } catch (e) {
+    const el = $("#set-error"); el.textContent = e.message; el.hidden = false;
+  } finally {
+    $("#set-save").disabled = false;
+  }
+}
 
 // ---------- sidebar ----------
 function vis(id) { return AGENT_VISUAL[id] || { icon: "sparkles", hue: 220 }; }
