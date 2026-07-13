@@ -1,0 +1,15 @@
+services:
+  astra:
+    build: .
+    image: astra-agenticos
+    container_name: astra-agenticos
+    ports:
+      - "5173:5173"          # → http://localhost:5173
+    env_file:
+      - ./ui/.env            # ANTHROPIC_API_KEY, MODEL (create from ui/.env.example)
+    environment:
+      - SEED_PROJECT_ROOT=/workspace     # the mounted code becomes the active project
+      - SEED_PROJECT_NAME=Mounted workspace
+    volumes:
+      - ./workspace:/workspace:ro        # put the .NET codebase to analyse here (read-only)
+      - ./artifacts:/app/artifacts       # generated deliverables persist to the host

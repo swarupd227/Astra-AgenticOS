@@ -250,6 +250,24 @@ function loadProjects() {
     projects = [];
   }
   if (!projects.some((p) => p.id === DEMO_ID)) projects.unshift(demoProject());
+
+  // Docker / mounted-workspace seed: if SEED_PROJECT_ROOT points at real source,
+  // add it as a project and make it active by default (the mounted code to analyse).
+  const seedRoot = process.env.SEED_PROJECT_ROOT;
+  if (seedRoot && fs.existsSync(seedRoot)) {
+    if (!projects.some((p) => p.id === "workspace")) {
+      projects.unshift({
+        id: "workspace",
+        name: process.env.SEED_PROJECT_NAME || path.basename(path.resolve(seedRoot)) || "Workspace",
+        type: "local",
+        sourceRoot: path.resolve(seedRoot),
+        artifactsDir: path.join(ARTIFACTS_ROOT, "workspace"),
+        createdAt: new Date().toISOString(),
+      });
+    }
+    if (!activeProjectId || activeProjectId === DEMO_ID) activeProjectId = "workspace";
+  }
+
   if (!activeProjectId || !projects.some((p) => p.id === activeProjectId)) activeProjectId = DEMO_ID;
 }
 function saveProjects() {

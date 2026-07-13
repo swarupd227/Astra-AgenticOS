@@ -1,0 +1,13 @@
+# Keep the build context small & fast
+.git
+node_modules
+ui/node_modules
+**/bin
+**/obj
+demo/nopCommerce
+workspace
+artifacts
+ui/recordings
+ui/.env
+*.webm
+*.log

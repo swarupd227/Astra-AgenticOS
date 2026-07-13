@@ -59,6 +59,22 @@ agents.
 #     then open http://localhost:5173   (see ui/README.md)
 ```
 
+## Run with Docker
+
+The image bundles the Node UI **and** the .NET runtime that hosts the MCP server.
+
+```bash
+# 1. Provide your key (compose reads ui/.env)
+cp ui/.env.example ui/.env      # then set ANTHROPIC_API_KEY
+# 2. Put the .NET codebase you want to analyse into ./workspace  (or edit the volume in docker-compose.yml)
+# 3. Build + run
+docker compose up --build
+```
+
+Then open **http://localhost:5173** (map a different host port with e.g. `ports: ["8080:5173"]`).
+The mounted `./workspace` becomes the active project (via `SEED_PROJECT_ROOT`); you can also add more
+projects from the UI, including cloning a git repo. Generated artifacts persist to `./artifacts`.
+
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the architecture and [`docs/DEMO-SCRIPT.md`](docs/DEMO-SCRIPT.md) for the walkthrough.
 
 ## Architecture (one line)
