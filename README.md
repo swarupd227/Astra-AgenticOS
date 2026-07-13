@@ -75,6 +75,9 @@ Then open **http://localhost:5173** (map a different host port with e.g. `ports:
 The mounted `./workspace` becomes the active project (via `SEED_PROJECT_ROOT`); you can also add more
 projects from the UI, including cloning a git repo. Generated artifacts persist to `./artifacts`.
 
+**Deploy to Azure:** copy-paste Cloud Shell commands are in [`docs/DEPLOY-AZURE.md`](docs/DEPLOY-AZURE.md)
+(build in ACR → Web App for Containers, with an ACI alternative).
+
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the architecture and [`docs/DEMO-SCRIPT.md`](docs/DEMO-SCRIPT.md) for the walkthrough.
 
 ## Architecture (one line)
