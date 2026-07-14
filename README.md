@@ -13,6 +13,7 @@ so the productivity story is concrete on a legacy stack.
 | **SDLC MCP Server** | C# / .NET 9 server giving agents *grounded* code intelligence (Roslyn-backed find-usages, impact analysis) | [`src/SdlcAgents.Mcp/`](src/SdlcAgents.Mcp/) |
 | **VS Code wiring** | Registers the MCP server for Copilot | [`.vscode/mcp.json`](.vscode/mcp.json) |
 | **Visual demo UI** | Browser chat app that drives the same agents via the same MCP server (live Claude API) | [`ui/`](ui/) |
+| **User manual** | Step-by-step guide to every feature of the app | [`docs/USER-MANUAL.md`](docs/USER-MANUAL.md) |
 | **Demo materials** | Design + minute-by-minute demo script | [`docs/`](docs/) |
 
 ## The 28 agents (grouped by SDLC area)
