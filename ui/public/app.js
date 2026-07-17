@@ -8,6 +8,7 @@ const inputEl = $("#input"), sendBtn = $("#send");
 
 let agents = [], activeAgent = null, busy = false, hasMessages = false;
 let projects = [], activeProjectId = null;
+let threadId = null; // current conversation (server-persisted, gives follow-ups memory)
 
 // ---------- markdown + highlight ----------
 if (window.marked) {
@@ -77,6 +78,7 @@ async function boot() {
   initProjectUI();
   initArtifactsUI();
   initSettingsUI();
+  $("#new-chat").onclick = newConversation;
 
   applyStatus("connecting…", "warn");
   agents = await (await fetch("/api/agents")).json();
@@ -239,6 +241,7 @@ async function afterProjectChange() {
   agents = await (await fetch("/api/agents")).json(); // suggestions are project-aware
   renderAgents();
   activeAgent = null;
+  threadId = null; // threads are per project
   document.querySelectorAll(".agent-card").forEach((c) => c.classList.remove("active"));
   inputEl.disabled = true; sendBtn.disabled = true; inputEl.placeholder = "Select an agent to begin…";
   hasMessages = false;
@@ -332,12 +335,56 @@ function renderAgents() {
   }
 }
 
-function selectAgent(id) {
+async function selectAgent(id) {
   if (busy) return;
   activeAgent = agents.find((a) => a.id === id);
   document.querySelectorAll(".agent-card").forEach((c) => c.classList.toggle("active", c.dataset.id === id));
   inputEl.disabled = false; sendBtn.disabled = false;
   inputEl.placeholder = `Ask ${activeAgent.name}…`;
+  hasMessages = false;
+  threadId = null;
+  renderAgentIntro();
+  inputEl.focus();
+  // Restore this agent's most recent conversation for the active project.
+  try {
+    const d = await (await fetch("/api/threads?agentId=" + encodeURIComponent(id))).json();
+    if (d.threads && d.threads.length) await loadThread(d.threads[0].id);
+  } catch {}
+}
+
+async function loadThread(id) {
+  try {
+    const d = await (await fetch("/api/threads/" + encodeURIComponent(id))).json();
+    if (!d.ok || !d.thread.messages.length) return;
+    threadId = d.thread.id;
+    hasMessages = false;
+    const inner = convInner();
+    for (const m of d.thread.messages) {
+      if (m.role === "user") addUser(inner, m.text);
+      else addRestoredAssistant(inner, m.text);
+    }
+    const note = document.createElement("div");
+    note.className = "restored-note";
+    note.textContent = "Earlier conversation restored — follow-ups continue with this context.";
+    inner.insertBefore(note, inner.firstChild);
+    pin();
+  } catch {}
+}
+
+function addRestoredAssistant(inner, text) {
+  const w = document.createElement("div");
+  w.className = "msg assistant";
+  w.innerHTML = `<div class="avatar">${icon(vis(activeAgent.id).icon, 16)}</div>
+    <div class="body"><div class="role">${esc(activeAgent.name)}</div><div class="md"></div></div>`;
+  const md = w.querySelector(".md");
+  md.innerHTML = renderMarkdown(text || "");
+  inner.appendChild(w);
+  highlightIn(md);
+}
+
+function newConversation() {
+  if (busy || !activeAgent) return;
+  threadId = null;
   hasMessages = false;
   renderAgentIntro();
   inputEl.focus();
@@ -443,7 +490,7 @@ async function send() {
   try {
     const resp = await fetch("/api/chat", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agentId: activeAgent.id, message: text }),
+      body: JSON.stringify({ agentId: activeAgent.id, message: text, threadId }),
     });
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
@@ -456,7 +503,10 @@ async function send() {
       while ((nl = buf.indexOf("\n")) >= 0) {
         const line = buf.slice(0, nl).trim();
         buf = buf.slice(nl + 1);
-        if (line) asst.handle(JSON.parse(line));
+        if (!line) continue;
+        const ev = JSON.parse(line);
+        if (ev.type === "thread") { threadId = ev.id; continue; }
+        asst.handle(ev);
       }
     }
   } catch (err) {

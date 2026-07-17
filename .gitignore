@@ -8,8 +8,9 @@ node_modules/
 npm-debug.log*
 *.log
 
-# Runtime state (UI projects + cloned repos)
+# Runtime state (UI projects, conversation history + cloned repos)
 ui/projects.json
+ui/threads.json
 workspace/
 
 # Recorded demo videos (large binaries)

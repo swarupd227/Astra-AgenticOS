@@ -45,7 +45,10 @@ const DLL = path.join(
 const AGENTS_DIR = path.join(repoRoot, ".github/agents");
 const ARTIFACTS_ROOT = path.join(repoRoot, "artifacts");
 const WORKSPACE_DIR = path.join(repoRoot, "workspace"); // cloned git repos live here
-const PROJECTS_FILE = path.join(__dirname, "..", "projects.json");
+// Durable state (projects + conversation threads). Point STATE_DIR at a mounted
+// volume in Docker/Azure so history survives a container restart.
+const STATE_DIR = process.env.STATE_DIR ? path.resolve(process.env.STATE_DIR) : path.join(__dirname, "..");
+const PROJECTS_FILE = path.join(STATE_DIR, "projects.json");
 
 // Suggested prompts per agent (id -> prompts), drawn from docs/DEMO-SCRIPT.md
 const SUGGESTED: Record<string, string[]> = {
@@ -291,6 +294,34 @@ function publicProject(p: Project) {
 }
 
 // ---------------------------------------------------------------------------
+// Conversation threads — per project, persisted to disk so they survive a
+// refresh/restart, and replayed to the model so follow-ups have memory.
+// ---------------------------------------------------------------------------
+interface ThreadMsg { role: "user" | "assistant"; text: string; at: string }
+interface Thread {
+  id: string; projectId: string; agentId: string; agentName: string;
+  title: string; createdAt: string; updatedAt: string; messages: ThreadMsg[];
+}
+const THREADS_FILE = path.join(STATE_DIR, "threads.json");
+// How many past messages to replay as context (keeps token cost bounded).
+const MEMORY_MESSAGES = Number(process.env.MEMORY_MESSAGES ?? 10);
+let threads: Thread[] = [];
+
+function loadThreads() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(THREADS_FILE, "utf8"));
+    threads = Array.isArray(raw.threads) ? raw.threads : [];
+  } catch { threads = []; }
+}
+function saveThreads() {
+  try { fs.writeFileSync(THREADS_FILE, JSON.stringify({ threads }, null, 2)); }
+  catch (e) { console.error("[threads] save failed:", (e as Error).message); }
+}
+function threadSummary(t: Thread) {
+  return { id: t.id, agentId: t.agentId, agentName: t.agentName, title: t.title, updatedAt: t.updatedAt, messages: t.messages.length };
+}
+
+// ---------------------------------------------------------------------------
 // MCP client — launches the SAME C# server VS Code uses, over stdio, pointed at
 // the active project's source root. Switching projects re-spawns it.
 // ---------------------------------------------------------------------------
@@ -434,8 +465,10 @@ async function runAgent(
   agent: Agent,
   userMessage: string,
   emit: (e: any) => void,
-  depth = 0
-) {
+  depth = 0,
+  prior: Anthropic.MessageParam[] = []
+): Promise<string> {
+  let outText = ""; // this agent's own streamed answer (returned so it can be persisted)
   // Orchestrator (top level only) gets read-only grounding tools + `delegate`.
   // Everyone else: intersect declared tools with what the MCP server provides.
   const isOrch = agent.id === ORCH_ID && depth === 0;
@@ -447,7 +480,9 @@ async function runAgent(
     tools = allowed.length ? allowed : mcpTools;
   }
 
+  // Prior turns give the conversation memory; the new question goes last.
   const messages: Anthropic.MessageParam[] = [
+    ...prior,
     { role: "user", content: userMessage },
   ];
 
@@ -461,6 +496,7 @@ async function runAgent(
     let resp: Anthropic.Message | undefined;
     for (let attempt = 0; ; attempt++) {
       let emittedThisAttempt = 0;
+      let attemptText = "";
       try {
         const stream = anthropic.messages.stream({
           model: MODEL,
@@ -471,9 +507,11 @@ async function runAgent(
         });
         stream.on("text", (delta) => {
           emittedThisAttempt++;
+          attemptText += delta;
           emit({ type: "text_delta", text: delta });
         });
         resp = await stream.finalMessage();
+        outText += attemptText; // commit only once the turn actually succeeded
         break;
       } catch (e) {
         if (attempt < 3 && isRetryable(e)) {
@@ -555,11 +593,11 @@ async function runAgent(
   // If we exhausted the turn budget mid-work (last turn still wanted tools),
   // surface it in the answer rather than stopping silently.
   if (lastStop === "tool_use") {
-    emit({
-      type: "text_delta",
-      text: `\n\n_⚠ Reached the ${MAX_TURNS}-step limit before finishing — results above are partial. Re-run with a narrower scope, or raise MAX_TURNS_PER_RUN._`,
-    });
+    const note = `\n\n_⚠ Reached the ${MAX_TURNS}-step limit before finishing — results above are partial. Re-run with a narrower scope, or raise MAX_TURNS_PER_RUN._`;
+    emit({ type: "text_delta", text: note });
+    outText += note;
   }
+  return outText;
 }
 
 // ---------------------------------------------------------------------------
@@ -801,9 +839,36 @@ app.post("/api/chat", async (req, res) => {
     return;
   }
 
+  // Resume an existing thread (memory) or start a new one.
+  const projectId = activeProjectId ?? "none";
+  let thread = threads.find((t) => t.id === req.body?.threadId && t.projectId === projectId);
+  if (!thread) {
+    thread = {
+      id: `${agent.id}-${crypto.randomBytes(4).toString("hex")}`,
+      projectId, agentId: agent.id, agentName: agent.name,
+      title: String(message).slice(0, 70),
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      messages: [],
+    };
+    threads.push(thread);
+  }
+
   try {
     emit({ type: "start", agent: agent.name, model: MODEL });
-    await runAgent(agent, message, emit);
+    emit({ type: "thread", id: thread.id, title: thread.title });
+
+    // Replay the last N turns so follow-up questions have context.
+    const prior: Anthropic.MessageParam[] = thread.messages
+      .slice(-MEMORY_MESSAGES)
+      .map((m) => ({ role: m.role, content: m.text }));
+
+    const answer = await runAgent(agent, message, emit, 0, prior);
+
+    const now = new Date().toISOString();
+    thread.messages.push({ role: "user", text: String(message), at: now });
+    thread.messages.push({ role: "assistant", text: answer, at: now });
+    thread.updatedAt = now;
+    saveThreads();
     emit({ type: "done" });
   } catch (e) {
     emit({ type: "error", message: (e as Error).message });
@@ -812,10 +877,36 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
+// ---- Threads API (conversation history) ----------------------------------
+app.get("/api/threads", (req, res) => {
+  const projectId = activeProjectId ?? "none";
+  const agentId = req.query.agentId ? String(req.query.agentId) : null;
+  const list = threads
+    .filter((t) => t.projectId === projectId && (!agentId || t.agentId === agentId))
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+    .map(threadSummary);
+  res.json({ threads: list });
+});
+
+app.get("/api/threads/:id", (req, res) => {
+  const t = threads.find((x) => x.id === req.params.id);
+  if (!t) { res.status(404).json({ ok: false, error: "Thread not found" }); return; }
+  res.json({ ok: true, thread: t });
+});
+
+app.delete("/api/threads/:id", (req, res) => {
+  const before = threads.length;
+  threads = threads.filter((t) => t.id !== req.params.id);
+  saveThreads();
+  res.json({ ok: true, removed: before - threads.length });
+});
+
 // ---------------------------------------------------------------------------
 function main() {
+  try { fs.mkdirSync(STATE_DIR, { recursive: true }); } catch {}
   agents = loadAgents();
   loadProjects();
+  loadThreads();
   console.error(
     `[ui] ${agents.length} agents, ${projects.length} projects; active=${activeProjectId}`
   );
