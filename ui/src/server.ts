@@ -563,7 +563,10 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 let agents: Agent[] = [];
 
 app.get("/api/agents", (_req, res) => {
-  const demo = activeProjectId === DEMO_ID;
+  // Curated demo prompts apply to the bundled demo *or* any project that is nopCommerce
+  // (e.g. mounted at /workspace in Docker/Azure, where the project id is "workspace").
+  const ap = activeProject();
+  const demo = activeProjectId === DEMO_ID || /nopcommerce/i.test(ap?.sourceRoot ?? "");
   res.json(
     agents.map((a) => ({
       id: a.id,

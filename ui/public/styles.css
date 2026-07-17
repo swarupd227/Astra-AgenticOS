@@ -146,7 +146,7 @@ kbd {
 .cat-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); padding: 14px 8px 5px; }
 .cat-label:first-child { padding-top: 4px; }
 .agent-card {
-  position: relative; text-align: left; background: transparent; border: 1px solid transparent;
+  position: relative; text-align: left; background: transparent; border: 1px solid transparent; color: var(--text);
   border-radius: 12px; padding: 11px 12px; cursor: pointer; transition: .15s; display: flex; gap: 11px; align-items: flex-start;
 }
 .agent-card:hover { background: var(--surface-2); }
@@ -161,8 +161,8 @@ kbd {
 }
 [data-theme="light"] .agent-ico { color: hsl(var(--hue, 220) 65% 45%); background: hsl(var(--hue, 220) 70% 55% / 0.1); }
 .agent-meta { min-width: 0; flex: 1; }
-.agent-name { font-weight: 550; font-size: 13.5px; letter-spacing: -0.01em; }
-.agent-desc { color: var(--text-3); font-size: 11.5px; line-height: 1.45; margin-top: 2px; }
+.agent-name { display: block; font-weight: 550; font-size: 13.5px; letter-spacing: -0.01em; color: var(--text); }
+.agent-desc { display: block; color: var(--text-3); font-size: 11.5px; line-height: 1.45; margin-top: 2px; }
 .sidebar-footer { margin-top: auto; padding: 14px 8px 4px; }
 .grounding-chip {
   display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--text-2);
@@ -189,7 +189,7 @@ kbd {
 .welcome-cat { grid-column: 1 / -1; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); margin: 12px 0 0; }
 .welcome-cat:first-child { margin-top: 0; }
 .welcome-card {
-  text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; color: var(--text);
   padding: 16px; cursor: pointer; transition: .16s; display: flex; flex-direction: column; gap: 10px;
 }
 .welcome-card:hover { transform: translateY(-2px); border-color: var(--border-strong); box-shadow: var(--shadow-md); }
@@ -375,8 +375,8 @@ kbd {
 .pm-ico { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 8px; display: grid; place-items: center; background: var(--surface-3); color: var(--text-2); }
 .pm-item.active .pm-ico { background: var(--accent); color: #fff; }
 .pm-meta { min-width: 0; flex: 1; }
-.pm-name { font-size: 13px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pm-sub { font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-name { display: block; font-size: 13px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-sub { display: block; font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pm-del { color: var(--text-3); background: none; border: none; cursor: pointer; padding: 5px; border-radius: 7px; flex: 0 0 auto; }
 .pm-del:hover { color: var(--red); background: var(--surface-3); }
 .pm-check { color: var(--accent); flex: 0 0 auto; }
@@ -432,8 +432,8 @@ kbd {
 .art-row:hover { border-color: var(--border-strong); background: var(--surface-2); }
 .art-row .ar-ico { width: 34px; height: 34px; flex: 0 0 34px; border-radius: 9px; display: grid; place-items: center; background: var(--accent-bg); color: var(--accent); }
 .art-row .ar-meta { min-width: 0; flex: 1; }
-.art-row .ar-name { font-size: 13px; font-weight: 550; font-family: "JetBrains Mono", monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.art-row .ar-sub { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+.art-row .ar-name { display: block; font-size: 13px; font-weight: 550; font-family: "JetBrains Mono", monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.art-row .ar-sub { display: block; font-size: 11px; color: var(--text-3); margin-top: 2px; }
 .art-row .ar-dl { color: var(--text-3); padding: 6px; border-radius: 8px; flex: 0 0 auto; }
 .art-row .ar-dl:hover { color: var(--accent); background: var(--surface-3); }
 .drawer-empty { color: var(--text-3); font-size: 13px; text-align: center; padding: 40px 20px; line-height: 1.6; }
@@ -450,7 +450,7 @@ kbd {
 .onboard h1 { font-size: 28px; font-weight: 600; letter-spacing: -0.03em; margin: 0 0 10px; }
 .onboard .lede { color: var(--text-2); font-size: 15px; line-height: 1.6; margin: 0 0 26px; max-width: 58ch; }
 .onboard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.onboard-card { text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 20px; cursor: pointer; transition: .16s; }
+.onboard-card { text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 20px; cursor: pointer; transition: .16s; color: var(--text); }
 .onboard-card:hover { transform: translateY(-2px); border-color: var(--accent); box-shadow: var(--shadow-md); }
 .onboard-card .oc-ico { width: 42px; height: 42px; border-radius: 11px; display: grid; place-items: center; background: var(--accent-bg); color: var(--accent); margin-bottom: 12px; }
 .onboard-card h3 { font-size: 15px; font-weight: 600; margin: 0 0 5px; }
