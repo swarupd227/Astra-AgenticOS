@@ -126,6 +126,10 @@ kbd {
 .status-pill.ok .dot { background: var(--green); box-shadow: 0 0 0 3px var(--green-bg); }
 .status-pill.warn .dot { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-bg); }
 .status-pill.ok { color: var(--text); }
+.status-pill.clickable { cursor: pointer; border-color: var(--amber); color: var(--amber-c); font-weight: 550; }
+.status-pill.clickable:hover { background: var(--amber-bg); }
+.pm-item.pm-unavailable { opacity: .45; cursor: not-allowed; }
+.pm-item.pm-unavailable:hover { background: transparent; }
 
 .icon-btn {
   width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px;

@@ -259,9 +259,12 @@ function loadProjects() {
   const seedRoot = process.env.SEED_PROJECT_ROOT;
   if (seedRoot && fs.existsSync(seedRoot)) {
     if (!projects.some((p) => p.id === "workspace")) {
+      // Keep names distinguishable — a seeded project sharing the demo's name is confusing.
+      let seedName = process.env.SEED_PROJECT_NAME || path.basename(path.resolve(seedRoot)) || "Workspace";
+      if (projects.some((p) => p.name === seedName)) seedName = `${seedName} — mounted`;
       projects.unshift({
         id: "workspace",
-        name: process.env.SEED_PROJECT_NAME || path.basename(path.resolve(seedRoot)) || "Workspace",
+        name: seedName,
         type: "local",
         sourceRoot: path.resolve(seedRoot),
         artifactsDir: path.join(ARTIFACTS_ROOT, "workspace"),
@@ -290,7 +293,12 @@ function saveProjects() {
   }
 }
 function publicProject(p: Project) {
-  return { id: p.id, name: p.name, type: p.type, sourceRoot: p.sourceRoot, repoUrl: p.repoUrl, createdAt: p.createdAt };
+  return {
+    id: p.id, name: p.name, type: p.type, sourceRoot: p.sourceRoot, repoUrl: p.repoUrl, createdAt: p.createdAt,
+    // false when the code isn't on disk (e.g. the bundled demo inside a cloud image) —
+    // the UI greys these out instead of letting you pick one that will fail.
+    available: fs.existsSync(p.sourceRoot),
+  };
 }
 
 // ---------------------------------------------------------------------------

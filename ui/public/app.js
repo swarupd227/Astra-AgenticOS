@@ -54,9 +54,22 @@ async function refreshHealth() {
       $("#project-name").textContent = h.activeProject.name;
       $("#grounding-chip").innerHTML = icon("database", 14) + " Grounded in " + esc(h.activeProject.name);
     }
-    if (!h.mcpReady) { applyStatus(h.mcpError ? "MCP error" : "indexing…", "warn"); return false; }
-    if (h.hasApiKey) applyStatus(`${h.model} · ${n} tools`, "ok");
-    else applyStatus(`no API key · ${n} tools`, "warn");
+    // No key is the one problem the user can fix right here — make the pill a route to Settings.
+    if (!h.hasApiKey) {
+      applyStatus("Add your API key →", "warn");
+      statusEl.classList.add("clickable");
+      statusEl.title = "Click to open Settings and paste your Anthropic API key";
+      statusEl.onclick = openSettings;
+      return h.mcpReady;
+    }
+    statusEl.classList.remove("clickable");
+    statusEl.title = "";
+    statusEl.onclick = null;
+    if (!h.mcpReady) {
+      applyStatus(h.activeProject ? (h.mcpError ? "MCP error" : "indexing…") : "no project", "warn");
+      return false;
+    }
+    applyStatus(`${h.model} · ${n} tools`, "ok");
     return true;
   } catch { applyStatus("backend unreachable", "warn"); return false; }
 }
@@ -137,11 +150,14 @@ function renderProjectMenu() {
   const menu = $("#project-menu");
   const items = projects.map((p) => {
     const active = p.id === activeProjectId;
-    const sub = p.type === "git" ? (p.repoUrl || "git repo") : p.sourceRoot;
+    const unavailable = p.available === false;
+    const sub = unavailable
+      ? "source not found — cannot open"
+      : (p.type === "git" ? (p.repoUrl || "git repo") : p.sourceRoot);
     const del = p.id === "nopcommerce" ? "" :
       `<button class="pm-del" data-del="${esc(p.id)}" title="Remove project">${icon("trash", 15)}</button>`;
     const check = active ? `<span class="pm-check">${icon("check", 16)}</span>` : "";
-    return `<div class="pm-item ${active ? "active" : ""}" data-id="${esc(p.id)}">
+    return `<div class="pm-item ${active ? "active" : ""} ${unavailable ? "pm-unavailable" : ""}" data-id="${esc(p.id)}" ${unavailable ? 'title="This project\'s code isn\'t on this machine"' : ""}>
       <span class="pm-ico">${icon(p.type === "git" ? "git" : "folder", 15)}</span>
       <span class="pm-meta"><span class="pm-name">${esc(p.name)}</span><span class="pm-sub">${esc(sub)}</span></span>
       ${check}${del}
@@ -152,6 +168,7 @@ function renderProjectMenu() {
   menu.querySelectorAll(".pm-item").forEach((el) =>
     (el.onclick = (e) => {
       if (e.target.closest(".pm-del")) return;
+      if (el.classList.contains("pm-unavailable")) return; // can't open code that isn't here
       selectProject(el.dataset.id);
     }));
   menu.querySelectorAll(".pm-del").forEach((b) =>

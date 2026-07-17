@@ -76,6 +76,12 @@ Then open **http://localhost:5173** (map a different host port with e.g. `ports:
 The mounted `./workspace` becomes the active project (via `SEED_PROJECT_ROOT`); you can also add more
 projects from the UI, including cloning a git repo. Generated artifacts persist to `./artifacts`.
 
+> **Iterating on the UI?** The image **bakes in** `ui/`, so editing files on the host does **not**
+> change a running container — rebuild (`docker compose up --build`) to see UI/server changes.
+> For fast iteration run it natively instead (`cd ui; npm start`), which serves the files directly.
+
+Conversation history + projects persist to the `./data` volume (`STATE_DIR`), so they survive restarts.
+
 **Deploy to Azure:** copy-paste Cloud Shell commands are in [`docs/DEPLOY-AZURE.md`](docs/DEPLOY-AZURE.md)
 (build in ACR → Web App for Containers, with an ACI alternative).
 
