@@ -48,6 +48,27 @@ public static class ArtifactTools
         return sb.ToString();
     }
 
+    [McpServerTool(Name = "read_artifact")]
+    [Description("Read the content of a previously generated artifact from the /artifacts folder. Use after list_artifacts to actually inspect a BRD, ADR, review or threat model produced by another agent (e.g. to verify evidence before approving).")]
+    public static string ReadArtifact(
+        CodeIndex index,
+        [Description("Artifact path as shown by list_artifacts, e.g. 'brd-checkout.md' or 'tests/TaxServiceTests.cs'.")] string name,
+        [Description("Max characters to return (default 20000).")] int maxChars = 20000)
+    {
+        var safe = SanitizeRelative(name);
+        if (safe is null)
+            return $"Refused: '{name}' resolves outside the artifacts directory.";
+
+        var full = Path.Combine(index.ArtifactsDir, safe);
+        if (!File.Exists(full))
+            return $"Artifact not found: '{name}'. Use list_artifacts to see what exists.";
+
+        var text = File.ReadAllText(full);
+        var truncated = maxChars > 0 && text.Length > maxChars;
+        if (truncated) text = text[..maxChars] + "\n… (truncated)";
+        return $"# `{safe}` ({new FileInfo(full).Length} bytes)\n\n{text}";
+    }
+
     /// <summary>Returns a safe relative path under the artifacts dir, or null if it escapes.</summary>
     private static string? SanitizeRelative(string name)
     {

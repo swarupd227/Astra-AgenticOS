@@ -269,6 +269,15 @@ function loadProjects() {
   }
 
   if (!activeProjectId || !projects.some((p) => p.id === activeProjectId)) activeProjectId = DEMO_ID;
+
+  // If the chosen project's source isn't on disk (e.g. the bundled demo in a cloud image,
+  // where nothing is mounted), don't activate it — that would surface a scary "MCP error".
+  // Leave no active project so the UI shows the "add a project" onboarding instead.
+  const act = projects.find((p) => p.id === activeProjectId);
+  if (act && !fs.existsSync(act.sourceRoot)) {
+    console.error(`[projects] source root missing for "${act.name}" (${act.sourceRoot}) — starting with no active project.`);
+    activeProjectId = null;
+  }
 }
 function saveProjects() {
   try {
@@ -401,7 +410,7 @@ function isRetryable(e: any): boolean {
 
 const ORCH_ID = "orchestrator";
 // Read-only grounding tools the Orchestrator may use directly (besides `delegate`).
-const ORCH_GROUNDING = ["solution_overview", "find_symbol", "search_code", "read_file", "list_artifacts", "save_artifact"];
+const ORCH_GROUNDING = ["solution_overview", "find_symbol", "search_code", "read_file", "list_artifacts", "read_artifact", "save_artifact"];
 
 // Synthetic tool that lets the Orchestrator run another agent and get its result.
 function delegateTool(): Anthropic.Tool {
@@ -456,7 +465,7 @@ async function runAgent(
         const stream = anthropic.messages.stream({
           model: MODEL,
           max_tokens: MAX_TOKENS,
-          system: agent.systemPrompt,
+          system: `${agent.systemPrompt}\n\n---\n**Today's date is ${new Date().toISOString().slice(0, 10)}.** Use it for any date you write (document dates, changelogs, gate records). Never invent or guess a date.`,
           tools,
           messages,
         });
@@ -818,10 +827,15 @@ function main() {
       console.error("  ⚠  ANTHROPIC_API_KEY not set — set it for the live agents.\n");
   });
 
-  activateProject(activeProjectId!).catch((e) => {
-    mcpError = (e as Error).message;
-    console.error("[mcp] connect failed:", mcpError);
-  });
+  if (activeProjectId) {
+    activateProject(activeProjectId).catch((e) => {
+      mcpError = (e as Error).message;
+      console.error("[mcp] connect failed:", mcpError);
+    });
+  } else {
+    mcpError = "No project loaded yet — add a project (local folder or git repo) to begin.";
+    console.error("[mcp] " + mcpError);
+  }
 }
 
 main();

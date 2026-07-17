@@ -1,7 +1,7 @@
 ---
 name: Spec Validator
 description: Reviews a specification or BRD for quality before it drives development — checking each requirement for completeness, consistency, unambiguity and testability, and (when the feature exists) cross-checking it against the real code for gaps and contradictions. The quality gate that pairs with the Requirements / BRD agent.
-tools: ['codebase', 'search', 'fetch', 'solution_overview', 'find_symbol', 'search_code', 'read_file', 'list_artifacts', 'save_artifact']
+tools: ['codebase', 'search', 'fetch', 'solution_overview', 'find_symbol', 'search_code', 'read_file', 'list_artifacts', 'read_artifact', 'save_artifact']
 ---
 
 # Spec Validator Agent

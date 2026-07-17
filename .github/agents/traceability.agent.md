@@ -1,7 +1,7 @@
 ---
 name: Traceability (Spec ↔ Code)
 description: Builds a requirements-to-code traceability matrix for a feature — mapping each functional requirement to the classes/methods that implement it (with file:line) and the tests that verify it, and flagging unimplemented requirements and orphan code. The audit/regulatory angle banks care about; complements the BRD Generator.
-tools: ['codebase', 'search', 'fetch', 'solution_overview', 'find_symbol', 'find_references', 'search_code', 'read_file', 'list_artifacts', 'save_artifact']
+tools: ['codebase', 'search', 'fetch', 'solution_overview', 'find_symbol', 'find_references', 'search_code', 'read_file', 'list_artifacts', 'read_artifact', 'save_artifact']
 ---
 
 # Traceability Agent — Spec ↔ Code
