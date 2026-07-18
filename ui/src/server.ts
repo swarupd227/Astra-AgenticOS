@@ -240,7 +240,9 @@ function demoProject(): Project {
     name: "nopCommerce 3.90 (demo)",
     type: "local",
     sourceRoot: path.join(repoRoot, "demo/nopCommerce/src"),
-    artifactsDir: ARTIFACTS_ROOT,
+    // Own subdir (not the shared root) so its artifact list doesn't recurse into
+    // every other project's folder — that caused cross-project artifact bleed.
+    artifactsDir: path.join(ARTIFACTS_ROOT, DEMO_ID),
     createdAt: new Date().toISOString(),
   };
 }
@@ -253,6 +255,11 @@ function loadProjects() {
     projects = [];
   }
   if (!projects.some((p) => p.id === DEMO_ID)) projects.unshift(demoProject());
+  // Migrate a previously-persisted demo that pointed at the shared artifacts root.
+  const demo = projects.find((p) => p.id === DEMO_ID);
+  if (demo && path.resolve(demo.artifactsDir) === path.resolve(ARTIFACTS_ROOT)) {
+    demo.artifactsDir = path.join(ARTIFACTS_ROOT, DEMO_ID);
+  }
 
   // Docker / mounted-workspace seed: if SEED_PROJECT_ROOT points at real source,
   // add it as a project and make it active by default (the mounted code to analyse).
@@ -434,7 +441,7 @@ function applySettings({ apiKey, model }: { apiKey?: string; model?: string }) {
 
 // Deep agents (threat model, code-gen, orchestrator) need many tool-call turns
 // before they synthesise. Too low a cap truncates them mid-analysis. Configurable.
-const MAX_TURNS = Number(process.env.MAX_TURNS_PER_RUN ?? 36);
+const MAX_TURNS = Number(process.env.MAX_TURNS_PER_RUN ?? 44);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -601,7 +608,7 @@ async function runAgent(
   // If we exhausted the turn budget mid-work (last turn still wanted tools),
   // surface it in the answer rather than stopping silently.
   if (lastStop === "tool_use") {
-    const note = `\n\n_⚠ Reached the ${MAX_TURNS}-step limit before finishing — results above are partial. Re-run with a narrower scope, or raise MAX_TURNS_PER_RUN._`;
+    const note = `\n\n_⚠ **Analysis was cut off at the ${MAX_TURNS}-step limit** — the results above are partial. This usually means the target is large or not fully indexed (the code index is optimized for .NET/C#; other stacks are searched but not symbol-indexed). Try a narrower, more specific prompt, or raise \`MAX_TURNS_PER_RUN\`._`;
     emit({ type: "text_delta", text: note });
     outText += note;
   }

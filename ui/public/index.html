@@ -11,7 +11,8 @@
 </head>
 <body>
   <header class="app-header">
-    <div class="brand">
+    <button class="icon-btn nav-toggle" id="nav-toggle" aria-label="Toggle agents menu"></button>
+    <div class="brand" id="brand" title="Back to home">
       <div class="brand-mark" id="brand-mark"></div>
       <div class="brand-text">
         <div class="brand-title">ASTRA AgenticOS</div>
@@ -36,6 +37,7 @@
     </div>
   </header>
 
+  <div class="nav-backdrop" id="nav-backdrop" aria-hidden="true"></div>
   <div class="app-body">
     <aside class="sidebar">
       <div class="sidebar-label">Agents</div>
@@ -47,6 +49,11 @@
     </aside>
 
     <main class="main">
+      <div class="chat-topbar" id="chat-topbar" hidden>
+        <span class="ct-ico" id="ct-ico"></span>
+        <span class="ct-name" id="ct-name"></span>
+        <button class="ct-new" id="ct-new" type="button">New conversation</button>
+      </div>
       <div id="conversation" class="conversation"></div>
 
       <div class="composer-wrap">
@@ -119,7 +126,13 @@
         <div class="set-hint" id="set-keyhint"></div>
         <label class="field">
           <span class="field-label">Model</span>
-          <input id="set-model" type="text" placeholder="claude-sonnet-4-6" />
+          <input id="set-model" type="text" list="model-list" placeholder="claude-sonnet-4-6" autocomplete="off" />
+          <datalist id="model-list">
+            <option value="claude-opus-4-8"></option>
+            <option value="claude-sonnet-4-6"></option>
+            <option value="claude-haiku-4-5-20251001"></option>
+            <option value="claude-fable-5"></option>
+          </datalist>
         </label>
         <div class="set-hint">Your key is stored locally on the server (in <code>ui/.env</code>) and never sent anywhere except Anthropic.</div>
         <div class="modal-error" id="set-error" hidden></div>

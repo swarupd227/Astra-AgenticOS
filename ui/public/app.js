@@ -84,6 +84,12 @@ async function boot() {
   $("#settings-close").innerHTML = icon("x", 16);
   $("#drawer-close").innerHTML = icon("x", 16);
   $("#viewer-close").innerHTML = icon("x", 16);
+  $("#send").innerHTML = icon("send", 18);
+  $("#nav-toggle").innerHTML = icon("menu", 20);
+  // Clickable logo → home (UI-04); hamburger toggles the sidebar on small screens (UI-02)
+  $("#brand").onclick = goHome;
+  $("#nav-toggle").onclick = () => document.body.classList.toggle("nav-open");
+  $("#ct-new").onclick = newConversation;
   let saved = "dark"; try { saved = localStorage.getItem("sdlc-theme") || "dark"; } catch {}
   setTheme(saved);
   $("#grounding-chip").innerHTML = icon("database", 14) + " Grounded in this codebase";
@@ -92,6 +98,7 @@ async function boot() {
   initArtifactsUI();
   initSettingsUI();
   $("#new-chat").onclick = newConversation;
+  $("#nav-backdrop").onclick = () => document.body.classList.remove("nav-open");
 
   applyStatus("connecting…", "warn");
   agents = await (await fetch("/api/agents")).json();
@@ -265,6 +272,8 @@ async function afterProjectChange() {
   renderWelcome();
   await refreshHealth();
   refreshArtifacts();
+  // If the project dropdown is open (e.g. right after a delete), refresh it in place (PM-01).
+  if ($("#project-switch").classList.contains("open")) renderProjectMenu();
 }
 
 function showBusy(title, sub) { $("#busy-title").textContent = title; $("#busy-sub").textContent = sub || ""; $("#busy-overlay").hidden = false; }
@@ -360,6 +369,11 @@ async function selectAgent(id) {
   inputEl.placeholder = `Ask ${activeAgent.name}…`;
   hasMessages = false;
   threadId = null;
+  // Active-agent indicator in the chat header (UI-09)
+  $("#ct-ico").innerHTML = icon(vis(activeAgent.id).icon, 15);
+  $("#ct-name").textContent = activeAgent.name;
+  $("#chat-topbar").hidden = false;
+  document.body.classList.remove("nav-open"); // close mobile drawer after picking
   renderAgentIntro();
   inputEl.focus();
   // Restore this agent's most recent conversation for the active project.
@@ -405,6 +419,16 @@ function newConversation() {
   hasMessages = false;
   renderAgentIntro();
   inputEl.focus();
+}
+
+function goHome() {
+  if (busy) return;
+  activeAgent = null; threadId = null; hasMessages = false;
+  document.querySelectorAll(".agent-card").forEach((c) => c.classList.remove("active"));
+  inputEl.disabled = true; sendBtn.disabled = true; inputEl.placeholder = "Select an agent to begin…";
+  $("#chat-topbar").hidden = true;
+  document.body.classList.remove("nav-open");
+  renderWelcome();
 }
 
 // ---------- welcome / intro ----------
