@@ -10,8 +10,12 @@ services:
     environment:
       - SEED_PROJECT_ROOT=/workspace     # the mounted code becomes the active project
       - SEED_PROJECT_NAME=Mounted workspace
-      - STATE_DIR=/app/state             # projects + conversation history live here
+      # Everything that must outlive the container. Defaults live inside the image,
+      # so these three settings are what make the app stateful.
+      - STATE_DIR=/app/state             # projects.json + conversation history
+      - ARTIFACTS_DIR=/app/artifacts     # generated BRDs / ADRs / test plans
+      - WORKSPACE_DIR=/app/state/repos   # checkouts of git-backed projects
     volumes:
       - ./workspace:/workspace:ro        # put the .NET codebase to analyse here (read-only)
       - ./artifacts:/app/artifacts       # generated deliverables persist to the host
-      - ./data:/app/state                # conversation history + projects survive restarts
+      - ./data:/app/state                # history, projects and cloned repos survive restarts

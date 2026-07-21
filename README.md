@@ -80,7 +80,14 @@ projects from the UI, including cloning a git repo. Generated artifacts persist 
 > change a running container — rebuild (`docker compose up --build`) to see UI/server changes.
 > For fast iteration run it natively instead (`cd ui; npm start`), which serves the files directly.
 
-Conversation history + projects persist to the `./data` volume (`STATE_DIR`), so they survive restarts.
+**Persistence.** Three env vars decide what outlives the container — all default to paths *inside* the
+image, so setting them is what makes a deployment stateful:
+
+| Var | Holds | Compose default |
+|---|---|---|
+| `STATE_DIR` | projects + conversation history | `/app/state` → `./data` |
+| `ARTIFACTS_DIR` | generated BRDs / ADRs / test plans | `/app/artifacts` → `./artifacts` |
+| `WORKSPACE_DIR` | checkouts of git-backed projects | `/app/state/repos` → `./data/repos` |
 
 **Deploy to Azure:** copy-paste Cloud Shell commands are in [`docs/DEPLOY-AZURE.md`](docs/DEPLOY-AZURE.md)
 (build in ACR → Web App for Containers, with an ACI alternative).

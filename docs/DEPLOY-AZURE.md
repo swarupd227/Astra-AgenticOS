@@ -101,7 +101,11 @@ az webapp config appsettings set -g $RG -n $APP --settings \
   WEBSITES_PORT=5173 \
   WEBSITES_CONTAINER_START_TIME_LIMIT=600 \
   ANTHROPIC_API_KEY="$ANTHROPIC_KEY" \
-  MODEL=claude-sonnet-4-6
+  MODEL=claude-sonnet-4-6 \
+  WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
+  STATE_DIR=/home/data/state \
+  ARTIFACTS_DIR=/home/data/artifacts \
+  WORKSPACE_DIR=/home/data/repos
 
 az webapp restart -g $RG -n $APP
 echo "App URL:  https://$APP.azurewebsites.net"
@@ -111,6 +115,34 @@ echo "App URL:  https://$APP.azurewebsites.net"
 - First start pulls a ~1.9 GB image, so allow a minute or two (the start-time limit is bumped to 600s).
 - You can also leave `ANTHROPIC_API_KEY` out and set it later from the app's **Settings** gear — but an
   app setting is the durable way (survives restarts).
+
+### Making state durable
+
+A container's filesystem is wiped on every restart, scale event and redeploy. `WEBSITES_ENABLE_APP_SERVICE_STORAGE=true`
+mounts App Service's persistent share at `/home`, and the three `*_DIR` settings move everything that
+must outlive the container onto it:
+
+| Setting | Holds | Lost without it |
+|---|---|---|
+| `STATE_DIR` | `projects.json`, `threads.json` | your projects and all conversation history |
+| `ARTIFACTS_DIR` | generated BRDs, ADRs, test plans, reviews | every deliverable the agents produced |
+| `WORKSPACE_DIR` | checkouts of git-backed projects | cloned repos — projects grey out as *unavailable* and need re-adding |
+
+All three default to paths inside the image, so **omitting them is the same as running stateless.**
+Already deployed without them? Apply the settings to a running app (this restarts it — existing
+in-container artifacts and history are lost, projects need re-adding once):
+
+```bash
+az webapp config appsettings set -g $RG -n $APP --settings \
+  WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
+  STATE_DIR=/home/data/state \
+  ARTIFACTS_DIR=/home/data/artifacts \
+  WORKSPACE_DIR=/home/data/repos
+az webapp restart -g $RG -n $APP
+```
+
+`/home` is backed by the App Service file share, so it also survives a fresh `az acr build` +
+image pull — you can redeploy the app without losing anyone's work.
 
 ## 5. (Recommended for a bank) lock it down — it has no built-in auth
 

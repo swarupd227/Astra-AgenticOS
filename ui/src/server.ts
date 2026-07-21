@@ -43,11 +43,18 @@ const DLL = path.join(
   "src/SdlcAgents.Mcp/bin/Release/net9.0/SdlcAgents.Mcp.dll"
 );
 const AGENTS_DIR = path.join(repoRoot, ".github/agents");
-const ARTIFACTS_ROOT = path.join(repoRoot, "artifacts");
-const WORKSPACE_DIR = path.join(repoRoot, "workspace"); // cloned git repos live here
-// Durable state (projects + conversation threads). Point STATE_DIR at a mounted
-// volume in Docker/Azure so history survives a container restart.
+// Durable state. Point these at a mounted volume in Docker/Azure so projects,
+// history, generated deliverables and cloned repos survive a container restart.
+//   STATE_DIR     – projects.json + threads.json
+//   ARTIFACTS_DIR – generated deliverables (BRDs, ADRs, test plans…)
+//   WORKSPACE_DIR – checkouts of git-backed projects
 const STATE_DIR = process.env.STATE_DIR ? path.resolve(process.env.STATE_DIR) : path.join(__dirname, "..");
+const ARTIFACTS_ROOT = process.env.ARTIFACTS_DIR
+  ? path.resolve(process.env.ARTIFACTS_DIR)
+  : path.join(repoRoot, "artifacts");
+const WORKSPACE_DIR = process.env.WORKSPACE_DIR
+  ? path.resolve(process.env.WORKSPACE_DIR)
+  : path.join(repoRoot, "workspace"); // cloned git repos live here
 const PROJECTS_FILE = path.join(STATE_DIR, "projects.json");
 
 // Suggested prompts per agent (id -> prompts), drawn from docs/DEMO-SCRIPT.md
@@ -259,6 +266,15 @@ function loadProjects() {
   const demo = projects.find((p) => p.id === DEMO_ID);
   if (demo && path.resolve(demo.artifactsDir) === path.resolve(ARTIFACTS_ROOT)) {
     demo.artifactsDir = path.join(ARTIFACTS_ROOT, DEMO_ID);
+  }
+  // Rebase artifact folders if ARTIFACTS_DIR has moved (e.g. a deploy that switched
+  // from the image-local path to a mounted volume). Every artifactsDir is
+  // <root>/<leaf>, so re-parenting the leaf is enough.
+  for (const p of projects) {
+    if (!p.artifactsDir) continue;
+    if (path.resolve(path.dirname(p.artifactsDir)) !== path.resolve(ARTIFACTS_ROOT)) {
+      p.artifactsDir = path.join(ARTIFACTS_ROOT, path.basename(p.artifactsDir));
+    }
   }
 
   // Docker / mounted-workspace seed: if SEED_PROJECT_ROOT points at real source,
@@ -918,7 +934,9 @@ app.delete("/api/threads/:id", (req, res) => {
 
 // ---------------------------------------------------------------------------
 function main() {
-  try { fs.mkdirSync(STATE_DIR, { recursive: true }); } catch {}
+  for (const d of [STATE_DIR, ARTIFACTS_ROOT, WORKSPACE_DIR]) {
+    try { fs.mkdirSync(d, { recursive: true }); } catch {}
+  }
   agents = loadAgents();
   loadProjects();
   loadThreads();

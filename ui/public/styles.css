@@ -121,6 +121,7 @@ kbd {
   display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2);
   border: 1px solid var(--border); border-radius: 999px; padding: 6px 13px; background: var(--surface);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap; flex: 0 0 auto;   /* never wrap the pill onto extra header rows */
 }
 .status-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); transition: .3s; }
 .status-pill.ok .dot { background: var(--green); box-shadow: 0 0 0 3px var(--green-bg); }
@@ -497,4 +498,26 @@ kbd {
   body.nav-open .sidebar { transform: none; box-shadow: var(--shadow-lg); }
   body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
   .conv-inner, .welcome, .onboard { padding-left: 18px; padding-right: 18px; }
+}
+
+/* Narrow header: the brand sub-line, status text and project label are the first
+   things to go — otherwise they wrap the 60px header onto three lines. */
+@media (max-width: 760px) {
+  .app-header { padding: 0 12px; gap: 8px; }
+  .brand-sub { display: none; }
+  .brand-title { white-space: nowrap; }
+  .header-right { gap: 6px; }
+  .status-pill { padding: 6px; }
+  .status-pill #status-text { display: none; }
+  .status-pill.clickable #status-text { display: inline; }   /* keep "Add API key" legible */
+  /* Let the project switcher absorb the squeeze (ellipsis) rather than push the
+     row wider — otherwise the "Add API key" state overflows the viewport. */
+  .header-right { min-width: 0; }
+  .project-switch { min-width: 0; flex: 0 1 auto; }
+  .project-btn { min-width: 0; max-width: 100%; }
+  .pj-name { max-width: 100%; }
+}
+@media (max-width: 560px) {
+  .brand-text { display: none; }
+  .pj-label { display: none; }
 }
