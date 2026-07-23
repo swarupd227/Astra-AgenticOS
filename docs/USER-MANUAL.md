@@ -351,6 +351,8 @@ Open the **Artifacts** drawer at the end to download everything produced. Or han
 | Reply: **"ANTHROPIC_API_KEY is not set…"** | Same as above. | Set the key in Settings. |
 | First reply is **slow** | Index is building for a new/switched project. | Wait ~10–15s; subsequent replies are fast. |
 | **"Reached the step limit…"** | Deep analysis used all its turns before finishing. | Narrow the scope, or ask for a shorter output. |
+| **"The answer was cut off at the … output limit"** | The document exceeded the per-response token cap. | Ask for one section at a time, or raise `MAX_TOKENS` on the server (models allow up to 128,000). |
+| **Network timeout / connection lost** mid-run or while adding a big project | A step ran longer than the hosting platform's 230s idle limit with nothing on the wire. | Fixed — the server now sends a keep-alive every 15s. If it recurs, lower `HEARTBEAT_MS`. |
 | A brief **"Reconnecting to the model…"** appears | Transient network blip to the API. | It auto-retries; no action needed. |
 | Agent saved to an artifact but reply looks short | The deliverable went to the artifact. | Open the **Artifacts** drawer and view/download it (§9). |
 

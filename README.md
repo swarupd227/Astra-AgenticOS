@@ -92,6 +92,16 @@ image, so setting them is what makes a deployment stateful:
 
 `MAX_UPLOAD_MB` (default `300`) caps the .zip upload size.
 
+**Tuning knobs** (all optional, read at startup):
+
+| Var | Default | Raise it when |
+|---|---|---|
+| `MAX_TOKENS` | `32000` | A long deliverable is cut off ("the answer was cut off at the … output limit"). Models support up to `128000`. |
+| `MAX_TURNS_PER_RUN` | `44` | Deep analysis stops at the step limit before finishing |
+| `HEARTBEAT_MS` | `15000` | Rarely — lower it only if a proxy times out faster than ~230s |
+| `REQUEST_TIMEOUT_MS` | `1800000` | Very large uploads over slow links |
+| `MEMORY_MESSAGES` | `10` | Agents should remember more of the conversation |
+
 **Deploy to Azure:** copy-paste Cloud Shell commands are in [`docs/DEPLOY-AZURE.md`](docs/DEPLOY-AZURE.md)
 (build in ACR → Web App for Containers, with an ACI alternative).
 

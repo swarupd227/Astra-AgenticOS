@@ -36,7 +36,42 @@ const PORT = Number(process.env.PORT ?? 5173);
 let MODEL = process.env.MODEL ?? "claude-sonnet-4-6";
 // Large enough that document-generating agents (BRD, big test files) don't get
 // truncated mid-tool-argument. Configurable via env.
-const MAX_TOKENS = Number(process.env.MAX_TOKENS ?? 16000);
+// Per-response output cap. Every call streams, so the old 16k ceiling (chosen to dodge
+// non-streaming HTTP timeouts) was needlessly tight and truncated long deliverables —
+// BRDs, migration roadmaps. The models support 128k; 32k is a safe default.
+const MAX_TOKENS = Number(process.env.MAX_TOKENS ?? 32000);
+
+// Azure App Service (and most load balancers/proxies) close a connection that has
+// been idle for 230s. Long steps — cloning a big repo, indexing, a slow model turn —
+// can exceed that with no bytes on the wire, which the browser reports as a network
+// timeout. Everything long-running below sends filler well inside that window.
+const HEARTBEAT_MS = Number(process.env.HEARTBEAT_MS ?? 15000);
+
+// Keeps a slow JSON response alive: newlines are legal JSON whitespace *before* the
+// value, so the padding is invisible to `await res.json()` on the client.
+//
+// Writing the first byte locks in the status code, so nothing is written until the
+// request has already run longer than one heartbeat — validation errors are all fast
+// and keep their real 4xx. Only genuinely long operations get padded, and a failure
+// after that point still carries {ok:false, error} which is what the UI reads.
+function keepJsonAlive(res: express.Response) {
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("X-Accel-Buffering", "no");
+  const timer = setInterval(() => {
+    if (!res.writableEnded) res.write("\n");
+  }, HEARTBEAT_MS);
+  timer.unref?.();
+  res.on("close", () => clearInterval(timer));
+  return {
+    send(status: number, payload: unknown) {
+      clearInterval(timer);
+      if (res.writableEnded) return;
+      if (!res.headersSent) res.status(status);
+      res.end(JSON.stringify(payload));
+    },
+  };
+}
 
 const DLL = path.join(
   repoRoot,
@@ -582,7 +617,8 @@ async function runAgent(
       emit({
         type: "error",
         message:
-          "Output hit the max_tokens limit and was truncated. Increase MAX_TOKENS or ask for a shorter document.",
+          `The answer was cut off at the ${MAX_TOKENS.toLocaleString()}-token output limit — what you see above is incomplete. ` +
+          `Ask for one section at a time, or raise MAX_TOKENS on the server (the model supports up to 128,000).`,
       });
       break;
     }
@@ -828,6 +864,7 @@ function collapseSingleRoot(dir: string): string {
 app.post("/api/projects/upload", async (req, res) => {
   const name = String(req.query.name || "").trim();
   const subPath = String(req.query.subPath || "").trim();
+  const alive = keepJsonAlive(res); // extraction + indexing runs long and silent
   const dir = path.join(WORKSPACE_DIR, "upload-tmp-" + crypto.randomUUID().slice(0, 8));
   const zipFile = dir + ".zip";
   let extracted: string | null = null;
@@ -879,12 +916,12 @@ app.post("/api/projects/upload", async (req, res) => {
     saveProjects();
     await activateProject(id);
     extracted = null; // committed
-    res.json({ ok: true, project: publicProject(project), sizeBytes: bytes });
+    alive.send(200, { ok: true, project: publicProject(project), sizeBytes: bytes });
   } catch (e) {
     try { fs.rmSync(zipFile, { force: true }); } catch {}
     if (extracted) { try { fs.rmSync(extracted, { recursive: true, force: true }); } catch {} }
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
-    res.status(400).json({ ok: false, error: (e as Error).message });
+    alive.send(400, { ok: false, error: (e as Error).message });
   }
 });
 
@@ -894,6 +931,7 @@ app.post("/api/projects", async (req, res) => {
   // A clone that succeeds but fails a later check (bad sub-folder, index error) must
   // not leave a full checkout stranded on disk.
   let clonedDir: string | null = null;
+  const alive = keepJsonAlive(res); // cloning + indexing a large repo runs long and silent
   try {
     if (!name || !type) throw new Error("name and type are required");
     const id = newId(name);
@@ -957,20 +995,21 @@ app.post("/api/projects", async (req, res) => {
     saveProjects();
     await activateProject(id); // spawn MCP + index now
     clonedDir = null; // committed — keep the checkout
-    res.json({ ok: true, project: publicProject(project) });
+    alive.send(200, { ok: true, project: publicProject(project) });
   } catch (e) {
     if (clonedDir) { try { fs.rmSync(clonedDir, { recursive: true, force: true }); } catch {} }
-    res.status(400).json({ ok: false, error: (e as Error).message });
+    alive.send(400, { ok: false, error: (e as Error).message });
   }
 });
 
 app.post("/api/projects/:id/activate", async (req, res) => {
+  const alive = keepJsonAlive(res); // re-indexing a large codebase runs long and silent
   try {
     await activateProject(req.params.id);
-    res.json({ ok: true, project: activeProject() ? publicProject(activeProject()!) : null });
+    alive.send(200, { ok: true, project: activeProject() ? publicProject(activeProject()!) : null });
   } catch (e) {
     mcpError = (e as Error).message;
-    res.status(400).json({ ok: false, error: (e as Error).message });
+    alive.send(400, { ok: false, error: (e as Error).message });
   }
 });
 
@@ -1074,7 +1113,18 @@ app.post("/api/chat", async (req, res) => {
 
   res.setHeader("Content-Type", "application/x-ndjson");
   res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("X-Accel-Buffering", "no"); // don't let a proxy buffer the stream
   const emit = (e: any) => res.write(JSON.stringify(e) + "\n");
+
+  // Azure App Service drops any connection idle for 230s, and a single slow step
+  // (a big index scan, a long model turn) can easily be silent for longer than
+  // that — which surfaces to the user as a network timeout mid-answer. A periodic
+  // ping keeps bytes flowing; the client ignores event types it doesn't know.
+  const heartbeat = setInterval(() => {
+    if (!res.writableEnded) emit({ type: "ping", at: Date.now() });
+  }, HEARTBEAT_MS);
+  heartbeat.unref?.();
+  res.on("close", () => clearInterval(heartbeat));
 
   if (!mcpReady) {
     emit({ type: "error", message: mcpError ?? "MCP server is still starting — try again in a moment." });
@@ -1126,6 +1176,7 @@ app.post("/api/chat", async (req, res) => {
   } catch (e) {
     emit({ type: "error", message: (e as Error).message });
   } finally {
+    clearInterval(heartbeat);
     res.end();
   }
 });
@@ -1167,11 +1218,17 @@ function main() {
   );
 
   // Listen immediately so the page loads instantly; connect MCP in the background.
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.error(`\n  ASTRA AgenticOS →  http://localhost:${PORT}\n`);
     if (!process.env.ANTHROPIC_API_KEY)
       console.error("  ⚠  ANTHROPIC_API_KEY not set — set it for the live agents.\n");
   });
+  // Node aborts a request whose body takes longer than requestTimeout (default 5 min)
+  // to arrive — a 300 MB upload over a slow corporate link exceeds that. Agent runs and
+  // indexing are unaffected by these, but a long-lived response needs no socket timeout.
+  server.requestTimeout = Number(process.env.REQUEST_TIMEOUT_MS ?? 30 * 60 * 1000);
+  server.headersTimeout = server.requestTimeout + 5000;
+  server.timeout = 0; // no socket-inactivity cap; the heartbeats keep proxies happy
 
   if (activeProjectId) {
     activateProject(activeProjectId).catch((e) => {
