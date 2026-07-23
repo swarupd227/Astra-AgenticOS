@@ -33,7 +33,7 @@ modernization, and a human-review gate. Every agent reads your **actual source c
 code-intelligence server (the "MCP server"), so answers are **grounded and cite `file.cs:line`**
 rather than being guessed.
 
-You point ASTRA at a **project** (a local folder or a git repository), pick an **agent**, and ask a
+You point ASTRA at a **project** (an uploaded .zip, a git repository, or a local folder), pick an **agent**, and ask a
 question in plain language. The agent calls tools on your code, streams its reasoning live, and
 produces an answer — often saved as a downloadable **artifact** (a BRD, an ADR, a threat model, tests,
 a pipeline, etc.).
@@ -113,25 +113,44 @@ and "Grounded in \<project\>" shows in the sidebar footer.
    re-points the code server and rebuilds the index.
 3. When it finishes, the status pill returns to green and the agents now analyse that project.
 
-### 5.2 Add a project from a local folder
+> **Which of the three do I use?** If you are using a **shared/hosted ASTRA** (the Azure URL), it runs
+> on a server and cannot see your PC — use **Upload .zip** or **Git repository**. "Local folder" only
+> works when ASTRA runs on the same machine as the code.
+
+### 5.2 Add a project by uploading a .zip  *(easiest — works from any PC)*
 1. Click the **project pill** → **New project…**
-2. Choose the **Local folder** tab.
-3. Enter a **Project name** (anything, e.g. "Payments Service").
-4. Enter the **Folder path** — an absolute path to the .NET source on the machine running ASTRA
-   (e.g. `C:\src\payments`). *(Only works when ASTRA can see that path — i.e. local runs, or a path
-   mounted into the container.)*
-5. (Optional) **Sub-folder to index** — e.g. `src` to index just that part.
-6. Click **Create & index**. ASTRA indexes it and switches to it automatically.
+2. Choose the **Upload .zip** tab (it is preselected on a hosted ASTRA).
+3. In Windows Explorer, right-click your solution folder → **Send to → Compressed (zipped) folder**.
+4. **Drag the .zip onto the drop zone**, or click it to browse. The project name fills in from the
+   file name; the size and a progress bar are shown while it uploads.
+5. (Optional) **Sub-folder to index** — e.g. `src`.
+6. Click **Create & index**.
+
+Notes:
+- Limit **300 MB** by default (`MAX_UPLOAD_MB` on the server). Exclude `bin/`, `obj/` and `packages/`
+  — they are build output, they are not indexed, and they are usually most of the size.
+- If the zip contains a single top-level folder (as Windows and GitHub's "Download ZIP" both produce),
+  ASTRA steps into it automatically, so `src` still means `src`.
+- The upload is code-only: it is extracted on the server and indexed, never sent anywhere else.
 
 ### 5.3 Add a project from a git repository
 1. Click the **project pill** → **New project…**
 2. Choose the **Git repository** tab.
 3. Enter a **Project name**.
-4. Enter the **Repository URL** (e.g. `https://github.com/org/repo.git`). Public repos work as-is;
-   private repos need credentials configured in the server's git environment.
-5. (Optional) **Sub-folder to index** (e.g. `src`).
-6. Click **Create & index**. ASTRA **clones** the repo, indexes it, and switches to it. *(This is the
-   way to give a cloud/Docker deployment something to analyse.)*
+4. Enter the **Repository URL** (e.g. `https://github.com/org/repo.git`).
+5. **Private repo?** Paste a personal access token in **Access token** (GitHub PAT, GitLab token, or
+   Azure DevOps PAT). It is used once for the clone and then discarded — it is never written to disk,
+   stored in the project, or shown again. Leave it blank for public repos.
+6. (Optional) **Sub-folder to index** (e.g. `src`).
+7. Click **Create & index**. ASTRA **clones** the repo, indexes it, and switches to it.
+
+### 5.3b Add a project from a local folder  *(local installs only)*
+1. Click the **project pill** → **New project…** → **Local folder** tab.
+2. Enter a **Project name** and the **absolute** path to the source **on the machine running ASTRA**
+   (e.g. `C:\src\payments` locally, or `/home/data/repos/payments` on a Linux server).
+3. (Optional) **Sub-folder to index**, then **Create & index**.
+
+On a hosted ASTRA this tab will tell you it cannot reach your PC — that is expected; use §5.2 or §5.3.
 
 ### 5.4 Remove a project
 1. Open the **project pill** dropdown.
@@ -322,7 +341,12 @@ Open the **Artifacts** drawer at the end to download everything produced. Or han
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| **"MCP error"** in the status pill; **"Source root not found: …"** in a reply | The active project's code isn't present (common in cloud where nothing is mounted). | Add a project via **New project → Git repository** (or Local folder). It clones/indexes and the error clears. |
+| **"MCP error"** in the status pill; **"Source root not found: …"** in a reply | The active project's code isn't present (common in cloud where nothing is mounted). | Add a project via **New project → Upload .zip** or **Git repository**. It indexes and the error clears. |
+| **"… is a Windows path, but ASTRA is running on Linux"** | You entered a path from your own PC (e.g. `C:\Sandbox`) into a **hosted** ASTRA, which cannot see your machine. | Use **Upload .zip** or **Git repository** instead. |
+| Git: **"needs authentication — it is private, or the URL is wrong"** | Private repo with no token, or a typo (git cannot tell those apart). | Paste a PAT into **Access token**, or check the URL. |
+| Git: **"Authentication was rejected"** | The token is wrong, expired, or lacks read access. | Re-issue it; for GitHub fine-grained tokens the org must also approve it. |
+| Upload: **"That zip is N MB — the limit is 300 MB"** | Archive too large, usually because `bin/obj/packages` were included. | Re-zip source only, or raise `MAX_UPLOAD_MB` on the server. |
+| Upload: **"The sub-folder … does not exist in the uploaded zip"** | The sub-folder path doesn't match the zip's layout. | Leave **Sub-folder to index** blank to index everything. |
 | Status pill: **"no API key"** | No key configured. | Open **Settings** (gear) and paste your key (§3). |
 | Reply: **"ANTHROPIC_API_KEY is not set…"** | Same as above. | Set the key in Settings. |
 | First reply is **slow** | Index is building for a new/switched project. | Wait ~10–15s; subsequent replies are fast. |

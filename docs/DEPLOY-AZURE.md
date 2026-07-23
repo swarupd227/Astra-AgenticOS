@@ -164,9 +164,20 @@ Harden the secret with Key Vault (optional):
 
 ## 6. Give it code to analyse
 
-There's no mounted local folder in the cloud, so after the app is up:
-- open it → **New project → Git repository** → paste a repo URL (the container has `git`, so it clones
-  and indexes it), or
+There's no mounted local folder in the cloud — the container cannot see anyone's PC, so the
+**Local folder** tab is not usable there. After the app is up, users have two ways in:
+
+- **New project → Upload .zip** — they zip their solution folder and upload it from their own machine.
+  No server access needed. Default cap is 300 MB; raise it with an app setting if needed:
+  ```bash
+  az webapp config appsettings set -g $RG -n $APP --settings MAX_UPLOAD_MB=500
+  ```
+  Uploaded code lands in `WORKSPACE_DIR`, so set that to the persistent share (above) or it is lost on restart.
+- **New project → Git repository** → paste a repo URL (the container has `git`, so it clones
+  and indexes it). Private repos take a personal access token in the **Access token** field; it is used
+  only for the clone and never stored.
+
+Other options:
 - bake a target repo into the image, or mount Azure Files at `/workspace` and set
   `SEED_PROJECT_ROOT=/workspace` (advanced).
 

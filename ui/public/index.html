@@ -80,6 +80,7 @@
         <div class="seg" id="type-seg">
           <button type="button" class="seg-btn active" data-type="local">Local folder</button>
           <button type="button" class="seg-btn" data-type="git">Git repository</button>
+          <button type="button" class="seg-btn" data-type="upload">Upload .zip</button>
         </div>
 
         <label class="field">
@@ -105,6 +106,15 @@
             <input id="np-token" type="password" autocomplete="off" placeholder="ghp_… / Azure DevOps PAT" />
           </label>
           <div class="set-hint">Used once to clone, then discarded — it is never saved to disk or shown again.</div>
+        </div>
+
+        <div id="field-upload" hidden>
+          <div class="dropzone" id="np-drop" tabindex="0" role="button" aria-label="Choose a .zip file">
+            <span class="dz-ico" id="dz-ico"></span>
+            <div class="dz-main" id="dz-main">Drop a <b>.zip</b> here, or click to browse</div>
+            <div class="dz-sub" id="dz-sub">Zip your solution folder and upload it — nothing needs to be on the server.</div>
+            <input type="file" id="np-file" accept=".zip,application/zip" hidden />
+          </div>
         </div>
 
         <label class="field">

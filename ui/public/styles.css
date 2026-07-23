@@ -402,10 +402,25 @@ kbd {
 .seg-btn { flex: 1; padding: 8px; border: none; background: transparent; color: var(--text-2); font-size: 13px; font-weight: 550; border-radius: 7px; cursor: pointer; transition: .12s; }
 .seg-btn.active { background: var(--accent); color: #fff; box-shadow: var(--shadow-sm); }
 .field { display: flex; flex-direction: column; gap: 6px; }
-/* The local/git tab wrappers must space their fields like the modal body does. */
-#field-local, #field-git { display: flex; flex-direction: column; gap: 14px; }
-#field-local[hidden], #field-git[hidden] { display: none; }
+/* The tab wrappers must space their fields like the modal body does. */
+#field-local, #field-git, #field-upload { display: flex; flex-direction: column; gap: 14px; }
+#field-local[hidden], #field-git[hidden], #field-upload[hidden] { display: none; }
 #field-local .set-hint, #field-git .set-hint { margin-top: -8px; }
+
+/* Upload drop zone */
+.dropzone {
+  border: 1.5px dashed var(--border-strong); border-radius: 12px; background: var(--surface-2);
+  padding: 26px 18px; text-align: center; cursor: pointer; transition: .15s; color: var(--text-2);
+}
+.dropzone:hover, .dropzone:focus-visible { border-color: var(--accent); background: var(--accent-bg); outline: none; }
+.dropzone.over { border-color: var(--accent); background: var(--accent-bg); transform: scale(1.01); }
+.dropzone.has-file { border-style: solid; border-color: var(--green); background: var(--green-bg); }
+.dz-ico { display: block; color: var(--accent); margin-bottom: 10px; }
+.dz-main { font-size: 13.5px; color: var(--text); }
+.dz-sub { font-size: 12px; color: var(--text-3); margin-top: 5px; }
+/* Determinate progress while the zip uploads */
+.up-bar { height: 5px; border-radius: 999px; background: var(--surface-2); overflow: hidden; margin-top: 14px; width: min(320px, 70vw); }
+.up-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .18s; }
 .field-label { font-size: 12.5px; font-weight: 550; color: var(--text-2); }
 .field-label .opt { color: var(--text-3); font-weight: 400; }
 .field input { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px; font-family: inherit; font-size: 13.5px; }
@@ -461,7 +476,8 @@ kbd {
 .onboard .welcome-badge { margin-bottom: 18px; }
 .onboard h1 { font-size: 28px; font-weight: 600; letter-spacing: -0.03em; margin: 0 0 10px; }
 .onboard .lede { color: var(--text-2); font-size: 15px; line-height: 1.6; margin: 0 0 26px; max-width: 58ch; }
-.onboard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+/* 2 cards when hosted (no local-folder option), 3 when running locally. */
+.onboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
 .onboard-card { text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 20px; cursor: pointer; transition: .16s; color: var(--text); }
 .onboard-card:hover { transform: translateY(-2px); border-color: var(--accent); box-shadow: var(--shadow-md); }
 .onboard-card .oc-ico { width: 42px; height: 42px; border-radius: 11px; display: grid; place-items: center; background: var(--accent-bg); color: var(--accent); margin-bottom: 12px; }

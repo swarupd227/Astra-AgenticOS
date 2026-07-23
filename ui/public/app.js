@@ -106,6 +106,7 @@ async function boot() {
   $("#viewer-close").innerHTML = icon("x", 16);
   $("#send").innerHTML = icon("send", 18);
   $("#nav-toggle").innerHTML = icon("menu", 20);
+  $("#dz-ico").innerHTML = icon("upload", 26);
   // Clickable logo → home (UI-04); hamburger toggles the sidebar on small screens (UI-02)
   $("#brand").onclick = goHome;
   $("#nav-toggle").onclick = () => document.body.classList.toggle("nav-open");
@@ -124,6 +125,9 @@ async function boot() {
   agents = await (await fetch("/api/agents")).json();
   renderAgents();
   await loadProjects();
+  // Onboarding differs when hosted (no "local folder" option), so learn where the
+  // server runs BEFORE the first render rather than flashing the wrong choice.
+  try { hostInfo = (await (await fetch("/api/health")).json()).host || null; } catch {}
   renderWelcome();
   refreshArtifacts();
 
@@ -145,11 +149,77 @@ function initProjectUI() {
   document.querySelectorAll(".seg-btn").forEach((b) =>
     (b.onclick = () => {
       document.querySelectorAll(".seg-btn").forEach((x) => x.classList.toggle("active", x === b));
-      const git = b.dataset.type === "git";
-      $("#field-local").hidden = git;
-      $("#field-git").hidden = !git;
+      showTab(b.dataset.type);
     })
   );
+  initUploadUI();
+}
+
+function showTab(type) {
+  $("#field-local").hidden = type !== "local";
+  $("#field-git").hidden = type !== "git";
+  $("#field-upload").hidden = type !== "upload";
+}
+
+// ---------- zip upload ----------
+let uploadFile = null;
+
+function fmtSize(b) {
+  if (b < 1024) return b + " B";
+  if (b < 1048576) return (b / 1024).toFixed(0) + " KB";
+  return (b / 1048576).toFixed(1) + " MB";
+}
+
+function setUploadFile(f) {
+  const drop = $("#np-drop");
+  if (!f) { uploadFile = null; drop.classList.remove("has-file");
+    $("#dz-main").innerHTML = "Drop a <b>.zip</b> here, or click to browse";
+    $("#dz-sub").textContent = "Zip your solution folder and upload it — nothing needs to be on the server.";
+    return;
+  }
+  if (!/\.zip$/i.test(f.name)) return showModalErr("Please choose a .zip file.");
+  const max = (hostInfo && hostInfo.maxUploadMb) || 300;
+  if (f.size > max * 1024 * 1024)
+    return showModalErr(`That zip is ${(f.size / 1048576).toFixed(0)} MB — the limit is ${max} MB.`);
+  uploadFile = f;
+  drop.classList.add("has-file");
+  $("#dz-main").textContent = f.name;
+  $("#dz-sub").textContent = fmtSize(f.size) + " — ready to upload";
+  $("#np-error").hidden = true;
+  // A zip is usually named after the project, so offer it as the name.
+  if (!$("#np-name").value.trim()) $("#np-name").value = f.name.replace(/\.zip$/i, "");
+}
+
+function initUploadUI() {
+  const drop = $("#np-drop"), input = $("#np-file");
+  if (!drop) return;
+  drop.onclick = () => input.click();
+  drop.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } };
+  input.onchange = () => setUploadFile(input.files[0]);
+  ["dragenter", "dragover"].forEach((ev) =>
+    drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((ev) =>
+    drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", (e) => setUploadFile(e.dataTransfer.files[0]));
+}
+
+// XHR, not fetch — it is the only way to get real upload progress.
+function uploadZip(file, name, subPath, onProgress) {
+  return new Promise((resolve, reject) => {
+    const qs = new URLSearchParams({ name, subPath: subPath || "" });
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/projects/upload?" + qs.toString());
+    xhr.setRequestHeader("Content-Type", "application/zip");
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    xhr.onload = () => {
+      let r = {};
+      try { r = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status === 200 && r.ok) resolve(r);
+      else reject(new Error(r.error || `Upload failed (HTTP ${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error("Upload failed — the connection dropped."));
+    xhr.send(file);
+  });
 }
 
 async function loadProjects() {
@@ -238,15 +308,13 @@ function openModal(type) {
   $("#np-name").value = ""; $("#np-path").value = ""; $("#np-repo").value = ""; $("#np-sub").value = "";
   $("#np-token").value = "";
   $("#np-error").hidden = true;
+  setUploadFile(null);
+  $("#np-file").value = "";
   applyHostHints();
-  if (type === "local" || type === "git") {
-    document.querySelectorAll(".seg-btn").forEach((b) => {
-      const on = b.dataset.type === type;
-      b.classList.toggle("active", on);
-    });
-    $("#field-local").hidden = type === "git";
-    $("#field-git").hidden = type !== "git";
-  }
+  // Hosted users cannot reach the server's disk, so upload is the sensible default.
+  if (!type) type = hostInfo && hostInfo.cloud ? "upload" : "local";
+  document.querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.type === type));
+  showTab(type);
   $("#modal-backdrop").hidden = false;
   $("#np-name").focus();
 }
@@ -263,6 +331,7 @@ async function submitNewProject() {
   const body = { name, type, subPath: sub || undefined };
   if (!name) return showModalErr("Please give the project a name.");
   if (type === "local") { body.path = $("#np-path").value.trim(); if (!body.path) return showModalErr("Enter a folder path."); }
+  else if (type === "upload") { if (!uploadFile) return showModalErr("Choose a .zip file to upload."); }
   else {
     body.repoUrl = $("#np-repo").value.trim();
     if (!body.repoUrl) return showModalErr("Enter a repository URL.");
@@ -273,8 +342,20 @@ async function submitNewProject() {
   errEl.hidden = true;
   $("#np-create").disabled = true;
   closeModal();
-  showBusy(type === "git" ? "Cloning repository…" : "Adding project…", "Then indexing the codebase — this can take a moment.");
+  showBusy(
+    type === "git" ? "Cloning repository…" : type === "upload" ? "Uploading…" : "Adding project…",
+    "Then indexing the codebase — this can take a moment."
+  );
   try {
+    if (type === "upload") {
+      showUploadProgress(0);
+      const r = await uploadZip(uploadFile, name, sub, (frac) => showUploadProgress(frac));
+      hideUploadProgress();
+      showBusy("Indexing…", "Reading the uploaded codebase.");
+      if (!r.ok) throw new Error(r.error || "Upload failed");
+      await afterProjectChange();
+      return;
+    }
     const r = await (await fetch("/api/projects", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     })).json();
@@ -283,6 +364,7 @@ async function submitNewProject() {
   } catch (e) {
     reopenModal(); showModalErr(e.message);
   } finally {
+    hideUploadProgress();
     $("#np-create").disabled = false;
     hideBusy();
   }
@@ -308,6 +390,21 @@ async function afterProjectChange() {
 
 function showBusy(title, sub) { $("#busy-title").textContent = title; $("#busy-sub").textContent = sub || ""; $("#busy-overlay").hidden = false; }
 function hideBusy() { $("#busy-overlay").hidden = true; }
+
+// A big zip over a slow link needs a real percentage, not a spinner.
+function showUploadProgress(frac) {
+  let bar = document.getElementById("up-bar");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "up-bar"; bar.className = "up-bar";
+    bar.innerHTML = '<div class="up-fill" id="up-fill"></div>';
+    document.querySelector(".busy-card").appendChild(bar);
+  }
+  const pct = Math.round(frac * 100);
+  document.getElementById("up-fill").style.width = pct + "%";
+  $("#busy-sub").textContent = pct < 100 ? `Uploading — ${pct}%` : "Extracting on the server…";
+}
+function hideUploadProgress() { document.getElementById("up-bar")?.remove(); }
 
 // ---------- settings (API key / model) ----------
 function initSettingsUI() {
@@ -493,20 +590,27 @@ function renderOnboarding() {
     <h1>Point ASTRA at your code</h1>
     <p class="lede">The agents run against a <strong>project</strong> — a codebase ASTRA indexes and grounds every answer in. Add yours to begin, or explore the bundled demo.</p>
     <div class="onboard-grid">
-      <button class="onboard-card" id="ob-local">
-        <span class="oc-ico">${icon("folder", 21)}</span>
-        <h3>Local folder</h3>
-        <p>Point at a folder of .NET source on this machine. Optionally index just a sub-folder.</p>
+      <button class="onboard-card" id="ob-upload">
+        <span class="oc-ico">${icon("upload", 21)}</span>
+        <h3>Upload a .zip</h3>
+        <p>Zip your solution folder and upload it straight from your PC — nothing to install.</p>
       </button>
       <button class="onboard-card" id="ob-git">
         <span class="oc-ico">${icon("git", 21)}</span>
         <h3>Git repository</h3>
-        <p>Paste a repo URL — ASTRA clones it and indexes it for the agents.</p>
+        <p>Paste a repo URL — ASTRA clones it and indexes it. Private repos take an access token.</p>
       </button>
+      ${hostInfo && hostInfo.cloud ? "" : `
+      <button class="onboard-card" id="ob-local">
+        <span class="oc-ico">${icon("folder", 21)}</span>
+        <h3>Local folder</h3>
+        <p>Point at a folder of .NET source on this machine. Optionally index just a sub-folder.</p>
+      </button>`}
     </div>
     <div class="onboard-foot">… or <a id="ob-demo">explore the nopCommerce demo →</a></div>
   </div>`;
-  $("#ob-local").onclick = () => openModal("local");
+  $("#ob-upload").onclick = () => openModal("upload");
+  if ($("#ob-local")) $("#ob-local").onclick = () => openModal("local");
   $("#ob-git").onclick = () => openModal("git");
   $("#ob-demo").onclick = () => { try { sessionStorage.setItem("astra-onboard", "1"); } catch {} renderWelcome(); };
 }

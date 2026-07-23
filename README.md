@@ -74,7 +74,8 @@ docker compose up --build
 
 Then open **http://localhost:5173** (map a different host port with e.g. `ports: ["8080:5173"]`).
 The mounted `./workspace` becomes the active project (via `SEED_PROJECT_ROOT`); you can also add more
-projects from the UI, including cloning a git repo. Generated artifacts persist to `./artifacts`.
+projects from the UI: **upload a .zip** of a codebase, **clone a git repo** (private repos take an
+access token), or point at a local folder. Generated artifacts persist to `./artifacts`.
 
 > **Iterating on the UI?** The image **bakes in** `ui/`, so editing files on the host does **not**
 > change a running container — rebuild (`docker compose up --build`) to see UI/server changes.
@@ -87,7 +88,9 @@ image, so setting them is what makes a deployment stateful:
 |---|---|---|
 | `STATE_DIR` | projects + conversation history | `/app/state` → `./data` |
 | `ARTIFACTS_DIR` | generated BRDs / ADRs / test plans | `/app/artifacts` → `./artifacts` |
-| `WORKSPACE_DIR` | checkouts of git-backed projects | `/app/state/repos` → `./data/repos` |
+| `WORKSPACE_DIR` | cloned repos **and uploaded codebases** | `/app/state/repos` → `./data/repos` |
+
+`MAX_UPLOAD_MB` (default `300`) caps the .zip upload size.
 
 **Deploy to Azure:** copy-paste Cloud Shell commands are in [`docs/DEPLOY-AZURE.md`](docs/DEPLOY-AZURE.md)
 (build in ACR → Web App for Containers, with an ACI alternative).

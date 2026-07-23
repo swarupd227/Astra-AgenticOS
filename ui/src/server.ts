@@ -228,7 +228,7 @@ function loadAgents(): Agent[] {
 interface Project {
   id: string;
   name: string;
-  type: "local" | "git";
+  type: "local" | "git" | "upload";
   sourceRoot: string; // absolute path the MCP server indexes
   repoUrl?: string;
   subPath?: string;
@@ -675,7 +675,7 @@ app.get("/api/health", (_req, res) => {
     hasApiKey: Boolean(process.env.ANTHROPIC_API_KEY),
     activeProject: p ? publicProject(p) : null,
     // Lets the UI explain that "local folder" means a folder on the server.
-    host: { platform: process.platform, cloud: IS_CLOUD },
+    host: { platform: process.platform, cloud: IS_CLOUD, maxUploadMb: MAX_UPLOAD_MB },
   });
 });
 
@@ -748,6 +748,145 @@ function gitCloneHelp(stderr: string, url: string, hadToken: boolean): string {
     return `That branch does not exist in ${scrubUrl(url)}.`;
   return `git clone failed: ${stderr.slice(0, 300)}`;
 }
+
+// ---- Upload a codebase as a .zip ------------------------------------------
+// Hosted users have no access to the server's filesystem, so "local folder" is
+// useless to them and not every codebase is in a reachable git remote. A zip
+// upload is the third way in.
+const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB ?? 300);
+
+// Stream the request body to disk (never buffer a 300 MB zip in memory) and stop
+// the moment it exceeds the cap.
+function receiveUpload(req: express.Request, dest: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const limit = MAX_UPLOAD_MB * 1024 * 1024;
+    let size = 0;
+    const out = fs.createWriteStream(dest);
+    let aborted = false;
+    req.on("data", (c: Buffer) => {
+      size += c.length;
+      if (size > limit && !aborted) {
+        aborted = true;
+        // Unpipe and drain rather than destroy() — killing the socket here would
+        // leave the browser with "connection dropped" instead of the real reason.
+        req.unpipe(out);
+        req.resume();
+        out.destroy();
+        reject(new Error(`Upload is larger than the ${MAX_UPLOAD_MB} MB limit.`));
+      }
+    });
+    req.on("error", reject);
+    out.on("error", reject);
+    out.on("finish", () => resolve(size));
+    req.pipe(out);
+  });
+}
+
+function assertLooksLikeZip(file: string) {
+  const fd = fs.openSync(file, "r");
+  const head = Buffer.alloc(4);
+  try { fs.readSync(fd, head, 0, 4, 0); } finally { fs.closeSync(fd); }
+  if (head[0] === 0x50 && head[1] === 0x4b) return;                     // "PK"
+  if (head[0] === 0x1f && head[1] === 0x8b)                             // gzip
+    throw new Error("That looks like a .tar.gz. Please upload a .zip file.");
+  if (head.subarray(0, 4).toString() === "Rar!" || head[0] === 0x37)
+    throw new Error("That looks like a .rar/.7z. Please upload a .zip file.");
+  throw new Error("That file is not a .zip archive.");
+}
+
+// Symlinks are the way a crafted zip escapes its directory, so drop them all;
+// then prove every remaining path really is inside dir.
+function hardenExtracted(dir: string) {
+  const root = fs.realpathSync(dir);
+  let removed = 0;
+  const walk = (d: string) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, e.name);
+      if (e.isSymbolicLink()) { fs.rmSync(full, { force: true }); removed++; continue; }
+      if (e.isDirectory()) walk(full);
+      else {
+        const real = fs.realpathSync(full);
+        if (real !== root && !real.startsWith(root + path.sep)) {
+          fs.rmSync(full, { force: true });
+          removed++;
+        }
+      }
+    }
+  };
+  walk(root);
+  return removed;
+}
+
+// GitHub "Download ZIP" and Windows "Send to → Compressed folder" both wrap the
+// code in a single top-level folder. Descend into it so "src" means what the user thinks.
+function collapseSingleRoot(dir: string): string {
+  const entries = fs.readdirSync(dir, { withFileTypes: true }).filter((e) => !e.name.startsWith("__MACOSX"));
+  if (entries.length === 1 && entries[0].isDirectory()) return path.join(dir, entries[0].name);
+  return dir;
+}
+
+app.post("/api/projects/upload", async (req, res) => {
+  const name = String(req.query.name || "").trim();
+  const subPath = String(req.query.subPath || "").trim();
+  const dir = path.join(WORKSPACE_DIR, "upload-tmp-" + crypto.randomUUID().slice(0, 8));
+  const zipFile = dir + ".zip";
+  let extracted: string | null = null;
+  try {
+    if (!name) throw new Error("A project name is required.");
+    // Reject on the declared size before reading a single byte — far better than
+    // making someone wait out a 400 MB upload only to be told it was too big.
+    const declared = Number(req.headers["content-length"] || 0);
+    if (declared && declared > MAX_UPLOAD_MB * 1024 * 1024)
+      throw new Error(
+        `That zip is ${(declared / 1048576).toFixed(0)} MB — the limit is ${MAX_UPLOAD_MB} MB. ` +
+          `Zip only the source folders (exclude bin/obj/packages), or raise MAX_UPLOAD_MB on the server.`
+      );
+    fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+
+    const bytes = await receiveUpload(req, zipFile);
+    if (!bytes) throw new Error("The upload was empty.");
+    assertLooksLikeZip(zipFile);
+
+    fs.mkdirSync(dir, { recursive: true });
+    extracted = dir;
+    try {
+      // -qq quiet, -o overwrite; unzip refuses absolute paths itself.
+      await execFileP("unzip", ["-qq", "-o", zipFile, "-d", dir], { timeout: 300000, maxBuffer: 8 * 1024 * 1024 });
+    } catch (e: any) {
+      if (e?.code === "ENOENT") throw new Error("unzip is not available on the server.");
+      throw new Error(`Could not extract the zip: ${String(e?.stderr || e?.message || e).slice(0, 200)}`);
+    }
+    hardenExtracted(dir);
+
+    const id = newId(name);
+    const finalDir = path.join(WORKSPACE_DIR, id);
+    fs.renameSync(collapseSingleRoot(dir), finalDir);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(zipFile, { force: true });
+    extracted = finalDir;
+
+    const sourceRoot = subPath ? path.join(finalDir, subPath) : finalDir;
+    if (!fs.existsSync(sourceRoot))
+      throw new Error(`The sub-folder "${subPath}" does not exist in the uploaded zip. Leave it blank to index everything.`);
+
+    const project: Project = {
+      id, name, type: "upload", sourceRoot,
+      subPath: subPath || undefined,
+      artifactsDir: path.join(ARTIFACTS_ROOT, id),
+      createdAt: new Date().toISOString(),
+    };
+    projects.push(project);
+    saveProjects();
+    await activateProject(id);
+    extracted = null; // committed
+    res.json({ ok: true, project: publicProject(project), sizeBytes: bytes });
+  } catch (e) {
+    try { fs.rmSync(zipFile, { force: true }); } catch {}
+    if (extracted) { try { fs.rmSync(extracted, { recursive: true, force: true }); } catch {} }
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
 
 // Create a project from a local folder or a git repo, then activate it.
 app.post("/api/projects", async (req, res) => {
@@ -1040,7 +1179,9 @@ function main() {
       console.error("[mcp] connect failed:", mcpError);
     });
   } else {
-    mcpError = "No project loaded yet — add a project (local folder or git repo) to begin.";
+    mcpError = IS_CLOUD
+      ? "No project loaded yet — add one to begin: upload a .zip of your code, or point ASTRA at a git repository."
+      : "No project loaded yet — add a project (local folder, git repo or .zip upload) to begin.";
     console.error("[mcp] " + mcpError);
   }
 }
