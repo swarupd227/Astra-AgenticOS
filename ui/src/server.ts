@@ -57,6 +57,13 @@ const WORKSPACE_DIR = process.env.WORKSPACE_DIR
   : path.join(repoRoot, "workspace"); // cloned git repos live here
 const PROJECTS_FILE = path.join(STATE_DIR, "projects.json");
 
+// Running as a hosted container (Azure App Service / Docker)? Then "local folder"
+// means a folder on the SERVER, not on the user's PC — the UI needs to say so.
+const IS_CLOUD =
+  !!process.env.WEBSITE_SITE_NAME ||          // Azure App Service
+  !!process.env.CONTAINER_APP_NAME ||         // Azure Container Apps
+  fs.existsSync("/.dockerenv");
+
 // Suggested prompts per agent (id -> prompts), drawn from docs/DEMO-SCRIPT.md
 const SUGGESTED: Record<string, string[]> = {
   "modernization-net10": [
@@ -667,6 +674,8 @@ app.get("/api/health", (_req, res) => {
     model: MODEL,
     hasApiKey: Boolean(process.env.ANTHROPIC_API_KEY),
     activeProject: p ? publicProject(p) : null,
+    // Lets the UI explain that "local folder" means a folder on the server.
+    host: { platform: process.platform, cloud: IS_CLOUD },
   });
 });
 
@@ -690,9 +699,62 @@ app.get("/api/projects", (_req, res) => {
   res.json({ activeProjectId, projects: projects.map(publicProject) });
 });
 
+// A "local folder" is a folder on the machine running ASTRA. When ASTRA is hosted,
+// that is the container — not the user's laptop — and pasting C:\... silently
+// resolved against the cwd ("/app/ui/C:\Sandbox"). Fail with an explanation instead.
+function resolveLocalFolder(input: string): string {
+  const raw = String(input).trim().replace(/^["']|["']$/g, "");
+  const isWindowsPath = /^[a-zA-Z]:[\\/]/.test(raw) || raw.startsWith("\\\\");
+  if (isWindowsPath && path.sep === "/") {
+    throw new Error(
+      `"${raw}" is a Windows path, but ASTRA is running on Linux${IS_CLOUD ? " in the cloud" : ""}. ` +
+        `A local folder must exist on the machine running ASTRA — it cannot reach your own PC. ` +
+        `Use the "Git repository" tab instead, or run ASTRA locally (Docker) with that folder mounted.`
+    );
+  }
+  if (!path.isAbsolute(raw)) throw new Error(`Enter an absolute folder path (got "${raw}").`);
+  if (!fs.existsSync(raw)) throw new Error(`Folder not found on the ASTRA server: ${raw}`);
+  if (!fs.statSync(raw).isDirectory()) throw new Error(`Not a folder: ${raw}`);
+  return raw;
+}
+
+// Never let a token reach disk, the UI, or the logs.
+function scrubUrl(url: string): string {
+  return url.replace(/\/\/[^/@\s]+@/, "//");
+}
+// GitHub/GitLab accept "x-access-token:<pat>"; Azure DevOps ignores the username
+// and uses the password. A token containing ":" is treated as "user:secret".
+function withCredentials(url: string, token?: string): string {
+  if (!token) return url;
+  if (!/^https?:\/\//i.test(url)) return url; // ssh:// and git@ use keys, not tokens
+  const i = token.indexOf(":");
+  const [user, secret] = i === -1 ? ["x-access-token", token] : [token.slice(0, i), token.slice(i + 1)];
+  return url.replace(/^(https?:\/\/)/i, `$1${encodeURIComponent(user)}:${encodeURIComponent(secret)}@`);
+}
+
+function gitCloneHelp(stderr: string, url: string, hadToken: boolean): string {
+  const s = stderr.toLowerCase();
+  if (s.includes("could not read username") || s.includes("authentication failed") ||
+      s.includes("terminal prompts disabled") || s.includes("repository not found") ||
+      s.includes("403") || s.includes("invalid username or password")) {
+    return hadToken
+      ? `Authentication was rejected for ${scrubUrl(url)}. Check the token is valid, unexpired, and has read access to this repository (GitHub fine-grained tokens also need the org to approve them).`
+      : `${scrubUrl(url)} needs authentication — it is private, or the URL is wrong (git cannot tell those apart). ` +
+        `Add an access token in the "Access token" field, or use a public repository URL.`;
+  }
+  if (s.includes("could not resolve host") || s.includes("failed to connect") || s.includes("timed out"))
+    return `Cannot reach ${scrubUrl(url)} from the ASTRA server — check the URL, and that outbound access to that host is allowed.`;
+  if (s.includes("not found") && s.includes("branch"))
+    return `That branch does not exist in ${scrubUrl(url)}.`;
+  return `git clone failed: ${stderr.slice(0, 300)}`;
+}
+
 // Create a project from a local folder or a git repo, then activate it.
 app.post("/api/projects", async (req, res) => {
-  const { name, type, path: localPath, repoUrl, subPath } = req.body ?? {};
+  const { name, type, path: localPath, repoUrl, subPath, token } = req.body ?? {};
+  // A clone that succeeds but fails a later check (bad sub-folder, index error) must
+  // not leave a full checkout stranded on disk.
+  let clonedDir: string | null = null;
   try {
     if (!name || !type) throw new Error("name and type are required");
     const id = newId(name);
@@ -701,27 +763,46 @@ app.post("/api/projects", async (req, res) => {
 
     if (type === "local") {
       if (!localPath) throw new Error("A folder path is required for a local project.");
-      const abs = path.resolve(String(localPath));
-      if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory())
-        throw new Error(`Folder not found: ${abs}`);
+      const abs = resolveLocalFolder(String(localPath));
       sourceRoot = subPath ? path.join(abs, String(subPath)) : abs;
     } else if (type === "git") {
       if (!repoUrl) throw new Error("A repository URL is required for a git project.");
+      const cleanUrl = scrubUrl(String(repoUrl).trim());
+      const pat = token ? String(token).trim() : "";
       fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
       const dir = path.join(WORKSPACE_DIR, id);
       try {
-        await execFileP("git", ["clone", "--depth", "1", String(repoUrl), dir], { timeout: 300000 });
+        await execFileP("git", ["clone", "--depth", "1", withCredentials(cleanUrl, pat), dir], {
+          timeout: 300000,
+          // Without this git blocks on a hidden credential prompt and dies with the
+          // cryptic "could not read Username … No such device or address".
+          env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" },
+        });
       } catch (e: any) {
+        try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
         if (e?.code === "ENOENT") throw new Error("git is not installed or not on PATH.");
-        throw new Error(`git clone failed: ${String(e?.stderr || e?.message || e).slice(0, 300)}`);
+        const stderr = scrubUrl(String(e?.stderr || e?.message || e));
+        throw new Error(gitCloneHelp(stderr, cleanUrl, !!pat));
+      }
+      clonedDir = dir;
+      // The token would otherwise sit in .git/config on disk for anyone to read.
+      if (pat) {
+        try { await execFileP("git", ["-C", dir, "remote", "set-url", "origin", cleanUrl]); } catch {}
       }
       sourceRoot = subPath ? path.join(dir, String(subPath)) : dir;
-      repoUrlOut = String(repoUrl);
+      repoUrlOut = cleanUrl; // stored without credentials
     } else {
       throw new Error(`Unknown project type: ${type}`);
     }
 
-    if (!fs.existsSync(sourceRoot)) throw new Error(`Source root not found after setup: ${sourceRoot}`);
+    if (!fs.existsSync(sourceRoot)) {
+      // Nearly always a wrong "sub-folder to index" — say so rather than echoing a path.
+      throw new Error(
+        subPath
+          ? `The sub-folder "${subPath}" does not exist in this ${type === "git" ? "repository" : "folder"}. Leave it blank to index everything.`
+          : `Source root not found after setup: ${sourceRoot}`
+      );
+    }
 
     const project: Project = {
       id,
@@ -736,8 +817,10 @@ app.post("/api/projects", async (req, res) => {
     projects.push(project);
     saveProjects();
     await activateProject(id); // spawn MCP + index now
+    clonedDir = null; // committed — keep the checkout
     res.json({ ok: true, project: publicProject(project) });
   } catch (e) {
+    if (clonedDir) { try { fs.rmSync(clonedDir, { recursive: true, force: true }); } catch {} }
     res.status(400).json({ ok: false, error: (e as Error).message });
   }
 });

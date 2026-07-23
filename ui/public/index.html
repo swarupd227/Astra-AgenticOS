@@ -87,15 +87,25 @@
           <input id="np-name" type="text" placeholder="e.g. Payments Service" />
         </label>
 
-        <label class="field" id="field-local">
-          <span class="field-label">Folder path (absolute)</span>
-          <input id="np-path" type="text" placeholder="C:\\src\\my-app" />
-        </label>
+        <div id="field-local">
+          <label class="field">
+            <span class="field-label">Folder path (absolute)</span>
+            <input id="np-path" type="text" placeholder="C:\\src\\my-app" />
+          </label>
+          <div class="set-hint" id="np-local-hint" hidden></div>
+        </div>
 
-        <label class="field" id="field-git" hidden>
-          <span class="field-label">Repository URL</span>
-          <input id="np-repo" type="text" placeholder="https://github.com/org/repo.git" />
-        </label>
+        <div id="field-git" hidden>
+          <label class="field">
+            <span class="field-label">Repository URL</span>
+            <input id="np-repo" type="text" placeholder="https://github.com/org/repo.git" />
+          </label>
+          <label class="field">
+            <span class="field-label">Access token <span class="opt">(only for private repos)</span></span>
+            <input id="np-token" type="password" autocomplete="off" placeholder="ghp_… / Azure DevOps PAT" />
+          </label>
+          <div class="set-hint">Used once to clone, then discarded — it is never saved to disk or shown again.</div>
+        </div>
 
         <label class="field">
           <span class="field-label">Sub-folder to index <span class="opt">(optional)</span></span>

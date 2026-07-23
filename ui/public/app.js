@@ -46,10 +46,30 @@ function applyStatus(text, cls) {
   statusEl.classList.remove("ok", "warn");
   if (cls) statusEl.classList.add(cls);
 }
+// Where the server actually runs — decides what "local folder" can mean.
+let hostInfo = null;
+
+// A hosted ASTRA cannot see the user's PC, so a Windows path in the folder field
+// is always wrong there. Say it up front instead of after a failed submit.
+function applyHostHints() {
+  const hint = $("#np-local-hint");
+  const pathInput = $("#np-path");
+  if (!hint || !hostInfo) return;
+  const posix = hostInfo.platform !== "win32";
+  if (posix) pathInput.placeholder = "/home/data/repos/my-app";
+  hint.innerHTML = posix
+    ? (hostInfo.cloud
+        ? "ASTRA is running <b>on a server</b>, so this must be a folder on that server — it cannot read <code>C:\\…</code> from your PC. For code on your machine, use <b>Git repository</b>."
+        : "This must be a folder on the machine running ASTRA (Linux paths, e.g. <code>/srv/code/my-app</code>).")
+    : "A folder on the machine running ASTRA, e.g. <code>C:\\src\\my-app</code>.";
+  hint.hidden = false;
+}
+
 async function refreshHealth() {
   try {
     const h = await (await fetch("/api/health")).json();
     const n = h.mcpTools?.length ?? 0;
+    if (h.host) hostInfo = h.host;
     if (h.activeProject) {
       $("#project-name").textContent = h.activeProject.name;
       $("#grounding-chip").innerHTML = icon("database", 14) + " Grounded in " + esc(h.activeProject.name);
@@ -216,7 +236,9 @@ async function deleteProject(id) {
 
 function openModal(type) {
   $("#np-name").value = ""; $("#np-path").value = ""; $("#np-repo").value = ""; $("#np-sub").value = "";
+  $("#np-token").value = "";
   $("#np-error").hidden = true;
+  applyHostHints();
   if (type === "local" || type === "git") {
     document.querySelectorAll(".seg-btn").forEach((b) => {
       const on = b.dataset.type === type;
@@ -229,6 +251,9 @@ function openModal(type) {
   $("#np-name").focus();
 }
 function closeModal() { $("#modal-backdrop").hidden = true; }
+// Re-open after a failed submit WITHOUT wiping what was typed — retyping a repo URL
+// and token on every retry is the difference between "fix it" and "give up".
+function reopenModal() { $("#modal-backdrop").hidden = false; }
 
 async function submitNewProject() {
   const type = document.querySelector(".seg-btn.active").dataset.type;
@@ -238,7 +263,12 @@ async function submitNewProject() {
   const body = { name, type, subPath: sub || undefined };
   if (!name) return showModalErr("Please give the project a name.");
   if (type === "local") { body.path = $("#np-path").value.trim(); if (!body.path) return showModalErr("Enter a folder path."); }
-  else { body.repoUrl = $("#np-repo").value.trim(); if (!body.repoUrl) return showModalErr("Enter a repository URL."); }
+  else {
+    body.repoUrl = $("#np-repo").value.trim();
+    if (!body.repoUrl) return showModalErr("Enter a repository URL.");
+    const tok = $("#np-token").value.trim();
+    if (tok) body.token = tok;
+  }
 
   errEl.hidden = true;
   $("#np-create").disabled = true;
@@ -251,7 +281,7 @@ async function submitNewProject() {
     if (!r.ok) throw new Error(r.error || "Could not create project");
     await afterProjectChange();
   } catch (e) {
-    openModal(); showModalErr(e.message);
+    reopenModal(); showModalErr(e.message);
   } finally {
     $("#np-create").disabled = false;
     hideBusy();
