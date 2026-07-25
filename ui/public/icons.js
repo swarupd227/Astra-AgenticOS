@@ -86,6 +86,10 @@ const AGENT_VISUAL = {
   "performance-auditor": { icon: "zap", hue: 190, cat: "health" },
   "data-access-risk": { icon: "server", hue: 280, cat: "health" },
   "human-review": { icon: "badge-check", hue: 200, cat: "governance" },
+  "framework-migration": { icon: "rocket", hue: 315, cat: "modernize" },
+  "frontend-architecture": { icon: "layers", hue: 175, cat: "design" },
+  "contract-drift": { icon: "git-compare", hue: 320, cat: "discovery" },
+  "dependency-health": { icon: "shield-check", hue: 355, cat: "security" },
 };
 
 // SDLC areas, in display order (mirrors the agent-platform layers).

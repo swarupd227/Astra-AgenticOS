@@ -503,6 +503,30 @@ const MAX_TURNS = Number(process.env.MAX_TURNS_PER_RUN ?? 44);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// The code index and tools are multi-language (C#, Java, TypeScript/JS incl.
+// Angular & React). Agent personas were originally written for .NET, so this
+// shared note tells every agent to adapt to whatever stack the active project
+// actually is. For a .NET project the guidance below is a no-op — the stack IS
+// C#/.NET — so this doesn't change existing .NET behaviour.
+const STACK_AWARENESS = `
+---
+## Work in the project's actual stack
+
+This platform indexes C#, Java, and TypeScript/JavaScript (including Angular and React).
+Before applying any language- or framework-specific convention:
+
+- **Detect the stack from the real files** — file extensions and the manifests
+  (\`*.csproj\`/\`*.sln\`, \`pom.xml\`/\`build.gradle\`, \`package.json\`/\`angular.json\`/\`tsconfig.json\`).
+  Use \`solution_overview\` and \`search_code\` to confirm; don't assume .NET/C#.
+- **Use the conventions that project actually uses** — its language and version, build tool
+  (MSBuild / Maven / Gradle / npm / pnpm), test framework (xUnit/NUnit/MSTest, JUnit, Jest/Vitest,
+  Cypress/Playwright), DI style, and folder layout. Examples in a persona that name .NET/nopCommerce
+  specifics are illustrative — translate them to the stack in front of you.
+- **Name idioms correctly per stack** — e.g. Spring \`@Service\`/\`@RestController\`/JPA repositories for
+  Java; components/services/modules/RxJS for Angular; components/hooks/props for React.
+- If the codebase is **polyglot** (e.g. a Java/Spring API with an Angular or React front end), be
+  explicit about which part you're analysing and watch the boundary between them.`;
+
 // Shared operating discipline appended to EVERY agent's system prompt. It encodes the
 // "Required Operating Controls" from the black-box test report (2026-07-24): the four
 // failed cases and most conditional passes came from the same handful of habits —
@@ -620,7 +644,7 @@ async function runAgent(
         const stream = anthropic.messages.stream({
           model: MODEL,
           max_tokens: MAX_TOKENS,
-          system: `${agent.systemPrompt}\n\n---\n**Today's date is ${new Date().toISOString().slice(0, 10)}.** Use it for any date you write (document dates, changelogs, gate records). Never invent or guess a date.\n${OPERATING_CONTRACT}`,
+          system: `${agent.systemPrompt}\n\n---\n**Today's date is ${new Date().toISOString().slice(0, 10)}.** Use it for any date you write (document dates, changelogs, gate records). Never invent or guess a date.\n${STACK_AWARENESS}\n${OPERATING_CONTRACT}`,
           tools,
           messages,
         });

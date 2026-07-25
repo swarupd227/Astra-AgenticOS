@@ -142,24 +142,80 @@ public static class ImpactTools
         return set.ToList();
     }
 
+    private const StringComparison OIC = StringComparison.OrdinalIgnoreCase;
+
     private static string Classify(string file)
     {
         var f = file.Replace('\\', '/');
         var name = f.Split('/').Last();
-        if (f.Contains("/Tests/", StringComparison.OrdinalIgnoreCase) || name.Contains("Test", StringComparison.OrdinalIgnoreCase))
+        // C# keeps the exact original classification (byte-identical, no regression);
+        // other languages use the multi-language heuristics below.
+        return Path.GetExtension(name).Equals(".cs", OIC)
+            ? ClassifyDotNet(f, name)
+            : ClassifyOther(f, name);
+    }
+
+    // Original .NET classifier — unchanged.
+    private static string ClassifyDotNet(string f, string name)
+    {
+        if (f.Contains("/Tests/", OIC) || name.Contains("Test", OIC))
             return "Test";
-        if (name.EndsWith("Controller.cs", StringComparison.OrdinalIgnoreCase) || f.Contains("/Controllers/", StringComparison.OrdinalIgnoreCase))
+        if (name.EndsWith("Controller.cs", OIC) || f.Contains("/Controllers/", OIC))
             return "Controller";
-        if (f.Contains("/Plugins/", StringComparison.OrdinalIgnoreCase))
+        if (f.Contains("/Plugins/", OIC))
             return "Plugin";
-        if (f.Contains("/Views/", StringComparison.OrdinalIgnoreCase) || name.EndsWith("Model.cs", StringComparison.OrdinalIgnoreCase) || f.Contains("/Models/", StringComparison.OrdinalIgnoreCase))
+        if (f.Contains("/Views/", OIC) || name.EndsWith("Model.cs", OIC) || f.Contains("/Models/", OIC))
             return "View/UI";
-        if (f.Contains("Nop.Services", StringComparison.OrdinalIgnoreCase) || name.EndsWith("Service.cs", StringComparison.OrdinalIgnoreCase))
+        if (f.Contains("Nop.Services", OIC) || name.EndsWith("Service.cs", OIC))
             return "Service";
-        if (f.Contains("Nop.Data", StringComparison.OrdinalIgnoreCase) || f.Contains("/Data/", StringComparison.OrdinalIgnoreCase) || name.Contains("Repository", StringComparison.OrdinalIgnoreCase))
+        if (f.Contains("Nop.Data", OIC) || f.Contains("/Data/", OIC) || name.Contains("Repository", OIC))
             return "Data";
-        if (f.Contains("Nop.Core", StringComparison.OrdinalIgnoreCase) || f.Contains("/Domain/", StringComparison.OrdinalIgnoreCase))
+        if (f.Contains("Nop.Core", OIC) || f.Contains("/Domain/", OIC))
             return "Domain/Model";
+        return "Other";
+    }
+
+    // Java / TypeScript / JavaScript / Angular / React.
+    private static string ClassifyOther(string f, string name)
+    {
+        var ext = Path.GetExtension(name).ToLowerInvariant();
+        var stem = Path.GetFileNameWithoutExtension(name);           // "OwnerController.java" -> "OwnerController"
+        var baseName = name.Contains('.') ? name[..name.IndexOf('.')] : name; // "app.component.ts" -> "app"
+        bool Seg(string s) => f.Contains("/" + s + "/", OIC);
+
+        // Tests: JUnit *Test.java / *Tests, Jest/Vitest *.spec/*.test, Cypress/Playwright e2e
+        if (Seg("test") || Seg("tests") || Seg("__tests__") || Seg("e2e")
+            || stem.EndsWith("Test", OIC) || stem.EndsWith("Tests", OIC)
+            || name.Contains(".spec.", OIC) || name.Contains(".test.", OIC))
+            return "Test";
+
+        // Controllers / endpoints: Spring @RestController, NestJS *.controller.ts, folders
+        if (stem.EndsWith("Controller", OIC) || name.Contains(".controller.", OIC)
+            || Seg("controller") || Seg("controllers"))
+            return "Controller";
+
+        // Frontend components / pages (Angular *.component.ts, React *.tsx/*.jsx)
+        if (ext is ".tsx" or ".jsx" || name.Contains(".component.", OIC) || stem.EndsWith("Component", OIC)
+            || Seg("components") || Seg("pages") || Seg("views"))
+            return "Component/UI";
+
+        // Services / business logic (Spring @Service, Angular *.service.ts)
+        if (stem.EndsWith("Service", OIC) || name.Contains(".service.", OIC) || Seg("services") || Seg("service"))
+            return "Service";
+
+        // Data access (JPA/Hibernate repositories & entities, TypeORM/Prisma, DAOs)
+        if (stem.EndsWith("Repository", OIC) || stem.EndsWith("Dao", OIC) || name.Contains(".repository.", OIC)
+            || Seg("repository") || Seg("repositories") || Seg("dao") || Seg("entity") || Seg("entities") || Seg("data"))
+            return "Data";
+
+        // Domain / model
+        if (stem.EndsWith("Model", OIC) || stem.EndsWith("Entity", OIC) || Seg("domain") || Seg("model") || Seg("models"))
+            return "Domain/Model";
+
+        // Config / build
+        if (ext is ".json" or ".xml" or ".yml" or ".yaml" or ".gradle" or ".properties" || stem.Equals("pom", OIC))
+            return "Config";
+
         return "Other";
     }
 
