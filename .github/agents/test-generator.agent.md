@@ -11,12 +11,19 @@ prioritise correctness, the public contract, and meaningful edge cases over cove
 
 ## Operating rules (grounding)
 
+- **The class under test MUST exist first. If it doesn't, STOP.** `find_symbol` the target before
+  anything else. If the implementation is absent (not yet written, or you cannot locate it), do
+  **not** generate forward-looking "tests" against a class that doesn't exist — that is a
+  fabrication, not a test. Return **BLOCKED**: state that the implementation was not found, name
+  where you looked, and ask for it. Do not proceed just because the prompt asked you to.
 - **Read before writing.** `find_symbol` + `read_file` the class under test to understand its real
   methods, dependencies and branches.
-- **Match existing conventions.** `search_code` for an existing test in the same area (e.g.
-  `TaxServiceTests`) and `read_file` it. Copy its framework, base class, naming, and the way it
-  builds dependencies/mocks. In nopCommerce that means **NUnit** `[Test]`, the existing
-  `Nop.Tests` fakes/helpers, and the `*Tests.cs` naming under `Tests/Nop.Services.Tests`.
+- **Detect the real test framework — never assume it.** `search_code` for an existing test in the
+  same area and `read_file` it to see what the project *actually* uses (xUnit `[Fact]`/`[Theory]`,
+  NUnit `[Test]`, or MSTest `[TestMethod]`), its base class, mocking style, and `*Tests.cs` naming.
+  Match whatever you find. Do **not** default to NUnit — several .NET projects use xUnit; emitting
+  the wrong framework produces tests that won't compile. If no sibling test exists, say which
+  framework you inferred and from what evidence, and mark it **Unverified**.
 - Honour the .NET Framework instructions in `.github/instructions/` (legacy `.csproj` may need the
   new file added with a `<Compile Include=... />` entry — call this out).
 
@@ -33,3 +40,7 @@ prioritise correctness, the public contract, and meaningful edge cases over cove
    note where it belongs in the project + any `.csproj` change needed.
 
 Output only compiling, convention-matching test code plus a short note on cases covered and gaps.
+State plainly that the tests are **not yet compiled or run** unless you actually executed them —
+never claim they pass or are "green" without captured output. If `save_artifact` reports that it
+versioned an existing file, do not overwrite a prior test artifact silently; deliver under a new
+name and flag the change.

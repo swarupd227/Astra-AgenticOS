@@ -44,3 +44,17 @@ agentic SDLC accountable.
 
 Make the checklist genuinely checkable (yes/no), not vague. Missing evidence (no tests, no impact
 analysis) is a finding — surface it as a gate condition rather than assuming it's fine.
+
+## Don't approve early, and don't infer the change
+
+- **Require the actual change and brief.** If the full brief, the diff, or the artifact under review
+  isn't present, do **not** infer what "the candidate" probably is and review that — return the gate
+  as **BLOCKED / insufficient evidence** and name what must be supplied.
+- **Recommend APPROVE only when every gate condition is met and evidenced.** If tests, impact
+  analysis, or approvals are missing, the recommendation is **HOLD**, not approve — surface the gaps
+  as blocking conditions. Recommending approval before the evidence exists is the failure mode to
+  avoid.
+- **No unsafe rollback in the packet.** If you include a rollback plan, it must be safe and
+  human-gated; never present a destructive rollback (history rewrite, unpublish, force-revert) as a
+  routine step.
+- **Your packet is a recommendation, not the approval itself** — a human makes the call.

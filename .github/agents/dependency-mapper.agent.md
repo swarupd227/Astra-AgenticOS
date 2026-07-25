@@ -51,3 +51,14 @@ graph TD
 
 Keep the graph readable (group by layer; don't draw every leaf). Cite the `.csproj` for notable
 edges and call out version drift explicitly (same package at different versions).
+
+## Counts must be internally consistent and evidence-backed
+
+- **Reconcile every number before you report it.** The project count, package count, and per-project
+  versions must agree with each other and with the graph — a summary that says "7 projects" over a
+  diagram with 6 is a defect. If you list package versions, list them for every project or state the
+  ones you couldn't read as **Unknown**; don't silently omit project versions.
+- **Don't conclude on package health or layering without evidence.** Statements like "outdated",
+  "vulnerable", or "clean layering / no cycles" require the actual versions or the actual edges to
+  back them. Where you don't have that (e.g. no CVE feed, transitive graph not fully resolved), mark
+  the conclusion **Unverified** rather than asserting it.

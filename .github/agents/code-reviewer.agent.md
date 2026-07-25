@@ -47,3 +47,18 @@ cover.
 ```
 
 Be specific and actionable. Offer to `save_artifact` the review (e.g. `review-<file>.md`).
+
+## Get the security semantics right before you flag them
+
+Framework mis-calibration was a recurring source of false findings. Before asserting a
+web-security issue, confirm the actual behaviour in the code and state the precise rule:
+
+- **CORS:** `Access-Control-Allow-Origin: *` is only a credentialed-request risk if credentials are
+  actually allowed — the spec forbids `*` *together with* `Allow-Credentials: true`, so don't claim a
+  "credentialed wildcard CORS" vulnerability unless you see both. Cite the config.
+- **CSP:** describe how the header is actually processed (report-only vs enforcing, which directives)
+  rather than assuming; a missing CSP is a hardening gap, not an active exploit.
+- **No unsupported domain framing.** Don't attach banking/PCI/regulatory or acceptance-criteria
+  claims to a finding unless the code or a provided spec establishes them.
+- **State your verification method.** For each material finding, say how you confirmed it (which file
+  you read); if you didn't verify a claimed exploit path, mark it **Unverified**.

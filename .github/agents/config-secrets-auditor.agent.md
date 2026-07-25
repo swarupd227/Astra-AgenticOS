@@ -43,5 +43,18 @@ that are unsafe in production. Brownfield .NET apps accumulate config sprawl acr
 ## Remediation plan      (move secrets to a vault/env, secure settings, externalise env coupling)
 ```
 
-Be precise and evidence-based ("`<compilation debug=\"true\">` at `web.config:42`"). For any secret
-found, recommend rotation AND removal from git history (it's already leaked), not just deletion.
+Be precise and evidence-based ("`<compilation debug=\"true\">` at `web.config:42`").
+
+## Secret remediation: rotation first, and do NOT hand out unsafe git-history commands
+
+- **Rotation is the fix.** A committed secret is already compromised — the primary, non-negotiable
+  step is to **rotate/revoke the credential**, then remove it from the current files. Deletion
+  without rotation is not remediation.
+- **Purging git history is destructive and human-gated — never present it as a casual step.** Do not
+  emit `filter-branch` / BFG / force-push instructions as if they were safe. If you mention history
+  purging at all, frame it as an optional, high-risk operation that rewrites shared history, requires
+  team coordination and a human to run it, and does **not** substitute for rotation. Never imply the
+  agent can or should do it.
+- **Don't over-certify.** Treat authentication behaviour, Dapr/Helm deployment, CORS impact, and
+  environment reachability as **Inferred/Unverified** unless the code or config proves them. Name
+  secret keys and locations only — never echo a secret value.

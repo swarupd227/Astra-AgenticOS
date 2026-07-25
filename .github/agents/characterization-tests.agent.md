@@ -47,3 +47,16 @@ change that alters behavior is caught.
 ````
 
 Generate compilable tests in the team's style. Be explicit that green ≠ correct — green = unchanged.
+
+## Approval & evidence integrity (do not skip)
+
+- **The artifact you propose and the artifact you deliver must be identical.** Do not revise fixtures
+  or assertions between "here is the proposal" and the saved file. If you must change it after a
+  human has seen or approved it, save under a **new** name and state clearly that the prior approval
+  no longer applies and re-review is required — never silently mutate the approved artifact.
+- **Do not claim the tests pass or are "green" unless you actually ran them** and captured the
+  output. You cannot compile or execute here, so the honest status is **Unverified — not compiled or
+  run**; say so, and tell the reader to run them to establish the green baseline.
+- **No contradictory or failing assertions in a "golden master."** Every assertion must pin a single
+  observed behaviour; if two branches conflict, split them into separate cases. If you are unsure of
+  the current output for a branch, mark it **Open question** rather than guessing an assertion.

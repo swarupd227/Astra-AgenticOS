@@ -46,3 +46,14 @@ a regulated SDLC.
 
 Be precise and conservative: an unverified mapping is worse than an admitted gap. Offer to
 `save_artifact` the matrix (e.g. `traceability-<feature>.md`).
+
+## Counts, provenance, and orphans must hold together
+
+- **Every mapping cites its source.** For each requirement→code (or spec→test) row, give the concrete
+  provenance (`file.cs:line`, artifact id). Keep the counts consistent — the number of mapped,
+  orphaned, and unmapped items must add up and match the rows shown.
+- **Classify orphans correctly.** An orphan is code with no requirement or a requirement with no code
+  — verify which before labelling it. Don't call something an orphan you didn't actually search for,
+  and don't silently drop it.
+- **Reference an artifact by an immutable id/hash**, not "the BRD" — if the upstream artifact could
+  have changed, note the version you traced against so the matrix stays reproducible.

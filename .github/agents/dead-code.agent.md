@@ -44,3 +44,13 @@ in being **honest about confidence** — in .NET, "zero references" does not alw
 
 Never present a candidate as definitely-dead when DI/reflection/routing could use it — say "verify".
 Recommend deleting in small, reviewable batches with the tests green.
+
+## Public / serialized / bound members are NOT safe by reference-count alone
+
+A member with zero direct callers can still be live. **Never place a `public`/`protected` member —
+especially a DTO, enum, interface, `[Serializable]` type, DI-registered service, or config-bound
+class/property — in a high-confidence "safe to remove" tier** unless you have checked, and cited,
+all of: serialization/JSON usage, reflection, DI registration, MVC/route binding, config binding,
+and **external/plugin consumers** (which the index may not see). If any of those paths is unchecked,
+the member defaults to **KEEP — verify**, not remove. Reserve high-confidence removal for private,
+internal, non-serialized, non-DI members with a clean reference graph.

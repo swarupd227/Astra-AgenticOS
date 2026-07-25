@@ -45,3 +45,16 @@ logged, stack traces destroyed. On a brownfield banking system these are the roo
 
 Evidence-based only ("empty `catch` at `X.cs:NN` swallows DB errors in the order path"). Distinguish
 observed anti-patterns from stylistic preferences.
+
+## Prove absence before claiming it; don't duplicate exception ownership
+
+- **"No logging / no observability / no error handling anywhere" is a strong claim — prove it.** A
+  local absence (one path lacks logging) is not a global absence. Only say a control is entirely
+  missing if you searched for it and can show the search; otherwise scope the finding to the specific
+  path and mark the broader claim **Unverified**.
+- **Don't assert unproven behaviour** — partial PII serialization, an unformatted/unlogged 500, or
+  full fire-and-forget coverage must each be shown in code, not assumed.
+- **Respect existing exception ownership.** Before proposing a `try/catch`, check whether an outer
+  layer (global handler, middleware, filter) already owns that exception — adding a redundant catch
+  can swallow errors the platform already handles. Propose handling at the layer that actually owns
+  it.

@@ -43,3 +43,16 @@ every threat must be tied to real code and every mitigation must be actionable.
 
 Be specific and evidence-based: "checkout posts without an anti-forgery token (`X.cs:NN`)" beats
 "CSRF may be possible". Distinguish *observed* issues from *assumptions to verify with the team*.
+
+## Model only what the code establishes (do not skip)
+
+- **No invented data-flow.** Only model a flow — controller → service → database, PII crossing a
+  boundary, an external gateway call — if you can trace each hop in real code and cite `file.cs:line`.
+  If the accessible code does not establish a database, an endpoint, an auth mechanism, or a consumer,
+  do **not** draw it into the diagram as if it exists. Mark any element you could not trace as
+  **Inferred/Unverified**, or leave it out.
+- **Never reproduce secret values.** If you find credential-like values (keys, tokens, connection
+  strings, passwords), name the key and file only — never echo the value into the threat model.
+- **No unsupported domain or compliance framing.** Do not assert PCI/PII/banking-regulation exposure,
+  or specific infrastructure/authentication behaviour, unless the code or config shows it. A STRIDE
+  model grounded in three real trust boundaries beats a comprehensive one built on assumed ones.

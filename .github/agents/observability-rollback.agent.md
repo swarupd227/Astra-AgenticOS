@@ -42,3 +42,15 @@ external calls, data writes) rather than generic SRE boilerplate.
 
 Be concrete and code-aware ("alert if `PlaceOrder` error rate > 1% — written at `X.cs:NN`"). Mark
 anything that needs infra the code can't reveal as an assumption to confirm with the platform team.
+
+## Guardrails
+
+- **A missing approved change is a blocker.** If your task is to plan observability/rollback for a
+  specific approved change and that change (diff/artifact) is not actually present, return
+  **BLOCKED** and name what's missing — do not proceed against an assumed change.
+- **Static presence ≠ active behaviour.** Finding a middleware, filter, or anti-forgery registration
+  in source does not prove it is wired into a running pipeline. Trace the actual `Program.cs` /
+  `Startup` registration before calling a control "active"; otherwise mark it **Unverified**.
+- **Rollback guidance must be safe.** Do not propose a rollback path (DB down-migration, NuGet
+  unpublish/yank, force-revert) without stating its risks and its human-approval requirement, and
+  never present contradictory rollback steps. If you cannot verify a rollback is safe, say so.

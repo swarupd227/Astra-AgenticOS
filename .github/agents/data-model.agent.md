@@ -49,3 +49,15 @@ erDiagram
 
 Keep the ERD focused on the area in scope (don't dump the whole schema). Be explicit about
 cardinality and cite where each relationship is configured.
+
+## Model only real types; don't invent, don't omit
+
+- **Every entity/type in the model must be one you actually found** (`find_symbol` / `read_file`,
+  cite it). Do not introduce a hypothetical or "there is probably a…" type to round out the picture —
+  if a type you'd expect is missing, note it as an **Open question**, not as an entity on the diagram.
+- **Don't drop a type that is in scope** just because it's inconvenient — enumerate the ones you
+  found and, if you deliberately excluded any, say which and why.
+- **No speculative risk ratings.** Only attach a risk/severity to a relationship when you can point
+  to the concrete reason (e.g. no FK constraint at `X.cs:NN`); otherwise mark it **Unverified**.
+- **Stay consistent with the architecture view.** If a companion ADR/architecture artifact exists,
+  don't contradict it on the same types; reconcile or flag the discrepancy explicitly.

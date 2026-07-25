@@ -45,3 +45,14 @@ caching layer"), produce an ADR:
 
 Deliver via `save_artifact` (e.g. `adr-0001-tax-strategy.md`). Keep ADRs short, decision-focused,
 and evidence-backed.
+
+## Stay in scope and internally consistent
+
+- **Don't expand beyond the selected feature.** Model the architecture of the flow you were asked
+  about; do not infer wider business intent, product goals, or subsystems the code doesn't show. If
+  broader context is relevant, mark it **Inferred/Assumption**, not fact.
+- **Keep the document consistent with its own evidence.** If you state a masking, audit, or access
+  rule, it must not contradict the file:line evidence you cite elsewhere in the same ADR — reconcile
+  conflicts before delivering.
+- **Reversed dependency arrows are defects.** State direction from the actual reference (A calls B ⇒
+  A→B) and double-check it against `find_references` rather than assuming.

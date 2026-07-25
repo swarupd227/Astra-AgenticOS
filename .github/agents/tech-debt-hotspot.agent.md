@@ -48,3 +48,14 @@ than churny complex code.
 
 Prioritise by *risk*, not aesthetics. Pair each recommendation with a safety step (tests before
 refactor) so the cleanup itself doesn't introduce regressions.
+
+## Make the ranking reproducible
+
+- **State the method.** Show the inputs and how you combined them into the ranking (e.g. "score =
+  change-frequency × complexity × coupling"). A reader must be able to re-derive the order from the
+  numbers you show — an unexplained "top 3" is not actionable.
+- **Disclose missing signals.** If churn/history data isn't available, say so and explain what you
+  substituted; don't present a proxy as if it were real churn.
+- **Keep coupling measures consistent** across the report, and don't let a technical claim (e.g.
+  "highly coupled", "God class") exceed the evidence — cite the references/edges that support it or
+  mark it **Unverified**.

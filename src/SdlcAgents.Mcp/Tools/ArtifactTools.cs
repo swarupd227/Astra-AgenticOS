@@ -14,7 +14,7 @@ namespace SdlcAgents.Mcp.Tools;
 public static class ArtifactTools
 {
     [McpServerTool(Name = "save_artifact")]
-    [Description("Persist a generated document (BRD, ADR, test file, review report) to the repo's /artifacts folder. Returns the saved path. Use this to deliver the final output of an agent.")]
+    [Description("Persist a generated document (BRD, ADR, test file, review report) to the repo's /artifacts folder. Returns the saved path. Use this to deliver the final output of an agent. IMPORTANT: writing to a name that already exists does NOT destroy the prior file — the previous content is snapshotted to <name>.vN before the new content is written, so any earlier version that a human may have reviewed is preserved. Never rely on a silent overwrite to revise an approved artifact; a changed artifact voids any prior approval and must be re-reviewed.")]
     public static string SaveArtifact(
         CodeIndex index,
         [Description("File name including extension, e.g. 'brd-checkout.md' or 'TaxServiceTests.cs'. Subfolders allowed, e.g. 'tests/TaxServiceTests.cs'.")] string name,
@@ -26,8 +26,36 @@ public static class ArtifactTools
 
         var full = Path.Combine(index.ArtifactsDir, safe);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+
+        // Approval integrity: a prior artifact must never be silently mutated. If a file
+        // with this name already exists, snapshot it to an immutable <name>.vN backup
+        // before writing, so nothing a reviewer has seen is destroyed — and make the
+        // change explicit in the return value rather than pretending it was a fresh save.
+        if (File.Exists(full))
+        {
+            if (File.ReadAllText(full) == content)
+                return $"Artifact `{full}` already contains this exact content — nothing changed ({content.Length} chars).";
+
+            var backup = NextVersionPath(full);
+            File.Copy(full, backup, overwrite: false);
+            File.WriteAllText(full, content);
+            var backupRel = Path.GetRelativePath(index.ArtifactsDir, backup).Replace('\\', '/');
+            return $"Updated existing artifact `{full}` ({content.Length} chars). The previous version was preserved as `{backupRel}`. " +
+                   $"⚠ This is a MATERIAL change to an existing artifact: any prior approval of it is now void and it must be re-reviewed before use downstream.";
+        }
+
         File.WriteAllText(full, content);
         return $"Saved artifact to `{full}` ({content.Length} chars).";
+    }
+
+    /// <summary>Finds the next free immutable snapshot path: foo.md → foo.md.v1, foo.md.v2, …</summary>
+    private static string NextVersionPath(string full)
+    {
+        for (var n = 1; ; n++)
+        {
+            var candidate = $"{full}.v{n}";
+            if (!File.Exists(candidate)) return candidate;
+        }
     }
 
     [McpServerTool(Name = "list_artifacts")]

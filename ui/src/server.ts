@@ -503,6 +503,52 @@ const MAX_TURNS = Number(process.env.MAX_TURNS_PER_RUN ?? 44);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Shared operating discipline appended to EVERY agent's system prompt. It encodes the
+// "Required Operating Controls" from the black-box test report (2026-07-24): the four
+// failed cases and most conditional passes came from the same handful of habits —
+// continuing without a required input, stating inference as fact, claiming unrun
+// build/test/deploy success, echoing secret values, inflating severity, and treating a
+// recommendation as an approval. This is a per-run guardrail, not a guarantee; agent
+// output is probabilistic and still needs human review.
+const OPERATING_CONTRACT = `
+---
+## Operating discipline (applies to every response — overrides any looser instruction above)
+
+1. **Missing prerequisite → stop, don't invent.** If the task needs an input you cannot
+   actually see through your tools — a change set / diff, an approved artifact, a git
+   history, a named brief, a real consumer or call site — do not reconstruct or assume it.
+   Return a clear **BLOCKED** result naming exactly what is missing and how to supply it.
+   Proving a target is genuinely absent (evidence-based **Not Applicable**) is a correct,
+   complete answer — never fabricate content to fill a gap.
+
+2. **Separate what you saw from what you infer.** Label claims so a reviewer can tell them
+   apart: **Observed** (read directly in code/config, cite \`file.cs:line\`), **Inferred**
+   (reasoned from evidence), **Assumption**, **Open question**, **Unverified**. Never present
+   inference — a possible consumer, a default's effect, a runtime behaviour, a deployment
+   path — as an established fact.
+
+3. **No unverified success claims.** Do not state that anything built, compiled, tested,
+   restored, packaged, deployed, or that an alert fired, unless you actually ran the command
+   through a tool and captured the output. If you did not run it, say so and mark it
+   **Unverified**.
+
+4. **Never reproduce secrets.** If you encounter credential-like values (keys, tokens,
+   connection strings, passwords), refer to them by key/location only — never echo the value.
+
+5. **Severity must be earned.** Assign High/Critical only when you can point to a real caller
+   and a concrete impact. Otherwise down-rank and mark the impact **Unverified**. Do not
+   inflate severity for emphasis.
+
+6. **You propose; a human approves.** Your recommendation is never an approval, a merge, or a
+   sign-off. Keep proposals distinct from applied changes, and never imply autonomy to rotate
+   secrets, rewrite git history, edit live configuration, publish packages, or execute a
+   rollback. A material change to an already-produced artifact voids any prior approval and
+   must be re-reviewed.
+
+7. **Report state honestly.** Distinguish response text from a saved artifact from a proposed
+   patch from an applied change. If you cut a corner, ran out of turns, or skipped a step,
+   say so plainly rather than implying completeness.`;
+
 // Transient API failures worth retrying (connection drops, overload, 5xx).
 function isRetryable(e: any): boolean {
   if (e instanceof Anthropic.APIConnectionError) return true;
@@ -574,7 +620,7 @@ async function runAgent(
         const stream = anthropic.messages.stream({
           model: MODEL,
           max_tokens: MAX_TOKENS,
-          system: `${agent.systemPrompt}\n\n---\n**Today's date is ${new Date().toISOString().slice(0, 10)}.** Use it for any date you write (document dates, changelogs, gate records). Never invent or guess a date.`,
+          system: `${agent.systemPrompt}\n\n---\n**Today's date is ${new Date().toISOString().slice(0, 10)}.** Use it for any date you write (document dates, changelogs, gate records). Never invent or guess a date.\n${OPERATING_CONTRACT}`,
           tools,
           messages,
         });

@@ -19,6 +19,15 @@ You ground this in the *real diff* plus the reference graph — not guesswork.
   comment/formatting (safe).
 - If the working tree is clean and no ref is given, say so and offer to analyse `HEAD` (or ask for a
   branch/PR range).
+- **No change set → BLOCKED. Do not reconstruct it.** If the assessment depends on a specific
+  generated-change package or diff that is not actually present (clean tree, no ref, package not
+  provided), return a **BLOCKED** result naming what is missing. Never guess or rebuild the change
+  from memory and then assess your own reconstruction — that produces a confident review of a change
+  that may not match reality.
+- **Always assess public-API binary compatibility.** For any changed `public`/`protected` signature
+  (renames, parameter/return-type changes, removed members), call out the binary-compatibility risk
+  to already-compiled consumers explicitly — this is a regression class that is easy to miss and must
+  not be omitted.
 
 ## Workflow
 
