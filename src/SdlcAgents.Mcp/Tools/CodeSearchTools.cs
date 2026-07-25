@@ -13,7 +13,7 @@ namespace SdlcAgents.Mcp.Tools;
 public static class CodeSearchTools
 {
     [McpServerTool(Name = "solution_overview")]
-    [Description("Return a high-level map of the target .NET solution: every project (.csproj) grouped by layer (Libraries, Presentation, Plugins, Tests). Use this first to orient before deeper analysis.")]
+    [Description("Return a high-level map of the target codebase: every project/module (.NET .csproj, Maven/Gradle build files, or Node package.json) grouped by top-level folder. Use this first to orient before deeper analysis.")]
     public static string SolutionOverview(CodeIndex index)
     {
         var projects = index.Projects();
@@ -27,7 +27,7 @@ public static class CodeSearchTools
         var sb = new StringBuilder();
         sb.AppendLine($"# Solution overview ({projects.Count} projects)");
         sb.AppendLine($"Source root: `{index.Root}`");
-        sb.AppendLine($"Indexed C# files: {index.Files.Count}");
+        sb.AppendLine($"Indexed source files: {index.Files.Count}");
         sb.AppendLine();
         foreach (var g in groups)
         {
@@ -60,7 +60,7 @@ public static class CodeSearchTools
     }
 
     [McpServerTool(Name = "search_code")]
-    [Description("Search the codebase for a substring or regular expression across all C# files. Returns file:line and the matching line. Use for finding business rules, config keys, strings, or patterns when you don't have an exact symbol name.")]
+    [Description("Search the codebase for a substring or regular expression across all indexed source and config files (any language). Returns file:line and the matching line. Use for finding business rules, config keys, strings, or patterns when you don't have an exact symbol name.")]
     public static string SearchCode(
         CodeIndex index,
         [Description("Text to find. Substring by default; set regex=true to treat as a .NET regex.")] string query,
@@ -99,6 +99,13 @@ public static class CodeSearchTools
         var fence = Path.GetExtension(file.RelativePath).ToLowerInvariant() switch
         {
             ".cs" => "csharp",
+            ".java" => "java",
+            ".ts" or ".tsx" => "typescript",
+            ".js" or ".jsx" or ".mjs" or ".cjs" => "javascript",
+            ".html" or ".htm" => "html",
+            ".scss" => "scss",
+            ".css" => "css",
+            ".gradle" => "groovy",
             ".csproj" or ".config" or ".props" or ".targets" or ".nuspec" or ".xml" => "xml",
             ".json" => "json",
             ".yml" or ".yaml" => "yaml",

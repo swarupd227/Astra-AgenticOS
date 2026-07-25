@@ -41,10 +41,33 @@ so the productivity story is concrete on a legacy stack.
 **Human Review** — **Human Review (HITL Gate)** — assembles a go/no-go review packet (checklist, risk tier, sign-offs, escalation) from the produced artifacts.
 
 All 28 reuse the **same MCP server**. The **Orchestrator** adds an agent-runs-agents delegation layer
-in the UI backend. The MCP server's `read_file`/`search_code` cover source (`.cs`, Roslyn-indexed)
-**and** project/config files (`.csproj`, `packages.config`, `web.config`, `.sln`…); a **git** tool
-group (`git_status`/`git_log`/`git_diff`/`git_show`) backs the Regression, Changelog and Human-Review
-agents.
+in the UI backend. The MCP server's `read_file`/`search_code` cover source **and** project/config
+files (`.csproj`, `web.config`, `pom.xml`, `package.json`, `.sln`…); a **git** tool group
+(`git_status`/`git_log`/`git_diff`/`git_show`) backs the Regression, Changelog and Human-Review agents.
+
+### Languages
+
+Code intelligence (`find_symbol`, `find_references`, `analyze_impact`) is **multi-language** via a
+pluggable indexer:
+
+| Language | Backend | Symbol precision |
+|---|---|---|
+| **C#** | Roslyn (syntactic, no build) | classes/interfaces/structs/enums/methods/properties |
+| **Java** (`.java`) | lightweight syntactic | classes/interfaces/enums/records/methods |
+| **TypeScript / JavaScript** incl. **Angular** & **React** (`.ts/.tsx/.js/.jsx`) | lightweight syntactic | classes/interfaces/enums/types/functions/components/methods |
+
+All analysis is **syntactic only** (no compile of the target) — the right fit for brownfield code
+that may not build. References are name-based *candidate* matches, clearly labelled as such.
+
+Adding a language is additive and can't affect another language's results: implement
+[`ILanguageIndexer`](src/SdlcAgents.Mcp/Services/ILanguageIndexer.cs) and register it in `CodeIndex`.
+The Java/TS indexers ([`RegexLanguageIndexer.cs`](src/SdlcAgents.Mcp/Services/RegexLanguageIndexer.cs))
+are the **drop-in point for a full tree-sitter backend** — swap the parsing internals and nothing
+above the interface changes. (Fast follow: the `analyze_impact` *layer* labels are still .NET-oriented;
+dependency data is already language-neutral.)
+
+> **Tip:** for Java/Node repos, index the **repository root** (where `pom.xml` / `package.json` live),
+> not a sub-folder, so `solution_overview` picks up the modules.
 
 ## Quick start
 
