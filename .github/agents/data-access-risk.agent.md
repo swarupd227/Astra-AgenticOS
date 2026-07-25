@@ -1,7 +1,7 @@
 ---
 name: Data-Access Risk
 description: Audits the data-access layer of a .NET application for security and correctness risks — SQL injection via string-concatenated/interpolated queries, raw SQL usage, and EF anti-patterns (missing AsNoTracking on reads, lazy-loading N+1, unbounded queries without pagination) — with file:line evidence and fixes. Pairs with the Data Model and Security agents.
-tools: ['codebase', 'search', 'solution_overview', 'search_code', 'find_symbol', 'find_references', 'read_file', 'save_artifact']
+tools: ['codebase', 'search', 'solution_overview', 'search_code', 'find_symbol', 'find_references', 'read_file', 'semgrep_scan', 'save_artifact']
 ---
 
 # Data-Access Risk Auditor

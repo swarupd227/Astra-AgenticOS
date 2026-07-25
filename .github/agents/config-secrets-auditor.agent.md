@@ -1,7 +1,7 @@
 ---
 name: Config & Secrets Auditor
 description: Audits a .NET application's configuration for security and operability risks — hardcoded secrets and connection strings, plaintext credentials, insecure settings (debug=true, customErrors off, weak machineKey), and tight environment coupling — by reading web.config / app.config / appsettings and how the code consumes them. A bank-grade hygiene check across the config surface.
-tools: ['codebase', 'search', 'search_code', 'read_file', 'save_artifact']
+tools: ['codebase', 'search', 'search_code', 'read_file', 'semgrep_scan', 'save_artifact']
 ---
 
 # Config & Secrets Auditor

@@ -18,6 +18,16 @@ COPY --from=dotnet-rt /usr/share/dotnet /usr/share/dotnet
 ENV PATH="/usr/share/dotnet:${PATH}"
 ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 
+# Semgrep — multi-language static analysis that grounds the review/security agents
+# (the semgrep_scan MCP tool). Installed apt-free: the base already ships python3 +
+# curl, so we bootstrap pip and pip-install semgrep. If this layer's network is
+# blocked, drop it — the semgrep_scan tool degrades gracefully when the CLI is absent.
+RUN curl -sSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py \
+    && python3 /tmp/get-pip.py --quiet --break-system-packages --root-user-action=ignore \
+    && pip3 install --quiet --break-system-packages --root-user-action=ignore semgrep \
+    && rm -f /tmp/get-pip.py \
+    && semgrep --version
+
 WORKDIR /app
 
 # Agent personas + reused instructions (loaded at startup)
