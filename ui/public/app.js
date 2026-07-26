@@ -1144,6 +1144,19 @@ function makeRenderer(stream, showThinking) {
     if (raf) return;
     raf = requestAnimationFrame(() => { raf = 0; if (mdEl) mdEl.innerHTML = renderMarkdown(textBuf); pin(); });
   }
+  /**
+   * Paint whatever is buffered right now, cancelling any queued frame.
+   *
+   * Must be called before the current text block is closed. A scheduled frame
+   * checks `mdEl`, so if a tool_call (or the end of the run) nulled it first,
+   * the callback silently skipped the render and the answer was lost — an empty
+   * bubble under "Used 1 tool". Short answers hit this almost every time,
+   * because all their deltas land inside a single frame.
+   */
+  function flushRender() {
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    if (mdEl) { mdEl.innerHTML = renderMarkdown(textBuf); pin(); }
+  }
 
   return {
     handle(ev) {
@@ -1155,7 +1168,7 @@ function makeRenderer(stream, showThinking) {
           break;
         case "tool_call": {
           killThinking();
-          if (mdEl) { mdEl.classList.remove("caret"); highlightIn(mdEl); mdEl = null; }
+          if (mdEl) { flushRender(); mdEl.classList.remove("caret"); highlightIn(mdEl); mdEl = null; }
           if (ev.name === "save_artifact") { stepEls[ev.id] = addArtifact(stream, ev.input); break; }
           const steps = ensureActivity().querySelector(".activity-steps");
           const s = document.createElement("div");
@@ -1180,6 +1193,7 @@ function makeRenderer(stream, showThinking) {
           break;
         }
         case "text_reset":
+          if (raf) { cancelAnimationFrame(raf); raf = 0; }   // don't paint into a removed node
           if (mdEl) { mdEl.remove(); mdEl = null; textBuf = ""; }
           break;
         case "notice":
@@ -1196,7 +1210,7 @@ function makeRenderer(stream, showThinking) {
     },
     finish() {
       killThinking();
-      if (mdEl) { mdEl.classList.remove("caret"); highlightIn(mdEl); addCopy(stream, mdEl); mdEl = null; }
+      if (mdEl) { flushRender(); mdEl.classList.remove("caret"); highlightIn(mdEl); addCopy(stream, mdEl); mdEl = null; }
       if (activity) { activity.classList.add("collapsed"); updateActTitle(activity, true); }
     },
   };
