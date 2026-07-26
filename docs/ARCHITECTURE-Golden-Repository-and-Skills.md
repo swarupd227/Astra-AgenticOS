@@ -1,6 +1,6 @@
 # Golden Repository & User-Authored Skills — Architecture
 
-**Status:** Proposed for review · **Date:** 2026-07-26 · **Owner:** ASTRA AgenticOS
+**Status:** Approved — open questions decided 2026-07-26; Phase 1 unblocked · **Owner:** ASTRA AgenticOS
 
 ---
 
@@ -85,10 +85,13 @@ GoldenItem
   enforcement    mandatory | recommended | reference
   appliesTo      [agent ids | category | "all"]
   tags[]         domain / product / technology
-  owner          accountable person or team
+  owner          accountable person or team          [decision 2]
+  approvedBy     required before publishing a `mandatory` item   [decision 2]
+  approvedAt
   version        integer, incremented on publish
   status         draft | published | archived
-  content        normalised markdown
+  content        normalised markdown — heading and clause numbering PRESERVED,
+                 so an agent can cite "Standard 4.2.1" precisely   [decision 3]
   source         upload | git path | URL
   updatedAt
 ```
@@ -110,8 +113,14 @@ Project.golden = {
 ```
 
 Editable at any time — add/modify/remove is plain CRUD on this selection, not a project rebuild.
-Selecting **by tag** is worth supporting: "all Payments-domain standards" keeps working as the
-library grows, without an admin re-picking items.
+Selecting **by tag** is the primary mechanism (decision 1): with a single org-wide library, "all
+Payments-domain standards" is how a business unit scopes itself, and it keeps working as the library
+grows without an admin re-picking items.
+
+**Catalog cap (decision 4):** roughly **150 items per project**. The catalog sits in context on every
+turn, so selection size has a direct token cost. The picker shows a running count and warns past the
+cap — it must never silently truncate, because a silently dropped mandatory standard is exactly the
+partial-compliance failure this design exists to prevent.
 
 ---
 
@@ -189,8 +198,12 @@ tool grants. Skills first: ~90% of the value at a fraction of the risk.
 - **Versioning & traceability.** Artifacts record which golden item **versions** they were produced
   against. This directly closes the "artifact reproducibility / immutable ids" gap raised by the
   testers.
-- **Precedence.** `mandatory` org standard > project selection > team skill. Conflicts must be
-  **surfaced**, never silently resolved.
+- **Precedence.** `mandatory` org standard > project selection > team skill. Conflicts are **surfaced
+  loudly in the output and logged — the run is not blocked** (decision 5). Blocking was rejected as
+  too paralysing early on, when conflicts will be most common; revisit if they prove frequent.
+- **Approval (decision 2).** `recommended` and `reference` items are self-service. Publishing a
+  `mandatory` item requires a named owner plus one approver — marking something mandatory is real
+  authority over every downstream agent, so it needs a gate.
 - **Lifecycle.** draft → published → archived. Archived items stay readable for old artifacts but
   can't be newly selected.
 - **Attribution.** When an agent applies a golden item it cites `id@version`, so a reviewer can
@@ -263,22 +276,29 @@ auditable rather than magical.
 | **4. Skills** | `kind: skill`, authoring UI, ownership/approval, test-run | A team ships a skill without us writing code |
 | **5. Semantic (conditional)** | `golden_semantic_search` | Only if the Layer-3 trigger fires |
 
+**Out of scope for 1–5:** promoting generated artifacts (BRDs, ADRs) into the Golden Repo
+(decision 6). Revisit once retests evidence that agent output is reliable enough to become
+authoritative — and even then, only behind explicit human approval.
+
 **Layer-3 trigger (decide with data, not vibes):** corpus beyond a few hundred documents, **or** the
 retrieval log shows agents repeatedly failing to find items that were relevant.
 
 ---
 
-## 11. Open questions for review
+## 11. Decisions (settled 2026-07-26)
 
-1. **Scope of the library** — one org-wide Golden Repo, or per business unit / per workspace?
-2. **Approval workflow** — who signs off a `mandatory` item? Does it need dual approval?
-3. **Ingest fidelity** — how much do we invest in `.docx`/`.pdf` structure preservation (tables,
-   numbered clauses) versus plain text? Numbered clauses matter for citing standards precisely.
-4. **Size limits** — per item and per project selection (context budget for the catalog).
-5. **Conflict policy** — when a team skill contradicts a mandatory standard, do we block the run or
-   surface a warning?
-6. **Existing artifacts** — should generated artifacts (BRDs, ADRs) be promotable *into* the Golden
-   Repo as reference material? (Attractive, but needs a quality gate.)
+These were the open questions blocking implementation. All six are now decided.
+
+| # | Question | **Decision** | Consequence for the build |
+|---|---|---|---|
+| 1 | Scope of the library | **One org-wide library**, with `tags` for business units | Global ID namespace; separation comes from tag-based selection, not hard boundaries |
+| 2 | Approval workflow | `recommended` / `reference` are **self-service**; `mandatory` needs a **named owner + one approver** | Adds `approvedBy` / `approvedAt` to the model and an approval step before publish |
+| 3 | Ingest fidelity | **Preserve heading and clause numbering**; complex tables best-effort | Ingest must retain clause structure so agents cite *"Standard 4.2.1"*, not a paraphrase |
+| 4 | Size limits | **Cap the catalog (~150 items per project)**; warn in the UI — never fail silently | Selection UI shows the running count and warns past the cap |
+| 5 | Conflict policy | **Surface loudly in the output and log it — do not block** | Conflicts are reported as findings; revisit if they prove frequent |
+| 6 | Promotion of generated artifacts | **Yes eventually — not in the first release**, and never without explicit human approval | Out of scope for Phases 1–5; revisit once agent output quality is evidenced by retests |
+
+**Phase 1 is unblocked.**
 
 ---
 
