@@ -12,6 +12,9 @@ npm-debug.log*
 ui/projects.json
 ui/threads.json
 workspace/
+# Golden Repository content belongs to the organisation running the platform,
+# not to this repo — it lives on the persistent share in a real deployment.
+ui/golden/
 
 # Recorded demo videos (large binaries)
 ui/recordings/
