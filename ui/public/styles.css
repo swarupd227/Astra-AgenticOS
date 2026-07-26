@@ -393,11 +393,25 @@ kbd {
 
 /* ---------- Modal ---------- */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(3,6,12,.55); backdrop-filter: blur(3px); display: grid; place-items: center; z-index: 100; padding: 20px; }
-.modal { width: 100%; max-width: 480px; background: var(--elevated); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-lg); overflow: hidden; }
+/* A modal must never grow taller than the screen. Without the cap the body simply
+   overflowed and `overflow: hidden` clipped the footer, so Save/Cancel became
+   unreachable with no scrollbar to get to them — the head and foot stay put and
+   only the body scrolls. */
+.modal {
+  width: 100%; max-width: 480px; background: var(--elevated); border: 1px solid var(--border);
+  border-radius: 16px; box-shadow: var(--shadow-lg); overflow: hidden;
+  max-height: calc(100dvh - 40px);          /* backdrop pads 20px top and bottom */
+  display: flex; flex-direction: column;
+}
+.modal-head, .modal-foot { flex: 0 0 auto; }
+/* The golden item editor carries three-column rows and a content box — 480px is
+   too cramped for it, though it stays fine for the small project dialogs. */
+.modal.tall { max-width: 640px; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--border-soft); }
 .modal-title { font-size: 16px; font-weight: 600; }
 .icon-btn.sm { width: 30px; height: 30px; }
-.modal-body { padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+/* min-height:0 is what actually lets a flex child scroll rather than stretch. */
+.modal-body { padding: 18px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; min-height: 0; }
 .seg { display: flex; gap: 4px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 4px; }
 .seg-btn { flex: 1; padding: 8px; border: none; background: transparent; color: var(--text-2); font-size: 13px; font-weight: 550; border-radius: 7px; cursor: pointer; transition: .12s; }
 .seg-btn.active { background: var(--accent); color: #fff; box-shadow: var(--shadow-sm); }
