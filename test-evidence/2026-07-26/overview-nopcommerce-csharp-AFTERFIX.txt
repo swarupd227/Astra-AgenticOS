@@ -1,0 +1,46 @@
+# Solution overview (39 projects)
+Source root: `C:\Users\swarupd\demo\AgenticOS\workspace\nopcommerce-csharp-d7dfb6`
+Indexed source files: 3901
+
+## src
+- `src/Libraries/Nop.Core/Nop.Core.csproj`
+- `src/Libraries/Nop.Data/Nop.Data.csproj`
+- `src/Libraries/Nop.Services/Nop.Services.csproj`
+- `src/Plugins/Nop.Plugin.DiscountRules.CustomerRoles/Nop.Plugin.DiscountRules.CustomerRoles.csproj`
+- `src/Plugins/Nop.Plugin.ExchangeRate.EcbExchange/Nop.Plugin.ExchangeRate.EcbExchange.csproj`
+- `src/Plugins/Nop.Plugin.ExternalAuth.Facebook/Nop.Plugin.ExternalAuth.Facebook.csproj`
+- `src/Plugins/Nop.Plugin.Misc.AzureBlob/Nop.Plugin.Misc.AzureBlob.csproj`
+- `src/Plugins/Nop.Plugin.Misc.Brevo/Nop.Plugin.Misc.Brevo.csproj`
+- `src/Plugins/Nop.Plugin.Misc.CloudflareImages/Nop.Plugin.Misc.CloudflareImages.csproj`
+- `src/Plugins/Nop.Plugin.Misc.Dynamics365/Nop.Plugin.Misc.Dynamics365.csproj`
+- `src/Plugins/Nop.Plugin.Misc.Forums/Nop.Plugin.Misc.Forums.csproj`
+- `src/Plugins/Nop.Plugin.Misc.News/Nop.Plugin.Misc.News.csproj`
+- `src/Plugins/Nop.Plugin.Misc.NopMobileApp/Nop.Plugin.Misc.NopMobileApp.csproj`
+- `src/Plugins/Nop.Plugin.Misc.OmnibusDirective/Nop.Plugin.Misc.OmnibusDirective.csproj`
+- `src/Plugins/Nop.Plugin.Misc.Omnisend/Nop.Plugin.Misc.Omnisend.csproj`
+- `src/Plugins/Nop.Plugin.Misc.Polls/Nop.Plugin.Misc.Polls.csproj`
+- `src/Plugins/Nop.Plugin.Misc.PowerBI/Nop.Plugin.Misc.PowerBI.csproj`
+- `src/Plugins/Nop.Plugin.Misc.RFQ/Nop.Plugin.Misc.RFQ.csproj`
+- `src/Plugins/Nop.Plugin.Misc.WebApi.Frontend/Nop.Plugin.Misc.WebApi.Frontend.csproj`
+- `src/Plugins/Nop.Plugin.Misc.Zettle/Nop.Plugin.Misc.Zettle.csproj`
+- `src/Plugins/Nop.Plugin.MultiFactorAuth.GoogleAuthenticator/Nop.Plugin.MultiFactorAuth.GoogleAuthenticator.csproj`
+- `src/Plugins/Nop.Plugin.Payments.CheckMoneyOrder/Nop.Plugin.Payments.CheckMoneyOrder.csproj`
+- `src/Plugins/Nop.Plugin.Payments.Manual/Nop.Plugin.Payments.Manual.csproj`
+- `src/Plugins/Nop.Plugin.Payments.PayPalCommerce/Nop.Plugin.Payments.PayPalCommerce.csproj`
+- `src/Plugins/Nop.Plugin.Pickup.PickupInStore/Nop.Plugin.Pickup.PickupInStore.csproj`
+- `src/Plugins/Nop.Plugin.Search.Lucene/Nop.Plugin.Search.Lucene.csproj`
+- `src/Plugins/Nop.Plugin.Shipping.FixedByWeightByTotal/Nop.Plugin.Shipping.FixedByWeightByTotal.csproj`
+- `src/Plugins/Nop.Plugin.Shipping.UPS/Nop.Plugin.Shipping.UPS.csproj`
+- `src/Plugins/Nop.Plugin.Sms.Twilio/Nop.Plugin.Sms.Twilio.csproj`
+- `src/Plugins/Nop.Plugin.Tax.Avalara/Nop.Plugin.Tax.Avalara.csproj`
+- `src/Plugins/Nop.Plugin.Tax.FixedOrByCountryStateZip/Nop.Plugin.Tax.FixedOrByCountryStateZip.csproj`
+- `src/Plugins/Nop.Plugin.Widgets.FacebookPixel/Nop.Plugin.Widgets.FacebookPixel.csproj`
+- `src/Plugins/Nop.Plugin.Widgets.GoogleAnalytics/Nop.Plugin.Widgets.GoogleAnalytics.csproj`
+- `src/Plugins/Nop.Plugin.Widgets.Jotform/Nop.Plugin.Widgets.Jotform.csproj`
+- `src/Plugins/Nop.Plugin.Widgets.Swiper/Nop.Plugin.Widgets.Swiper.csproj`
+- `src/Presentation/Nop.Web.Framework/Nop.Web.Framework.csproj`
+- `src/Presentation/Nop.Web/Nop.Web.csproj`
+- `src/Presentation/Nop.Web/package.json`
+- `src/Tests/Nop.Tests/Nop.Tests.csproj`
+
+

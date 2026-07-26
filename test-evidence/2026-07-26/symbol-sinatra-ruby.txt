@@ -1,0 +1,60 @@
+# Declarations of 'Sinatra' (29)
+- **module** — `lib/sinatra/base.rb:28`  
+  `module Sinatra`
+- **module** — `lib/sinatra/indifferent_hash.rb:3`  
+  `module Sinatra`
+- **module** — `lib/sinatra/main.rb:3`  
+  `module Sinatra`
+- **module** — `lib/sinatra/middleware/logger.rb:5`  
+  `module Sinatra`
+- **module** — `lib/sinatra/show_exceptions.rb:5`  
+  `module Sinatra`
+- **module** — `lib/sinatra/version.rb:3`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/capture.rb:4`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/config_file.rb:5`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/content_for.rb:6`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/contrib.rb:5`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/contrib/setup.rb:6`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/contrib/version.rb:3`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/cookies.rb:5`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/custom_logger.rb:3`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/engine_tracking.rb:5`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/extension.rb:5`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/haml_helpers.rb:6`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/json.rb:5`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/link_header.rb:3`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/multi_route.rb:5`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/namespace.rb:6`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/quiet_logger.rb:3`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/reloader.rb:5`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/required_params.rb:5`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/respond_with.rb:6`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/runner.rb:7`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/streaming.rb:5`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/test_helpers.rb:12`  
+  `module Sinatra`
+- **module** — `sinatra-contrib/lib/sinatra/webdav.rb:5`  
+  `module Sinatra`
+

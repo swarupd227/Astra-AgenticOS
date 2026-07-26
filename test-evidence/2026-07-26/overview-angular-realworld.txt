@@ -1,0 +1,8 @@
+# Solution overview (1 projects)
+Source root: `C:\Users\swarupd\demo\AgenticOS\workspace\angular-realworld-0d932a`
+Indexed source files: 50
+
+## (root)
+- `package.json`
+
+

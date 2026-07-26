@@ -1,0 +1,8 @@
+# Solution overview (1 projects)
+Source root: `C:\Users\swarupd\demo\AgenticOS\workspace\slim-php-65d895`
+Indexed source files: 125
+
+## (root)
+- `composer.json`
+
+

@@ -456,12 +456,19 @@ async function connectMcp(project: Project) {
   console.error(`[mcp] connected to "${project.name}" (${project.sourceRoot}) — ${mcpTools.length} tools`);
   mcpReady = true;
 
-  // Warm the Roslyn index so the first real prompt is snappy.
+  // Warm the index so the first real prompt is snappy. This is also where a large
+  // repo pays its one-off parse cost — if it times out here the agent inherits the
+  // problem, so use the same generous budget as a real tool call and say so loudly.
   try {
-    await client.callTool({ name: "solution_overview", arguments: {} });
-    console.error("[mcp] index warmed.");
+    const t0 = Date.now();
+    await client.callTool({ name: "solution_overview", arguments: {} }, undefined, { timeout: MCP_TIMEOUT_MS });
+    console.error(`[mcp] index warmed in ${Math.round((Date.now() - t0) / 1000)}s.`);
   } catch (e) {
-    console.error("[mcp] warmup skipped:", (e as Error).message);
+    console.error(
+      `[mcp] WARMUP FAILED for "${project.name}": ${(e as Error).message}\n` +
+      `      The first tool call an agent makes will pay the indexing cost and may fail the same way. ` +
+      `Raise MCP_TIMEOUT_MS (currently ${MCP_TIMEOUT_MS}ms) if this is a very large repository.`
+    );
   }
 }
 
@@ -473,9 +480,15 @@ async function activateProject(id: string) {
   await connectMcp(p);
 }
 
+// The MCP SDK defaults to a 60s per-call timeout. That is fine for a warm index but
+// not for the FIRST call against a large repo, which pays for the whole parse —
+// nopCommerce (3,901 files) blew straight through it and the agent saw
+// "MCP error -32001: Request timed out" as its opening move.
+const MCP_TIMEOUT_MS = Number(process.env.MCP_TIMEOUT_MS ?? 10 * 60 * 1000);
+
 async function callMcpTool(name: string, args: Record<string, unknown>) {
   if (!mcp) throw new Error("No active project / MCP server not connected.");
-  const res: any = await mcp.callTool({ name, arguments: args });
+  const res: any = await mcp.callTool({ name, arguments: args }, undefined, { timeout: MCP_TIMEOUT_MS });
   const text = (res.content ?? [])
     .map((c: any) => (c.type === "text" ? c.text : JSON.stringify(c)))
     .join("\n");

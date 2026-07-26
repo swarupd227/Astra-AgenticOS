@@ -1,0 +1,8 @@
+# Solution overview (1 projects)
+Source root: `C:\Users\swarupd\demo\AgenticOS\workspace\react-realworld-1fd507`
+Indexed source files: 38
+
+## (root)
+- `package.json`
+
+

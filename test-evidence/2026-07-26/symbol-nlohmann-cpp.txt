@@ -1,0 +1,18 @@
+# Declarations of 'json_pointer' (8)
+- **function** — `include/nlohmann/detail/json_pointer.hpp:62`  
+  `explicit json_pointer(const string_t& s = "")`
+- **class** — `include/nlohmann/json_fwd.hpp:56`  
+  `class json_pointer;`
+- **class** — `single_include/nlohmann/json.hpp:3772`  
+  `class json_pointer;`
+- **function** — `single_include/nlohmann/json.hpp:15485`  
+  `explicit json_pointer(const string_t& s = "")`
+- **class** — `single_include/nlohmann/json_fwd.hpp:168`  
+  `class json_pointer;`
+- **class** — `tests/abi/include/nlohmann/json_v3_10_5.hpp:3331`  
+  `class json_pointer;`
+- **class** — `tests/abi/include/nlohmann/json_v3_10_5.hpp:12259`  
+  `class json_pointer`
+- **function** — `tests/abi/include/nlohmann/json_v3_10_5.hpp:12268`  
+  `explicit json_pointer(const std::string& s = "")`
+

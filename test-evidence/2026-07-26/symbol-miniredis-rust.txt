@@ -1,0 +1,4 @@
+# Declarations of 'Connection' (1)
+- **struct** — `src/connection.rs:21`  
+  `pub struct Connection {`
+

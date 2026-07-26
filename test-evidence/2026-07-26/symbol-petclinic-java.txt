@@ -1,0 +1,4 @@
+# Declarations of 'OwnerController' (1)
+- **class** — `src/main/java/org/springframework/samples/petclinic/owner/OwnerController.java:49`  
+  `class OwnerController {`
+

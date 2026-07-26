@@ -1,0 +1,6 @@
+# Declarations of 'ShoppingCartController' (2)
+- **class** — `src/Presentation/Nop.Web/Areas/Admin/Controllers/ShoppingCartController.cs:12`  
+  `ShoppingCartController`
+- **class** — `src/Presentation/Nop.Web/Controllers/ShoppingCartController.cs:46`  
+  `ShoppingCartController`
+

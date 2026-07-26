@@ -1,0 +1,8 @@
+# Solution overview (1 projects)
+Source root: `C:\Users\swarupd\demo\AgenticOS\workspace\miniredis-rust-397b20`
+Indexed source files: 26
+
+## (root)
+- `Cargo.toml`
+
+

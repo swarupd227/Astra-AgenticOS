@@ -1,0 +1,6 @@
+# Declarations of 'Path' (2)
+- **object** — `os/src/Path.scala:440`  
+  `object Path extends PathMacros {`
+- **class** — `os/src/Path.scala:700`  
+  `class Path private[os] (val wrapped: java.nio.file.Path)`
+

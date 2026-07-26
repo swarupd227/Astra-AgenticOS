@@ -1,0 +1,8 @@
+# Solution overview (1 projects)
+Source root: `C:\Users\swarupd\demo\AgenticOS\workspace\oslib-scala-a5eaae`
+Indexed source files: 65
+
+## (root)
+- `build.mill`
+
+

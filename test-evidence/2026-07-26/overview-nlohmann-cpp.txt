@@ -1,0 +1,56 @@
+# Solution overview (41 projects)
+Source root: `C:\Users\swarupd\demo\AgenticOS\workspace\nlohmann-cpp-f440e3`
+Indexed source files: 505
+
+## (root)
+- `CMakeLists.txt`
+
+## docs
+- `docs/mkdocs/docs/integration/cget/CMakeLists.txt`
+- `docs/mkdocs/docs/integration/conan/CMakeLists.txt`
+- `docs/mkdocs/docs/integration/cpm/CMakeLists.txt`
+- `docs/mkdocs/docs/integration/homebrew/CMakeLists.txt`
+- `docs/mkdocs/docs/integration/hunter/CMakeLists.txt`
+- `docs/mkdocs/docs/integration/macports/CMakeLists.txt`
+- `docs/mkdocs/docs/integration/spack/CMakeLists.txt`
+- `docs/mkdocs/docs/integration/vcpkg/CMakeLists.txt`
+- `docs/mkdocs/requirements.txt`
+
+## src
+- `src/modules/CMakeLists.txt`
+
+## tests
+- `tests/abi/CMakeLists.txt`
+- `tests/abi/config/CMakeLists.txt`
+- `tests/abi/diag/CMakeLists.txt`
+- `tests/abi/inline_ns/CMakeLists.txt`
+- `tests/benchmarks/CMakeLists.txt`
+- `tests/CMakeLists.txt`
+- `tests/cmake_add_subdirectory/CMakeLists.txt`
+- `tests/cmake_add_subdirectory/project/CMakeLists.txt`
+- `tests/cmake_fetch_content/CMakeLists.txt`
+- `tests/cmake_fetch_content/project/CMakeLists.txt`
+- `tests/cmake_fetch_content2/CMakeLists.txt`
+- `tests/cmake_fetch_content2/project/CMakeLists.txt`
+- `tests/cmake_import/CMakeLists.txt`
+- `tests/cmake_import/project/CMakeLists.txt`
+- `tests/cmake_import_minver/CMakeLists.txt`
+- `tests/cmake_import_minver/project/CMakeLists.txt`
+- `tests/cmake_target_include_directories/CMakeLists.txt`
+- `tests/cmake_target_include_directories/project/CMakeLists.txt`
+- `tests/cuda_example/CMakeLists.txt`
+- `tests/fmt_formatter/CMakeLists.txt`
+- `tests/fmt_formatter/project/CMakeLists.txt`
+- `tests/module_cpp20/CMakeLists.txt`
+- `tests/thirdparty/Fuzzer/CMakeLists.txt`
+- `tests/thirdparty/Fuzzer/test/CMakeLists.txt`
+- `tests/thirdparty/Fuzzer/test/no-coverage/CMakeLists.txt`
+- `tests/thirdparty/Fuzzer/test/ubsan/CMakeLists.txt`
+- `tests/thirdparty/Fuzzer/test/uninstrumented/CMakeLists.txt`
+
+## tools
+- `tools/astyle/requirements.txt`
+- `tools/generate_natvis/requirements.txt`
+- `tools/serve_header/requirements.txt`
+
+

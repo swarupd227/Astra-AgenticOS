@@ -1,0 +1,6 @@
+# Declarations of 'Flask' (2)
+- **class** — `src/flask/app.py:109`  
+  `class Flask(App):`
+- **class** — `tests/test_config.py:202`  
+  `class Flask(flask.Flask):`
+

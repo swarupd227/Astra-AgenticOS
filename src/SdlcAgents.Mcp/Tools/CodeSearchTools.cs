@@ -17,8 +17,36 @@ public static class CodeSearchTools
     public static string SolutionOverview(CodeIndex index)
     {
         var projects = index.Projects();
+
+        // A codebase whose build system we don't recognise is still a codebase. Reporting
+        // only "no projects found" made agents conclude the repo was empty when in fact
+        // every symbol had been indexed — so fall back to the indexed source itself.
         if (projects.Count == 0)
-            return $"No projects found under source root: {index.Root}";
+        {
+            if (index.Files.Count == 0)
+                return $"No source files found under: {index.Root}. Check the sub-folder setting, or whether the repo really contains code.";
+
+            var byFolder = index.Files
+                .Select(f => f.RelativePath.Contains('/') ? f.RelativePath.Split('/')[0] : "(root)")
+                .GroupBy(x => x)
+                .OrderByDescending(g => g.Count())
+                .Take(25)
+                .ToList();
+
+            var fb = new StringBuilder();
+            fb.AppendLine("# Solution overview (no recognised build manifest)");
+            fb.AppendLine($"Source root: `{index.Root}`");
+            fb.AppendLine($"Indexed source files: {index.Files.Count}");
+            fb.AppendLine();
+            fb.AppendLine("No file this tool recognises as a project/build manifest was found, so the module");
+            fb.AppendLine("list below is derived from the indexed source layout instead. The code IS indexed —");
+            fb.AppendLine("`find_symbol`, `search_code` and `read_file` all work normally. Do not report this");
+            fb.AppendLine("codebase as empty.");
+            fb.AppendLine();
+            fb.AppendLine("## Top-level folders by indexed file count");
+            foreach (var g in byFolder) fb.AppendLine($"- `{g.Key}/` — {g.Count()} file(s)");
+            return fb.ToString();
+        }
 
         var groups = projects
             .GroupBy(p => p.Contains('/') ? p.Split('/')[0] : "(root)")

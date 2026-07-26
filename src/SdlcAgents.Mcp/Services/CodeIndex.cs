@@ -241,9 +241,14 @@ public sealed class CodeIndex
     // Manifest/project files across ecosystems: .NET, Java (Maven/Gradle), Node (npm/Angular),
     // Python, Go, PHP, Ruby, Rust, Scala, C/C++.
     private static readonly string[] ProjectManifests =
-        { "*.csproj", "pom.xml", "build.gradle", "build.gradle.kts", "package.json",
+        { "*.csproj", "*.vbproj", "*.fsproj", "pom.xml", "build.gradle", "build.gradle.kts", "package.json",
           "pyproject.toml", "setup.py", "requirements.txt", "go.mod", "composer.json",
-          "Gemfile", "Cargo.toml", "build.sbt", "CMakeLists.txt" };
+          "Gemfile", "Cargo.toml", "build.sbt", "CMakeLists.txt",
+          // Autotools — still the dominant build system for established C projects
+          // (jq, curl, git, openssl). Without these a whole C repo looked empty.
+          "configure.ac", "configure.in", "Makefile.am",
+          // Mill (Scala), Meson, Bazel, and plain make
+          "build.mill", "build.sc", "meson.build", "BUILD.bazel", "Makefile" };
 
     public IReadOnlyList<string> Projects()
     {

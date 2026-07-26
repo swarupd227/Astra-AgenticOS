@@ -1,0 +1,8 @@
+"case","project","agent","expected","goldenRead","cited","blocked","verdict","note"
+"C1","petclinic-java","code-reviewer","GLD-STD-001","GLD-STD-001","GLD-STD-001@v","no","PASS","opened the expected item"
+"C2","flask-python","config-secrets-auditor","GLD-STD-001","GLD-STD-001","GLD-STD-001@v","no","PASS","opened the expected item"
+"C3","gin-go","architecture-adr","GLD-TPL-003","GLD-TPL-003,GLD-STD-001","GLD-TPL-003@v","no","PASS","opened the expected item"
+"C4","angular-realworld","frontend-architecture","GLD-CHK-001","GLD-STD-001,GLD-CHK-001","GLD-STD-001@v","no","PASS","opened the expected item"
+"C5","slim-php","reliability-auditor","GLD-SKL-001","GLD-SKL-001,GLD-STD-001","GLD-SKL-001@v","no","PASS","opened the expected item"
+"C6","petclinic-java","requirements-brd","GLD-GLO-001","GLD-GLO-001","GLD-GLO-001@v","no","PASS","opened the expected item"
+"C7","miniredis-rust","dependency-health","(none)","GLD-STD-001","GLD-STD-001@v","no","REVIEW","opened/cited: GLD-STD-001 GLD-STD-001@v"

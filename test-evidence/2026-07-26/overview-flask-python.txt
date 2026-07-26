@@ -1,0 +1,14 @@
+# Solution overview (5 projects)
+Source root: `C:\Users\swarupd\demo\AgenticOS\workspace\flask-python-776920`
+Indexed source files: 84
+
+## (root)
+- `pyproject.toml`
+
+## examples
+- `examples/celery/pyproject.toml`
+- `examples/celery/requirements.txt`
+- `examples/javascript/pyproject.toml`
+- `examples/tutorial/pyproject.toml`
+
+

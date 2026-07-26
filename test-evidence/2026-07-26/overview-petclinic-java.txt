@@ -1,0 +1,9 @@
+# Solution overview (2 projects)
+Source root: `C:\Users\swarupd\demo\AgenticOS\workspace\petclinic-java-e2c5b2`
+Indexed source files: 49
+
+## (root)
+- `build.gradle`
+- `pom.xml`
+
+

@@ -1,0 +1,4 @@
+# Declarations of 'App' (1)
+- **class** — `Slim/App.php:39`  
+  `class App extends RouteCollectorProxy implements RequestHandlerInterface`
+

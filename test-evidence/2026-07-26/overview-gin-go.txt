@@ -1,0 +1,8 @@
+# Solution overview (1 projects)
+Source root: `C:\Users\swarupd\demo\AgenticOS\workspace\gin-go-37ab71`
+Indexed source files: 99
+
+## (root)
+- `go.mod`
+
+

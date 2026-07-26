@@ -1,0 +1,12 @@
+"project","language","repo","added","indexed","overview","issue"
+"petclinic-java","Java / Spring Boot","https://github.com/spring-projects/spring-petclinic","ok (4s)","ok","# Solution overview (2 projects) | Indexed source files: 49",""
+"flask-python","Python","https://github.com/pallets/flask","ok (4s)","ok","# Solution overview (5 projects) | Indexed source files: 84 | - `pyproject.toml` | - `examples/celery/pyproject.toml` | - `examples/javascript/pyproject.toml` | - `examples/tutorial/pyproject.toml`",""
+"angular-realworld","TypeScript / Angular","https://github.com/gothinkster/angular-realworld-example-app","ok (3s)","ok","# Solution overview (1 projects) | Indexed source files: 50",""
+"react-realworld","JavaScript / React","https://github.com/gothinkster/react-redux-realworld-example-app","ok (3s)","ok","# Solution overview (1 projects) | Indexed source files: 38",""
+"gin-go","Go","https://github.com/gin-gonic/gin","ok (3s)","ok","# Solution overview (1 projects) | Indexed source files: 99",""
+"sinatra-ruby","Ruby","https://github.com/sinatra/sinatra","ok (5s)","ok","# Solution overview (3 projects) | Indexed source files: 147 | - `Gemfile` | - `rack-protection/Gemfile` | - `sinatra-contrib/Gemfile`",""
+"slim-php","PHP","https://github.com/slimphp/Slim","ok (3s)","ok","# Solution overview (1 projects) | Indexed source files: 125",""
+"miniredis-rust","Rust","https://github.com/tokio-rs/mini-redis","ok (3s)","ok","# Solution overview (1 projects) | Indexed source files: 26",""
+"jq-c","C","https://github.com/jqlang/jq","ok (4s)","ok","No projects found under source root: C:\Users\swarupd\demo\AgenticOS\workspace\jq-c-80ee25",""
+"nlohmann-cpp","C++","https://github.com/nlohmann/json","ok (10s)","ok","# Solution overview (41 projects) | Indexed source files: 505 | - `src/modules/CMakeLists.txt` | - `tests/cmake_add_subdirectory/project/CMakeLists.txt` | - `tests/cmake_fetch_content/project/CMakeLists.txt` | - `tests/cmake_fetch_content2/project/CMakeLists.txt`",""
+"oslib-scala","Scala","https://github.com/com-lihaoyi/os-lib","ok (4s)","ok","No projects found under source root: C:\Users\swarupd\demo\AgenticOS\workspace\oslib-scala-a5eaae",""

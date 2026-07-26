@@ -1,0 +1,4 @@
+# Declarations of 'ArticleList' (1)
+- **function** — `src/components/ArticleList.js:5`  
+  `const ArticleList = props => {`
+

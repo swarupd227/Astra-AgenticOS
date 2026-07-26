@@ -1,0 +1,14 @@
+# Solution overview (3 projects)
+Source root: `C:\Users\swarupd\demo\AgenticOS\workspace\sinatra-ruby-3d1f49`
+Indexed source files: 147
+
+## (root)
+- `Gemfile`
+
+## rack-protection
+- `rack-protection/Gemfile`
+
+## sinatra-contrib
+- `sinatra-contrib/Gemfile`
+
+

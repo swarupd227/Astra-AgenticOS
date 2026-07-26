@@ -1,0 +1,4 @@
+# Declarations of 'RouterGroup' (1)
+- **type** — `routergroup.go:55`  
+  `type RouterGroup struct {`
+

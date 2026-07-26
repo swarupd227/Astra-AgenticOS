@@ -1,0 +1,4 @@
+# Declarations of 'jv_parse' (1)
+- **function** — `src/jv_parse.c:913`  
+  `jv jv_parse(const char* string) {`
+

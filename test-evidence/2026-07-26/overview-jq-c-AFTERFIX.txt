@@ -1,0 +1,9 @@
+# Solution overview (2 projects)
+Source root: `C:\Users\swarupd\demo\AgenticOS\workspace\jq-c-80ee25`
+Indexed source files: 57
+
+## (root)
+- `configure.ac`
+- `Makefile.am`
+
+
