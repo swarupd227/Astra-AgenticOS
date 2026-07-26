@@ -115,7 +115,9 @@ async function boot() {
   setTheme(saved);
   $("#grounding-chip").innerHTML = icon("database", 14) + " Grounded in this codebase";
 
+  $("#golden-btn").innerHTML = icon("book", 18);
   initProjectUI();
+  initGoldenUI();
   initArtifactsUI();
   initSettingsUI();
   $("#new-chat").onclick = newConversation;
@@ -146,9 +148,9 @@ function initProjectUI() {
   $("#np-cancel").onclick = closeModal;
   $("#modal-backdrop").onclick = (e) => { if (e.target === $("#modal-backdrop")) closeModal(); };
   $("#np-create").onclick = submitNewProject;
-  document.querySelectorAll(".seg-btn").forEach((b) =>
+  document.querySelectorAll("#type-seg .seg-btn").forEach((b) =>
     (b.onclick = () => {
-      document.querySelectorAll(".seg-btn").forEach((x) => x.classList.toggle("active", x === b));
+      document.querySelectorAll("#type-seg .seg-btn").forEach((x) => x.classList.toggle("active", x === b));
       showTab(b.dataset.type);
     })
   );
@@ -313,8 +315,10 @@ function openModal(type) {
   applyHostHints();
   // Hosted users cannot reach the server's disk, so upload is the sensible default.
   if (!type) type = hostInfo && hostInfo.cloud ? "upload" : "local";
-  document.querySelectorAll(".seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.type === type));
+  document.querySelectorAll("#type-seg .seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.type === type));
   showTab(type);
+  // Offer the Golden Repository selection at creation time (hidden if the library is empty).
+  loadGolden().then(renderNpGolden).catch(() => {});
   $("#modal-backdrop").hidden = false;
   $("#np-name").focus();
 }
@@ -324,11 +328,11 @@ function closeModal() { $("#modal-backdrop").hidden = true; }
 function reopenModal() { $("#modal-backdrop").hidden = false; }
 
 async function submitNewProject() {
-  const type = document.querySelector(".seg-btn.active").dataset.type;
+  const type = document.querySelector("#type-seg .seg-btn.active").dataset.type;
   const name = $("#np-name").value.trim();
   const sub = $("#np-sub").value.trim();
   const errEl = $("#np-error");
-  const body = { name, type, subPath: sub || undefined };
+  const body = { name, type, subPath: sub || undefined, golden: npGoldenSelection() };
   if (!name) return showModalErr("Please give the project a name.");
   if (type === "local") { body.path = $("#np-path").value.trim(); if (!body.path) return showModalErr("Enter a folder path."); }
   else if (type === "upload") { if (!uploadFile) return showModalErr("Choose a .zip file to upload."); }
@@ -353,6 +357,15 @@ async function submitNewProject() {
       hideUploadProgress();
       showBusy("Indexing…", "Reading the uploaded codebase.");
       if (!r.ok) throw new Error(r.error || "Upload failed");
+      // The upload endpoint takes query params, so apply the knowledge selection after.
+      if (body.golden?.mode === "subset" && r.project?.id) {
+        try {
+          await fetch(`/api/projects/${r.project.id}/golden`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body.golden),
+          });
+        } catch { /* project exists; selection can be fixed in the Golden drawer */ }
+      }
       await afterProjectChange();
       return;
     }
@@ -727,6 +740,260 @@ function renderArtifactsList() {
     </div>`).join("");
   list.querySelectorAll(".art-row").forEach((r) => (r.onclick = () => openViewer(r.dataset.path)));
 }
+// ---------- Golden Repository (org standards / templates / skills) ----------
+let goldenItems = [];        // the library
+let goldenSel = null;        // active project's selection + counts
+let editingId = null;        // null = creating
+
+function initGoldenUI() {
+  $("#golden-btn").onclick = openGolden;
+  $("#golden-close").onclick = () => ($("#golden-backdrop").hidden = true);
+  $("#golden-backdrop").onclick = (e) => { if (e.target === $("#golden-backdrop")) $("#golden-backdrop").hidden = true; };
+  $("#golden-add").onclick = () => openGoldenEditor(null);
+
+  document.querySelectorAll(".gt-btn").forEach((b) => (b.onclick = () => {
+    document.querySelectorAll(".gt-btn").forEach((x) => x.classList.toggle("active", x === b));
+    const sel = b.dataset.tab === "selection";
+    $("#golden-list").hidden = sel;
+    $("#golden-selection").hidden = !sel;
+    if (sel) renderGoldenSelection();
+  }));
+
+  $("#gold-edit-close").onclick = closeGoldenEditor;
+  $("#gi-cancel").onclick = closeGoldenEditor;
+  $("#gold-edit-backdrop").onclick = (e) => { if (e.target === $("#gold-edit-backdrop")) closeGoldenEditor(); };
+  $("#gi-save").onclick = saveGoldenItem;
+  $("#gi-file").onchange = async () => {
+    const f = $("#gi-file").files[0];
+    if (!f) return;
+    $("#gi-content").value = await f.text();
+    if (!$("#gi-title").value.trim()) $("#gi-title").value = f.name.replace(/\.[^.]+$/, "");
+  };
+  // publishing a mandatory item needs an approver — make that visible, not a surprise
+  const syncApprover = () => {
+    const need = $("#gi-enf").value === "mandatory" && $("#gi-status").value === "published";
+    $("#gi-approver-field").style.opacity = need ? "1" : ".6";
+    $("#gi-approver").placeholder = need ? "Required to publish a mandatory item" : "e.g. J. Weber (Chief Architect)";
+  };
+  $("#gi-enf").onchange = syncApprover;
+  $("#gi-status").onchange = syncApprover;
+
+  // New-project knowledge picker
+  document.querySelectorAll("#np-gold-seg .seg-btn").forEach((b) => (b.onclick = () => {
+    document.querySelectorAll("#np-gold-seg .seg-btn").forEach((x) => x.classList.toggle("active", x === b));
+    $("#np-gold-pick").hidden = b.dataset.gold !== "subset";
+    updateNpGoldHint();
+  }));
+}
+
+async function loadGolden() {
+  try {
+    const d = await (await fetch("/api/golden")).json();
+    goldenItems = d.items || [];
+  } catch { goldenItems = []; }
+  try { goldenSel = await (await fetch("/api/golden-selection")).json(); } catch { goldenSel = null; }
+}
+
+async function openGolden() {
+  await loadGolden();
+  renderGoldenLibrary();
+  renderGoldenSelection();
+  $("#golden-backdrop").hidden = false;
+}
+
+function goldenChips(i) {
+  const chips = [`<span class="chip kind">${esc(i.kind)}</span>`];
+  if (i.enforcement === "mandatory") chips.push(`<span class="chip mandatory">mandatory</span>`);
+  if (i.status !== "published") chips.push(`<span class="chip ${esc(i.status)}">${esc(i.status)}</span>`);
+  return chips.join(" ");
+}
+
+function renderGoldenLibrary() {
+  const list = $("#golden-list");
+  if (!goldenItems.length) {
+    list.innerHTML = `<div class="drawer-empty">The library is empty.<br/>Add your coding standards, BRD/ADR templates, functional specs or team playbooks —
+      agents will cite them instead of guessing.</div>`;
+    return;
+  }
+  list.innerHTML = goldenItems.map((i) => `
+    <div class="gold-row">
+      <span class="gr-ico">${icon(i.kind === "template" ? "file-text" : i.kind === "skill" ? "workflow" : "book", 15)}</span>
+      <div>
+        <span class="gr-name">${esc(i.title)}</span>
+        <div class="gr-desc">${esc(i.description)}</div>
+        <div class="gr-meta">
+          <span class="gr-id">${esc(i.id)}@${i.version}</span> ${goldenChips(i)}
+          <span>· ${esc(i.owner)}</span>
+          ${i.tags.length ? `<span>· ${i.tags.map(esc).join(", ")}</span>` : ""}
+        </div>
+      </div>
+      <div class="gr-actions">
+        <button class="btn ghost sm" data-edit="${esc(i.id)}">Edit</button>
+        ${i.status !== "archived" ? `<button class="btn ghost sm" data-arch="${esc(i.id)}">Archive</button>` : ""}
+      </div>
+    </div>`).join("");
+  list.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => openGoldenEditor(b.dataset.edit)));
+  list.querySelectorAll("[data-arch]").forEach((b) => (b.onclick = () => archiveGoldenItem(b.dataset.arch)));
+}
+
+function renderGoldenSelection() {
+  const box = $("#golden-selection");
+  const live = goldenItems.filter((i) => i.status !== "archived");
+  if (!live.length) { box.innerHTML = `<div class="drawer-empty">Nothing in the library to select yet.</div>`; return; }
+  if (!goldenSel) { box.innerHTML = `<div class="drawer-empty">No active project.</div>`; return; }
+
+  const all = goldenSel.selection?.mode !== "subset";
+  const chosen = new Set(goldenSel.selection?.itemIds || []);
+  const over = goldenSel.overCap;
+  box.innerHTML = `
+    <div class="set-hint" style="margin-bottom:8px">
+      What <b>${esc(activeProjectName())}</b>'s agents can see. ${goldenSel.selectedCount} selected${
+        goldenSel.mandatoryCount ? ` · <b>${goldenSel.mandatoryCount} mandatory</b>` : ""}.
+      ${over ? `<span style="color:var(--amber-c)">⚠ Over the ${goldenSel.catalogCap}-item catalog cap — narrow the selection so nothing relevant is hidden.</span>` : ""}
+    </div>
+    <div class="seg sm" id="gs-seg" style="margin-bottom:8px">
+      <button type="button" class="seg-btn ${all ? "active" : ""}" data-gs="all">Everything</button>
+      <button type="button" class="seg-btn ${all ? "" : "active"}" data-gs="subset">Selected</button>
+    </div>
+    <div class="gold-pick" id="gs-pick" ${all ? "hidden" : ""}>
+      ${live.map((i) => `
+        <label class="gp-item">
+          <input type="checkbox" value="${esc(i.id)}" ${chosen.has(i.id) ? "checked" : ""} />
+          <span><span class="gp-title">${esc(i.title)}</span>
+          <span class="gp-sub"> — ${esc(i.id)} · ${esc(i.kind)}${i.enforcement === "mandatory" ? " · mandatory" : ""}</span></span>
+        </label>`).join("")}
+    </div>
+    <button class="btn primary" id="gs-save" style="margin-top:10px">Save knowledge selection</button>`;
+
+  box.querySelectorAll("#gs-seg .seg-btn").forEach((b) => (b.onclick = () => {
+    box.querySelectorAll("#gs-seg .seg-btn").forEach((x) => x.classList.toggle("active", x === b));
+    $("#gs-pick").hidden = b.dataset.gs !== "subset";
+  }));
+  $("#gs-save").onclick = saveGoldenSelection;
+}
+
+function activeProjectName() {
+  const p = projects.find((x) => x.id === activeProjectId);
+  return p ? p.name : "this project";
+}
+
+async function saveGoldenSelection() {
+  const btn = $("#gs-save");
+  const mode = document.querySelector("#gs-seg .seg-btn.active")?.dataset.gs === "subset" ? "subset" : "all";
+  const itemIds = [...document.querySelectorAll("#gs-pick input:checked")].map((c) => c.value);
+  btn.disabled = true; btn.textContent = "Saving…";
+  try {
+    const r = await (await fetch(`/api/projects/${activeProjectId}/golden`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode, itemIds }),
+    })).json();
+    if (!r.ok) throw new Error(r.error || "Could not save");
+    await loadGolden();
+    renderGoldenSelection();
+  } catch (e) {
+    btn.textContent = "Save failed — retry";
+  } finally { btn.disabled = false; }
+}
+
+function openGoldenEditor(id) {
+  editingId = id;
+  const i = id ? goldenItems.find((x) => x.id === id) : null;
+  $("#gold-edit-title").textContent = i ? `Edit ${i.id}` : "Add golden item";
+  $("#gi-title").value = i?.title || "";
+  $("#gi-desc").value = i?.description || "";
+  $("#gi-kind").value = i?.kind || "standard";
+  $("#gi-enf").value = i?.enforcement || "reference";
+  $("#gi-status").value = i?.status === "archived" ? "draft" : (i?.status || "draft");
+  $("#gi-owner").value = i?.owner || "";
+  $("#gi-approver").value = i?.approvedBy || "";
+  $("#gi-tags").value = (i?.tags || []).join(", ");
+  $("#gi-applies").value = (i?.appliesTo || ["all"]).join(", ");
+  $("#gi-content").value = "";
+  $("#gi-file").value = "";
+  $("#gi-error").hidden = true;
+  $("#gi-enf").onchange();
+  $("#gold-edit-backdrop").hidden = false;
+  if (id) {
+    fetch(`/api/golden/${encodeURIComponent(id)}`).then((r) => r.json()).then((d) => {
+      if (d.ok) $("#gi-content").value = d.content || "";
+    }).catch(() => {});
+  }
+  $("#gi-title").focus();
+}
+function closeGoldenEditor() { $("#gold-edit-backdrop").hidden = true; editingId = null; }
+
+async function saveGoldenItem() {
+  const err = $("#gi-error");
+  const split = (s) => s.split(",").map((x) => x.trim()).filter(Boolean);
+  const body = {
+    title: $("#gi-title").value.trim(),
+    description: $("#gi-desc").value.trim(),
+    kind: $("#gi-kind").value,
+    enforcement: $("#gi-enf").value,
+    status: $("#gi-status").value,
+    owner: $("#gi-owner").value.trim() || "unassigned",
+    approvedBy: $("#gi-approver").value.trim() || undefined,
+    tags: split($("#gi-tags").value),
+    appliesTo: split($("#gi-applies").value).length ? split($("#gi-applies").value) : ["all"],
+    content: $("#gi-content").value,
+  };
+  if (!body.title) { err.textContent = "Give the item a title."; err.hidden = false; return; }
+  if (!body.content.trim()) { err.textContent = "Add some content (or load a file)."; err.hidden = false; return; }
+
+  $("#gi-save").disabled = true;
+  try {
+    const url = editingId ? `/api/golden/${encodeURIComponent(editingId)}` : "/api/golden";
+    const r = await (await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    })).json();
+    if (!r.ok) throw new Error(r.error || "Could not save");
+    closeGoldenEditor();
+    await loadGolden();
+    renderGoldenLibrary();
+    renderGoldenSelection();
+  } catch (e) {
+    err.textContent = e.message; err.hidden = false;
+  } finally { $("#gi-save").disabled = false; }
+}
+
+async function archiveGoldenItem(id) {
+  try {
+    await fetch(`/api/golden/${encodeURIComponent(id)}/archive`, { method: "POST" });
+    await loadGolden();
+    renderGoldenLibrary();
+    renderGoldenSelection();
+  } catch {}
+}
+
+// --- knowledge picker inside the New project modal ---
+function renderNpGolden() {
+  const live = goldenItems.filter((i) => i.status !== "archived");
+  const wrap = $("#np-knowledge");
+  if (!live.length) { wrap.hidden = true; return; }   // nothing in the library — don't clutter the form
+  wrap.hidden = false;
+  $("#np-gold-pick").innerHTML = live.map((i) => `
+    <label class="gp-item">
+      <input type="checkbox" value="${esc(i.id)}" />
+      <span><span class="gp-title">${esc(i.title)}</span>
+      <span class="gp-sub"> — ${esc(i.id)} · ${esc(i.kind)}${i.enforcement === "mandatory" ? " · mandatory" : ""}</span></span>
+    </label>`).join("");
+  $("#np-gold-pick").querySelectorAll("input").forEach((c) => (c.onchange = updateNpGoldHint));
+  document.querySelectorAll("#np-gold-seg .seg-btn").forEach((x, idx) => x.classList.toggle("active", idx === 0));
+  $("#np-gold-pick").hidden = true;
+  updateNpGoldHint();
+}
+function updateNpGoldHint() {
+  const live = goldenItems.filter((i) => i.status !== "archived");
+  const subset = document.querySelector("#np-gold-seg .seg-btn.active")?.dataset.gold === "subset";
+  const n = subset ? document.querySelectorAll("#np-gold-pick input:checked").length : live.length;
+  $("#np-gold-hint").textContent = `${n} item(s) will be available to this project's agents.`;
+}
+function npGoldenSelection() {
+  const subset = document.querySelector("#np-gold-seg .seg-btn.active")?.dataset.gold === "subset";
+  if (!subset) return { mode: "all" };
+  return { mode: "subset", itemIds: [...document.querySelectorAll("#np-gold-pick input:checked")].map((c) => c.value) };
+}
+
 const VLANGS = { cs: "csharp", json: "json", xml: "xml", ts: "typescript", js: "javascript", sql: "sql", yml: "yaml", yaml: "yaml", sh: "bash" };
 async function openViewer(p) {
   $("#viewer-title").textContent = p;

@@ -29,6 +29,7 @@
         <div class="project-menu" id="project-menu" hidden></div>
       </div>
       <div class="status-pill" id="status"><span class="dot"></span><span id="status-text">connecting…</span></div>
+      <button class="icon-btn" id="golden-btn" aria-label="Golden Repository" title="Golden Repository — org standards, templates & docs"></button>
       <button class="icon-btn" id="artifacts-btn" aria-label="Artifacts" title="Artifacts">
         <span class="badge" id="artifacts-count" hidden>0</span>
       </button>
@@ -122,6 +123,16 @@
           <input id="np-sub" type="text" placeholder="src" />
         </label>
 
+        <div class="field" id="np-knowledge" hidden>
+          <span class="field-label">Knowledge <span class="opt">(Golden Repository)</span></span>
+          <div class="seg sm" id="np-gold-seg">
+            <button type="button" class="seg-btn active" data-gold="all">Everything</button>
+            <button type="button" class="seg-btn" data-gold="subset">Selected</button>
+          </div>
+          <div class="gold-pick" id="np-gold-pick" hidden></div>
+          <div class="set-hint" id="np-gold-hint"></div>
+        </div>
+
         <div class="modal-error" id="np-error" hidden></div>
       </div>
       <div class="modal-foot">
@@ -176,6 +187,110 @@
       </div>
       <div class="drawer-list" id="artifacts-list"></div>
     </aside>
+  </div>
+
+  <!-- Golden Repository drawer (admin) -->
+  <div class="drawer-backdrop" id="golden-backdrop" hidden>
+    <aside class="drawer wide" id="golden-drawer" role="dialog" aria-label="Golden Repository">
+      <div class="drawer-head">
+        <div>
+          <div class="drawer-title">Golden Repository</div>
+          <div class="drawer-sub" id="golden-sub">Your organisation's standards, templates and documentation</div>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center">
+          <button class="btn primary sm" id="golden-add">+ Add item</button>
+          <button class="icon-btn sm" id="golden-close" aria-label="Close"></button>
+        </div>
+      </div>
+      <div class="golden-tabs">
+        <button class="gt-btn active" data-tab="library">Library</button>
+        <button class="gt-btn" data-tab="selection">This project's knowledge</button>
+      </div>
+      <div class="drawer-list" id="golden-list"></div>
+      <div class="drawer-list" id="golden-selection" hidden></div>
+    </aside>
+  </div>
+
+  <!-- Golden item editor -->
+  <div class="modal-backdrop" id="gold-edit-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Golden item">
+      <div class="modal-head">
+        <div class="modal-title" id="gold-edit-title">Add golden item</div>
+        <button class="icon-btn sm" id="gold-edit-close" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <label class="field">
+          <span class="field-label">Title</span>
+          <input id="gi-title" type="text" placeholder="e.g. Bank .NET Coding Standards" />
+        </label>
+        <label class="field">
+          <span class="field-label">One-line description <span class="opt">(what agents see in their catalog)</span></span>
+          <input id="gi-desc" type="text" placeholder="Mandatory naming, logging and error-handling rules." />
+        </label>
+        <div class="gi-row">
+          <label class="field">
+            <span class="field-label">Kind</span>
+            <select id="gi-kind">
+              <option value="standard">Standard</option>
+              <option value="template">Template</option>
+              <option value="functional-spec">Functional spec</option>
+              <option value="checklist">Checklist</option>
+              <option value="glossary">Glossary</option>
+              <option value="reference">Reference</option>
+              <option value="skill">Skill</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Enforcement</span>
+            <select id="gi-enf">
+              <option value="reference">Reference</option>
+              <option value="recommended">Recommended</option>
+              <option value="mandatory">Mandatory</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Status</span>
+            <select id="gi-status">
+              <option value="draft">Draft</option>
+              <option value="published">Published</option>
+            </select>
+          </label>
+        </div>
+        <div class="gi-row">
+          <label class="field">
+            <span class="field-label">Owner</span>
+            <input id="gi-owner" type="text" placeholder="e.g. Architecture Guild" />
+          </label>
+          <label class="field" id="gi-approver-field">
+            <span class="field-label">Approved by <span class="opt">(required to publish a mandatory item)</span></span>
+            <input id="gi-approver" type="text" placeholder="e.g. J. Weber (Chief Architect)" />
+          </label>
+        </div>
+        <div class="gi-row">
+          <label class="field">
+            <span class="field-label">Tags <span class="opt">(comma separated)</span></span>
+            <input id="gi-tags" type="text" placeholder="payments, dotnet" />
+          </label>
+          <label class="field">
+            <span class="field-label">Applies to <span class="opt">(agent ids, or "all")</span></span>
+            <input id="gi-applies" type="text" placeholder="all" />
+          </label>
+        </div>
+        <label class="field">
+          <span class="field-label">Content <span class="opt">(markdown — keep clause numbering so agents can cite it)</span></span>
+          <textarea id="gi-content" rows="10" placeholder="# Coding Standards&#10;&#10;## 5.1 Logging&#10;5.1.1 Never log PII or full card numbers."></textarea>
+        </label>
+        <div class="set-hint">
+          Or load a file:
+          <input type="file" id="gi-file" accept=".md,.txt,.markdown,.json,.yml,.yaml,.csv" />
+        </div>
+        <div class="modal-error" id="gi-error" hidden></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost" id="gi-cancel">Cancel</button>
+        <button class="btn primary" id="gi-save">Save</button>
+      </div>
+    </div>
   </div>
 
   <!-- Artifact viewer -->
