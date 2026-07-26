@@ -128,6 +128,10 @@ must outlive the container onto it:
 | `ARTIFACTS_DIR` | generated BRDs, ADRs, test plans, reviews | every deliverable the agents produced |
 | `WORKSPACE_DIR` | checkouts of git-backed projects | cloned repos — projects grey out as *unavailable* and need re-adding |
 
+The Golden Repository (your standards, templates and skills) lives in `$STATE_DIR/golden`, so setting
+`STATE_DIR` covers it. Point `GOLDEN_DIR` somewhere else only if you want it on a separate share —
+and if you do, make sure that path is under `/home` too, or the library is gone on the next restart.
+
 All three default to paths inside the image, so **omitting them is the same as running stateless.**
 Already deployed without them? Apply the settings to a running app (this restarts it — existing
 in-container artifacts and history are lost, projects need re-adding once):
