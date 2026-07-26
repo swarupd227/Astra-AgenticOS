@@ -12,11 +12,15 @@
     "@anthropic-ai/sdk": "^0.104.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "express": "^4.21.2",
-    "gray-matter": "^4.0.3"
+    "gray-matter": "^4.0.3",
+    "mammoth": "^1.12.0",
+    "turndown": "^7.2.4",
+    "unpdf": "^1.8.0"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.10.0",
+    "@types/turndown": "^5.0.6",
     "playwright": "^1.61.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.0"

@@ -766,8 +766,44 @@ function initGoldenUI() {
   $("#gi-file").onchange = async () => {
     const f = $("#gi-file").files[0];
     if (!f) return;
-    $("#gi-content").value = await f.text();
-    if (!$("#gi-title").value.trim()) $("#gi-title").value = f.name.replace(/\.[^.]+$/, "");
+    const note = $("#gi-convert-note");
+    const binary = /\.(docx|pdf|doc)$/i.test(f.name);
+
+    if (!binary) {                                   // plain text / markdown — read it here
+      $("#gi-content").value = await f.text();
+      if (!$("#gi-title").value.trim()) $("#gi-title").value = f.name.replace(/\.[^.]+$/, "");
+      note.hidden = true;
+      return;
+    }
+
+    // Word and PDF have to be converted on the server; show progress because a
+    // long policy document takes a moment and a silent pause reads as a failure.
+    note.hidden = false;
+    note.className = "convert-note working";
+    note.textContent = `Converting ${f.name}…`;
+    try {
+      const r = await (await fetch(`/api/golden/convert?filename=${encodeURIComponent(f.name)}`, {
+        method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: f,
+      })).json();
+      if (!r.ok) throw new Error(r.error || "Could not convert that file.");
+
+      $("#gi-content").value = r.markdown;
+      if (!$("#gi-title").value.trim()) $("#gi-title").value = r.suggestedTitle || f.name.replace(/\.[^.]+$/, "");
+
+      const security = (r.warnings || []).filter((w) => w.startsWith("SECURITY"));
+      const normal   = (r.warnings || []).filter((w) => !w.startsWith("SECURITY"));
+      note.className = "convert-note " + (security.length ? "danger" : normal.length ? "warn" : "ok");
+      note.innerHTML =
+        `<b>Converted ${esc(r.kind.toUpperCase())} — ${r.stats.chars.toLocaleString()} characters, ` +
+        `${r.stats.headings} heading${r.stats.headings === 1 ? "" : "s"}` +
+        `${r.stats.pages ? `, ${r.stats.pages} pages` : ""}.</b> ` +
+        `Check the text below before saving — this becomes what agents read as your standard.` +
+        (security.length ? `<ul class="cn-list danger">${security.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : "") +
+        (normal.length ? `<ul class="cn-list">${normal.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : "");
+    } catch (e) {
+      note.className = "convert-note danger";
+      note.textContent = e.message;
+    }
   };
   // publishing a mandatory item needs an approver — make that visible, not a surprise
   const syncApprover = () => {

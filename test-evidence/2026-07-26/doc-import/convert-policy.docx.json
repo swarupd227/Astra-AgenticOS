@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "kind": "docx",
+  "markdown": "# Data Handling and Retention Standard\n\nVersion 4.2 — approved by the Data Protection Board, March 2026.\n\n## 1. Purpose\n\n1.1 This standard defines how customer and transaction data is classified, stored and destroyed.\n\n1.2 It applies to every system that processes customer data, including third-party processors.\n\n## 2. Classification\n\n2.1 Every data store must declare a data class before it goes live.\n\n2.2 An undeclared store is treated as containing Customer PII until proven otherwise.\n\n## 3. Retention\n\n3.1 Retention periods are fixed by the table below and may not be shortened by a project.\n\n| Data class | Retention | Owner |\n| --- | --- | --- |\n| Payment instruction | 10 years | Payments Ops |\n| Access log | 18 months | Security |\n| Customer PII | 7 years after closure | Data Protection |\n\n3.2 Data held beyond its retention period is a reportable control failure.\n\n## 4. Destruction\n\n### 4.1 Method\n\n4.1.1 Deletion must be irreversible; a soft-delete flag does not satisfy this standard.\n\n4.1.2 Backups containing expired data must be rotated out within one backup cycle.\n\n### 4.2 Evidence\n\n4.2.1 Every destruction run produces an auditable record naming the system, class and record count.",
+  "warnings": [],
+  "stats": {
+    "chars": 1205,
+    "headings": 7
+  },
+  "suggestedTitle": "policy"
+}

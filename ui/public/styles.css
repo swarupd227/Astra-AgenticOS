@@ -485,6 +485,19 @@ kbd {
 .gr-desc { font-size: 12px; color: var(--text-3); margin-top: 3px; line-height: 1.45; }
 .gr-meta { font-size: 11px; color: var(--text-3); margin-top: 5px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .gr-id { font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--text-2); }
+/* Word/PDF conversion feedback in the golden item editor */
+.convert-note {
+  margin-top: 8px; padding: 9px 11px; border-radius: 9px; font-size: 12px; line-height: 1.5;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2);
+}
+.convert-note.working { opacity: .8; }
+.convert-note.ok     { border-color: var(--green-c, #17864a); }
+.convert-note.warn   { border-color: var(--amber-c, #9a6500); }
+.convert-note.danger { border-color: var(--red-c, #b3261e); color: var(--text); }
+.convert-note .cn-list { margin: 6px 0 0; padding-left: 18px; }
+.convert-note .cn-list li { margin-top: 4px; }
+.convert-note .cn-list.danger li { color: var(--red-c, #b3261e); font-weight: 600; }
+
 .gr-actions { display: flex; gap: 6px; align-items: center; }
 
 /* "Try it" panel — spans all three grid columns under the row it belongs to */

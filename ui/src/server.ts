@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import crypto from "node:crypto";
 import matter from "gray-matter";
 import { GoldenStore, catalogBlock, CATALOG_CAP, type ProjectGoldenSelection, type GoldenKind } from "./golden.js";
+import { convertDocument } from "./doc-convert.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -938,6 +939,52 @@ app.post("/api/golden", async (req, res) => {
     refreshGoldenForActiveProject();
     res.json({ ok: true, item });
   } catch (e) { res.status(400).json({ ok: false, error: (e as Error).message }); }
+});
+
+/**
+ * Word/PDF → Markdown for the editor. Deliberately does NOT create the item:
+ * a conversion can lose clause numbering, or come back empty from a scanned PDF,
+ * and publishing that unseen would put a hollow "standard" in front of agents.
+ * The admin reviews the text and saves.
+ *
+ * MUST stay above `/api/golden/:id` — Express matches in registration order, and
+ * registered after it this path was swallowed as an item id ("No such golden
+ * item: convert").
+ */
+const MAX_DOC_MB = Number(process.env.MAX_DOC_MB ?? 25);
+
+app.post("/api/golden/convert", async (req, res) => {
+  const filename = String(req.query.filename || "document").trim();
+  try {
+    const declared = Number(req.headers["content-length"] || 0);
+    if (declared && declared > MAX_DOC_MB * 1024 * 1024)
+      throw new Error(`That file is ${(declared / 1048576).toFixed(1)} MB — the limit is ${MAX_DOC_MB} MB.`);
+
+    const chunks: Buffer[] = [];
+    let size = 0;
+    await new Promise<void>((resolve, reject) => {
+      req.on("data", (c: Buffer) => {
+        size += c.length;
+        if (size > MAX_DOC_MB * 1024 * 1024) {
+          req.pause(); req.resume();          // drain, don't kill the socket
+          reject(new Error(`That file is larger than the ${MAX_DOC_MB} MB limit.`));
+          return;
+        }
+        chunks.push(c);
+      });
+      req.on("end", () => resolve());
+      req.on("error", reject);
+    });
+
+    const buf = Buffer.concat(chunks);
+    if (!buf.length) throw new Error("The upload was empty.");
+
+    const out = await convertDocument(buf, filename);
+    console.error(`[golden] converted ${out.kind} "${filename}" — ${out.stats.chars} chars, ${out.stats.headings} heading(s), ${out.warnings.length} warning(s)`);
+    res.json({ ok: true, ...out, suggestedTitle: filename.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim() });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
 });
 
 app.post("/api/golden/:id", async (req, res) => {

@@ -1,0 +1,14 @@
+{
+  "ok": true,
+  "kind": "docx",
+  "markdown": "INTERNAL CODING CONVENTIONS\n\nAll service classes end with the suffix Service.\n\nControllers must not contain business logic.\n\nEvery public method needs an XML documentation comment.",
+  "warnings": [
+    "No headings were found. Word only produces headings if the document uses real Heading styles — if this document numbers its clauses with hand-typed bold text, agents can still read it but cannot cite a section. Adding `## 1. Title` lines makes citations precise.",
+    "No clause numbering (like 4.1.2) survived. Word's automatic list numbering is generated at display time and is not stored as text, so it cannot be extracted. Type the numbers into the headings if you need agents to cite clauses."
+  ],
+  "stats": {
+    "chars": 180,
+    "headings": 0
+  },
+  "suggestedTitle": "flat"
+}

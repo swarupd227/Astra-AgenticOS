@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "itemId": "GLD-STD-002",
+  "agent": "Code Reviewer (.NET Framework + Security)",
+  "pickedUp": true,
+  "goldenRead": [
+    "GLD-STD-001",
+    "GLD-STD-002"
+  ],
+  "citedIdVersion": true,
+  "answer": "Here are the exact answers, sourced directly from your organisation's mandatory standards:\n\n---\n\n## Access Log Retention — `GLD-STD-002@1`, §3.1\n\nThe retention table in clause 3.1 states:\n\n> **\"Access log — 18 months — Security\"**\n\nAccess logs must be retained for **18 months**, owned by the Security team. Clause 3.2 adds a critical obligation:\n\n> **\"Data held beyond its retention period is a reportable control failure.\"**\n\nSo the duty runs in both directions — logs must be kept for at least 18 months, and must be destroyed after that window closes.\n\n---\n\n## Soft-Deletes — `GLD-STD-002@1`, §4.1.1\n\nThe exact clause is:\n\n> **\"4.1.1 Deletion must be irreversible; a soft-delete flag does not satisfy this standard.\"**\n\nThis is unambiguous: using a soft-delete (e.g. an `IsDeleted = true` column) does **not** constitute destruction under this standard. Clause 4.1.2 reinforces this:\n\n> **\"4.1.2 Backups containing expired data must be rotated out within one backup cycle.\"**\n\n---\n\n## Practical implications for any code review\n\n| Scenario | Status under `GLD-STD-002@1` |\n|---|---|\n| Setting `IsDeleted = true` on a record past its retention period | ❌ **Non-compliant** — not irreversible deletion |\n| Archiving to cold storage indefinitely | ❌ **Non-compliant** — data held beyond period is a reportable control failure |\n| Permanently removing the row + rotating backups | ✅ Compliant |\n| Not declaring a data class before go-live | ❌ Treated as Customer PII (7 years after closure) |\n\nIf you have a specific class or service you'd like me to check against these standards, I can run a code review against it right away.",
+  "verdict": "The agent read this item during the run."
+}
