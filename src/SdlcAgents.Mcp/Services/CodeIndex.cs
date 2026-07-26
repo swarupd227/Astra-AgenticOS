@@ -43,7 +43,7 @@ public sealed class CodeIndex
                        ?? Path.Combine(Directory.GetCurrentDirectory(), "artifacts");
         ArtifactsDir = Path.GetFullPath(ArtifactsDir);
 
-        _indexers = new ILanguageIndexer[]
+        var indexers = new List<ILanguageIndexer>
         {
             new CSharpIndexer(_logger),
             // Prefer the tree-sitter backend; fall back to the regex indexer if the
@@ -51,6 +51,17 @@ public sealed class CodeIndex
             TreeSitterOrRegex(() => new JavaTreeSitterIndexer(_logger), () => new JavaIndexer(_logger), "Java"),
             TreeSitterOrRegex(() => new TypeScriptTreeSitterIndexer(_logger), () => new TypeScriptIndexer(_logger), "TypeScript/JS"),
         };
+
+        // Config-driven languages (Python, Go, PHP, Ruby, Rust, Scala, C, C++, Shell).
+        // These have no regex fallback: if a grammar can't load we skip that language
+        // rather than degrade, so a missing native asset can never affect the others.
+        foreach (var spec in LanguageSpecs.All)
+        {
+            try { indexers.Add(new GenericTreeSitterIndexer(spec, _logger)); }
+            catch (Exception ex) { _logger.LogWarning("{Lang}: grammar unavailable ({Err}) — language not indexed", spec.Name, ex.Message); }
+        }
+
+        _indexers = indexers.ToArray();
     }
 
     private ILanguageIndexer TreeSitterOrRegex(Func<ILanguageIndexer> treeSitter, Func<ILanguageIndexer> regex, string label)
@@ -69,7 +80,10 @@ public sealed class CodeIndex
     }
 
     private static readonly string[] SkipDirs =
-        { "bin", "obj", "packages", ".git", ".vs", "node_modules", "TestResults", "dist", "build", ".angular", ".next", "target", "out" };
+        { "bin", "obj", "packages", ".git", ".vs", "node_modules", "TestResults", "dist", "build", ".angular", ".next", "target", "out",
+          // Python / Go / PHP / Ruby / Rust / native build + vendor dirs
+          "__pycache__", ".venv", "venv", ".tox", ".mypy_cache", ".pytest_cache",
+          "vendor", ".bundle", ".gradle", ".idea", "cmake-build-debug", "coverage", "site-packages" };
 
     /// <summary>Build the index once, on first use. Thread-safe.</summary>
     public void EnsureBuilt()
@@ -86,7 +100,13 @@ public sealed class CodeIndex
     // Build/config/project files that agents (CI/CD, Dependency, Modernization) need to read.
     private static readonly string[] AuxExtensions =
         { ".csproj", ".sln", ".props", ".targets", ".config", ".nuspec", ".json", ".yml", ".yaml", ".xml",
-          ".gradle", ".properties", ".html", ".htm", ".scss", ".css" };
+          ".gradle", ".properties", ".html", ".htm", ".scss", ".css",
+          ".toml", ".cfg", ".ini", ".sbt", ".cmake", ".env", ".tf" };
+
+    // Manifest files with no (or a misleading) extension that agents still need to read.
+    private static readonly string[] AuxFileNames =
+        { "requirements.txt", "constraints.txt", "Gemfile", "Rakefile", "Makefile", "Dockerfile",
+          "go.sum", "CMakeLists.txt", "Procfile", ".gitlab-ci.yml", "Jenkinsfile" };
 
     private void Build()
     {
@@ -132,7 +152,7 @@ public sealed class CodeIndex
                     continue;
                 }
 
-                if (AuxExtensions.Contains(ext))
+                if (AuxExtensions.Contains(ext) || AuxFileNames.Contains(fileName, StringComparer.OrdinalIgnoreCase))
                 {
                     // Cap noisy/data formats by size to avoid bloating the index (build files are small).
                     if (ext is ".json" or ".xml" or ".yml" or ".yaml" or ".html" or ".htm" or ".scss" or ".css")
@@ -218,9 +238,12 @@ public sealed class CodeIndex
                    Path.GetFileName(f.RelativePath).Equals(Path.GetFileName(normalized), StringComparison.OrdinalIgnoreCase));
     }
 
-    // Manifest/project files across ecosystems: .NET, Java (Maven/Gradle), Node (npm/Angular).
+    // Manifest/project files across ecosystems: .NET, Java (Maven/Gradle), Node (npm/Angular),
+    // Python, Go, PHP, Ruby, Rust, Scala, C/C++.
     private static readonly string[] ProjectManifests =
-        { "*.csproj", "pom.xml", "build.gradle", "build.gradle.kts", "package.json" };
+        { "*.csproj", "pom.xml", "build.gradle", "build.gradle.kts", "package.json",
+          "pyproject.toml", "setup.py", "requirements.txt", "go.mod", "composer.json",
+          "Gemfile", "Cargo.toml", "build.sbt", "CMakeLists.txt" };
 
     public IReadOnlyList<string> Projects()
     {

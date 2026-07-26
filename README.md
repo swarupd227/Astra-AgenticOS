@@ -50,21 +50,34 @@ files (`.csproj`, `web.config`, `pom.xml`, `package.json`, `.sln`…); a **git**
 Code intelligence (`find_symbol`, `find_references`, `analyze_impact`) is **multi-language** via a
 pluggable indexer:
 
-| Language | Backend | Symbol precision |
+| Language | Files | Backend |
 |---|---|---|
-| **C#** | Roslyn (syntactic, no build) | classes/interfaces/structs/enums/methods/properties |
-| **Java** (`.java`) | lightweight syntactic | classes/interfaces/enums/records/methods |
-| **TypeScript / JavaScript** incl. **Angular** & **React** (`.ts/.tsx/.js/.jsx`) | lightweight syntactic | classes/interfaces/enums/types/functions/components/methods |
+| **C#** | `.cs` | Roslyn |
+| **Java** | `.java` | tree-sitter |
+| **TypeScript / JS** incl. **Angular** & **React** | `.ts .tsx .jsx .js .mjs .cjs` | tree-sitter |
+| **Python** | `.py .pyi` | tree-sitter |
+| **Go** | `.go` | tree-sitter |
+| **PHP** | `.php .phtml` | tree-sitter |
+| **Ruby** | `.rb .rake` | tree-sitter |
+| **Rust** | `.rs` | tree-sitter |
+| **Scala** | `.scala .sc` | tree-sitter |
+| **C** | `.c .h` | tree-sitter |
+| **C++** | `.cpp .cc .cxx .hpp .hh .hxx` | tree-sitter |
+| **Shell** | `.sh .bash` | tree-sitter |
 
 All analysis is **syntactic only** (no compile of the target) — the right fit for brownfield code
 that may not build. References are name-based *candidate* matches, clearly labelled as such.
 
-Adding a language is additive and can't affect another language's results: implement
-[`ILanguageIndexer`](src/SdlcAgents.Mcp/Services/ILanguageIndexer.cs) and register it in `CodeIndex`.
-The Java/TS indexers ([`RegexLanguageIndexer.cs`](src/SdlcAgents.Mcp/Services/RegexLanguageIndexer.cs))
-are the **drop-in point for a full tree-sitter backend** — swap the parsing internals and nothing
-above the interface changes. (Fast follow: the `analyze_impact` *layer* labels are still .NET-oriented;
-dependency data is already language-neutral.)
+Adding a language is a **config entry**, not new code: add a `LanguageSpec` (extensions → grammar,
+AST node types → symbol kinds) in
+[`TreeSitterIndexer.cs`](src/SdlcAgents.Mcp/Services/TreeSitterIndexer.cs). Native grammars ship with
+the NuGet package for win-x64 and linux-x64, so there's no build step. Java/TS keep a regex fallback
+([`RegexLanguageIndexer.cs`](src/SdlcAgents.Mcp/Services/RegexLanguageIndexer.cs)) if a grammar can't
+load; other languages are simply skipped, so one missing grammar can never affect the rest.
+
+**Static analysis:** the `semgrep_scan` tool adds rule-backed security/quality findings across 30+
+languages (framework-aware for Spring, Express, NestJS, React, Angular) — used by the code-review,
+security, config and data-access agents to cite an analyzer instead of asserting behaviour.
 
 > **Tip:** for Java/Node repos, index the **repository root** (where `pom.xml` / `package.json` live),
 > not a sub-folder, so `solution_overview` picks up the modules.
