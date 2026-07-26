@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import crypto from "node:crypto";
 import matter from "gray-matter";
+import { GoldenStore, catalogBlock, CATALOG_CAP, type ProjectGoldenSelection, type GoldenKind } from "./golden.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -91,6 +92,12 @@ const WORKSPACE_DIR = process.env.WORKSPACE_DIR
   ? path.resolve(process.env.WORKSPACE_DIR)
   : path.join(repoRoot, "workspace"); // cloned git repos live here
 const PROJECTS_FILE = path.join(STATE_DIR, "projects.json");
+// Golden Repository — org knowledge, shared across projects (one org-wide library,
+// scoped per project by selection). Lives on the same durable share as other state.
+const GOLDEN_DIR = process.env.GOLDEN_DIR
+  ? path.resolve(process.env.GOLDEN_DIR)
+  : path.join(STATE_DIR, "golden");
+const golden = new GoldenStore(GOLDEN_DIR);
 
 // Running as a hosted container (Azure App Service / Docker)? Then "local folder"
 // means a folder on the SERVER, not on the user's PC — the UI needs to say so.
@@ -269,6 +276,8 @@ interface Project {
   subPath?: string;
   artifactsDir: string;
   createdAt: string;
+  /** Which Golden Repository items this project's agents may see. Defaults to all. */
+  golden?: ProjectGoldenSelection;
 }
 let projects: Project[] = [];
 let activeProjectId: string | null = null;
@@ -427,6 +436,11 @@ async function connectMcp(project: Project) {
       ...(process.env as Record<string, string>),
       NOPCOMMERCE_ROOT: project.sourceRoot, // the C# server indexes this root
       ARTIFACTS_DIR: project.artifactsDir,
+      // Golden Repository: the store plus THIS project's selection. Passing the
+      // resolved id list (rather than the rule) makes the project boundary explicit —
+      // the MCP server can only ever see items this project selected.
+      GOLDEN_DIR,
+      GOLDEN_ITEMS: golden.selectedFor(project.golden).map((i) => i.id).join(","),
     },
   });
   const client = new Client({ name: "astra-agenticos-ui", version: "2.0.0" });
@@ -582,9 +596,32 @@ function isRetryable(e: any): boolean {
   return m.includes("terminated") || m.includes("connection") || m.includes("overloaded");
 }
 
+/**
+ * The slice of the Golden Repository this agent should be aware of: the active
+ * project's selection, narrowed by each item's `appliesTo`. Returns "" when nothing
+ * applies, so agents and projects without golden content are completely unaffected.
+ */
+function goldenCatalogFor(agentId: string): string {
+  try {
+    const selected = golden.selectedFor(activeProject()?.golden);
+    return catalogBlock(GoldenStore.relevantTo(selected, agentId));
+  } catch (e) {
+    console.error("[golden] catalog build failed:", (e as Error).message);
+    return "";
+  }
+}
+
 const ORCH_ID = "orchestrator";
 // Read-only grounding tools the Orchestrator may use directly (besides `delegate`).
 const ORCH_GROUNDING = ["solution_overview", "find_symbol", "search_code", "read_file", "list_artifacts", "read_artifact", "save_artifact"];
+
+/**
+ * The Golden Repository is a universal grounding layer, so EVERY agent gets these —
+ * independently of the `tools:` list in its persona. Without this an agent sees the
+ * catalog in its system prompt but has no way to read what it names, which (correctly)
+ * makes it return BLOCKED instead of answering.
+ */
+const GOLDEN_TOOLS = ["golden_catalog", "golden_search", "golden_read"];
 
 // Synthetic tool that lets the Orchestrator run another agent and get its result.
 function delegateTool(): Anthropic.Tool {
@@ -622,6 +659,11 @@ async function runAgent(
     const allowed = mcpTools.filter((t) => agent.tools.includes(t.name));
     tools = allowed.length ? allowed : mcpTools;
   }
+  // Always grant the Golden Repository tools — see GOLDEN_TOOLS.
+  const missingGolden = mcpTools.filter(
+    (t) => GOLDEN_TOOLS.includes(t.name) && !tools.some((x) => x.name === t.name)
+  );
+  if (missingGolden.length) tools = [...tools, ...missingGolden];
 
   // Prior turns give the conversation memory; the new question goes last.
   const messages: Anthropic.MessageParam[] = [
@@ -644,7 +686,7 @@ async function runAgent(
         const stream = anthropic.messages.stream({
           model: MODEL,
           max_tokens: MAX_TOKENS,
-          system: `${agent.systemPrompt}\n\n---\n**Today's date is ${new Date().toISOString().slice(0, 10)}.** Use it for any date you write (document dates, changelogs, gate records). Never invent or guess a date.\n${STACK_AWARENESS}\n${OPERATING_CONTRACT}`,
+          system: `${agent.systemPrompt}\n\n---\n**Today's date is ${new Date().toISOString().slice(0, 10)}.** Use it for any date you write (document dates, changelogs, gate records). Never invent or guess a date.\n${STACK_AWARENESS}\n${goldenCatalogFor(agent.id)}\n${OPERATING_CONTRACT}`,
           tools,
           messages,
         });
@@ -799,6 +841,116 @@ app.post("/api/settings", (req, res) => {
     res.status(400).json({ ok: false, error: (e as Error).message });
   }
 });
+
+// ---- Golden Repository API (admin) ---------------------------------------
+// One org-wide library; projects select from it. Content is uploaded or pasted,
+// normalised to markdown, and stored outside the hot index file.
+
+app.get("/api/golden", (req, res) => {
+  const includeArchived = String(req.query.includeArchived) === "true";
+  const items = golden.list({ includeArchived });
+  res.json({ items, catalogCap: CATALOG_CAP, dir: GOLDEN_DIR });
+});
+
+app.get("/api/golden/:id", (req, res) => {
+  const item = golden.get(req.params.id);
+  if (!item) { res.status(404).json({ ok: false, error: "Not found" }); return; }
+  res.json({ ok: true, item, content: golden.readContent(item.id) ?? "" });
+});
+
+app.post("/api/golden", async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const item = await golden.create({
+      title: String(b.title ?? ""),
+      description: b.description ? String(b.description) : undefined,
+      kind: (b.kind ?? "reference") as GoldenKind,
+      enforcement: b.enforcement, appliesTo: b.appliesTo, tags: b.tags,
+      owner: b.owner, approvedBy: b.approvedBy, status: b.status,
+      content: String(b.content ?? ""), sourceName: b.sourceName,
+    });
+    refreshGoldenForActiveProject();
+    res.json({ ok: true, item });
+  } catch (e) { res.status(400).json({ ok: false, error: (e as Error).message }); }
+});
+
+app.post("/api/golden/:id", async (req, res) => {
+  try {
+    const item = await golden.update(req.params.id, req.body ?? {});
+    refreshGoldenForActiveProject();
+    res.json({ ok: true, item });
+  } catch (e) { res.status(400).json({ ok: false, error: (e as Error).message }); }
+});
+
+app.post("/api/golden/:id/archive", async (req, res) => {
+  try {
+    const item = await golden.archive(req.params.id);
+    refreshGoldenForActiveProject();
+    res.json({ ok: true, item });
+  } catch (e) { res.status(400).json({ ok: false, error: (e as Error).message }); }
+});
+
+/** What the ACTIVE project's agents would currently see (admin preview / debugging). */
+app.get("/api/golden-selection", (_req, res) => {
+  const p = activeProject();
+  const selected = golden.selectedFor(p?.golden);
+  res.json({
+    projectId: p?.id ?? null,
+    selection: p?.golden ?? { mode: "all" },
+    selectedIds: selected.map((i) => i.id),
+    selectedCount: selected.length,
+    mandatoryCount: selected.filter((i) => i.enforcement === "mandatory" && i.status === "published").length,
+    catalogCap: CATALOG_CAP,
+    overCap: selected.filter((i) => i.status === "published").length > CATALOG_CAP,
+  });
+});
+
+/** Change a project's Golden selection (works before and after creation). */
+app.post("/api/projects/:id/golden", async (req, res) => {
+  const p = projects.find((x) => x.id === req.params.id);
+  if (!p) { res.status(404).json({ ok: false, error: "Project not found." }); return; }
+  const b = req.body ?? {};
+  const sel: ProjectGoldenSelection = {
+    mode: b.mode === "subset" ? "subset" : "all",
+    itemIds: Array.isArray(b.itemIds) ? b.itemIds.map(String) : [],
+    tags: Array.isArray(b.tags) ? b.tags.map(String) : [],
+  };
+  p.golden = sel;
+  saveProjects();
+  // The MCP server receives the resolved id list at spawn time, so re-activate to apply.
+  if (activeProjectId === p.id) {
+    try { await activateProject(p.id); }
+    catch (e) { console.error("[golden] re-activate failed:", (e as Error).message); }
+  }
+  const selected = golden.selectedFor(sel);
+  res.json({ ok: true, selection: sel, selectedCount: selected.length });
+});
+
+/**
+ * The MCP server is handed the resolved selection at spawn. After a library change
+ * the running server would be stale, so re-activate the current project to refresh it.
+ */
+/** Accepts a selection from project creation; defaults to "all" when omitted. */
+function parseGoldenSelection(raw: any): ProjectGoldenSelection {
+  if (!raw || raw.mode !== "subset") return { mode: "all" };
+  return {
+    mode: "subset",
+    itemIds: Array.isArray(raw.itemIds) ? raw.itemIds.map(String) : [],
+    tags: Array.isArray(raw.tags) ? raw.tags.map(String) : [],
+  };
+}
+
+let goldenRefreshTimer: NodeJS.Timeout | null = null;
+function refreshGoldenForActiveProject() {
+  if (!activeProjectId || !mcpReady) return;
+  if (goldenRefreshTimer) clearTimeout(goldenRefreshTimer);
+  // debounce: bulk admin edits shouldn't respawn the server per item
+  goldenRefreshTimer = setTimeout(() => {
+    activateProject(activeProjectId!).catch((e) =>
+      console.error("[golden] refresh failed:", (e as Error).message));
+  }, 1500);
+  goldenRefreshTimer.unref?.();
+}
 
 // ---- Projects API --------------------------------------------------------
 app.get("/api/projects", (_req, res) => {
@@ -1060,6 +1212,7 @@ app.post("/api/projects", async (req, res) => {
       subPath: subPath ? String(subPath) : undefined,
       artifactsDir: path.join(ARTIFACTS_ROOT, id),
       createdAt: new Date().toISOString(),
+      golden: parseGoldenSelection(req.body?.golden),
     };
     projects.push(project);
     saveProjects();
