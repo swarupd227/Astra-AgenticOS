@@ -604,7 +604,11 @@ function isRetryable(e: any): boolean {
 function goldenCatalogFor(agentId: string): string {
   try {
     const selected = golden.selectedFor(activeProject()?.golden);
-    return catalogBlock(GoldenStore.relevantTo(selected, agentId));
+    return catalogBlock(
+      GoldenStore.relevantTo(selected, agentId),
+      CATALOG_CAP,
+      boundTemplates(agentId).map((t) => t.id)
+    );
   } catch (e) {
     console.error("[golden] catalog build failed:", (e as Error).message);
     return "";
@@ -622,6 +626,39 @@ const ORCH_GROUNDING = ["solution_overview", "find_symbol", "search_code", "read
  * makes it return BLOCKED instead of answering.
  */
 const GOLDEN_TOOLS = ["golden_catalog", "golden_search", "golden_read"];
+
+/**
+ * Templates bound to a specific agent: published `template` items whose appliesTo
+ * names THIS agent explicitly. "all" is deliberately excluded — a template that
+ * applies to everything is guidance, not a binding contract for one deliverable.
+ */
+function boundTemplates(agentId: string) {
+  return golden
+    .selectedFor(activeProject()?.golden)
+    .filter((i) => i.kind === "template" && i.status === "published" && i.appliesTo.includes(agentId));
+}
+
+/**
+ * Phase 3 enforcement. Returns an error string to hand back instead of running the
+ * tool, or null to allow it. We gate the act of *delivering* (save_artifact), not
+ * thinking — the agent may explore freely, but it cannot produce the deliverable
+ * until it has actually read the template that governs it.
+ */
+function templateGate(agentId: string, toolName: string, readSoFar: Set<string>): string | null {
+  if (toolName !== "save_artifact") return null;
+  const missing = boundTemplates(agentId).filter((t) => !readSoFar.has(t.id.toUpperCase()));
+  if (missing.length === 0) return null;
+
+  const list = missing.map((t) => `\`${t.id}\` (${t.title})`).join(", ");
+  return (
+    `BLOCKED — the artifact was NOT saved.\n\n` +
+    `Your organisation binds ${missing.length === 1 ? "a template" : "templates"} to this deliverable: ${list}.\n` +
+    `Call \`golden_read\` on ${missing.length === 1 ? "it" : "each of them"} first, follow the structure, ` +
+    `then call save_artifact again and cite the template as \`id@version\`.\n\n` +
+    `This is a platform rule, not a suggestion — producing the deliverable in a different ` +
+    `shape than the organisation's template is the failure it exists to prevent.`
+  );
+}
 
 // Synthetic tool that lets the Orchestrator run another agent and get its result.
 function delegateTool(): Anthropic.Tool {
@@ -649,6 +686,8 @@ async function runAgent(
   prior: Anthropic.MessageParam[] = []
 ): Promise<string> {
   let outText = ""; // this agent's own streamed answer (returned so it can be persisted)
+  // Golden items this run has actually read — the evidence the template gate checks.
+  const goldenReadThisRun = new Set<string>();
   // Orchestrator (top level only) gets read-only grounding tools + `delegate`.
   // Everyone else: intersect declared tools with what the MCP server provides.
   const isOrch = agent.id === ORCH_ID && depth === 0;
@@ -764,8 +803,22 @@ async function runAgent(
             "(sub-agent completed; its output/artifact is available)";
         }
       } else {
+        // Phase 3 — hard template binding. A template that names THIS agent must be
+        // read before the agent is allowed to save a deliverable. Enforced here rather
+        // than asked for in the prompt, so it can't be skipped.
+        const gate = templateGate(agent.id, tu.name, goldenReadThisRun);
+        if (gate) {
+          resultText = gate;
+          emit({ type: "tool_result", id: tu.id, name: tu.name, result: resultText });
+          results.push({ type: "tool_result", tool_use_id: tu.id, content: resultText, is_error: true });
+          continue;
+        }
         try {
           resultText = await callMcpTool(tu.name, (tu.input ?? {}) as Record<string, unknown>);
+          if (tu.name === "golden_read") {
+            const id = String((tu.input as any)?.id ?? "").trim().toUpperCase();
+            if (id && !resultText.startsWith("'")) goldenReadThisRun.add(id); // '…' = refusal
+          }
         } catch (e) {
           resultText = `ERROR: ${(e as Error).message}`;
         }
@@ -865,7 +918,7 @@ app.post("/api/golden", async (req, res) => {
       title: String(b.title ?? ""),
       description: b.description ? String(b.description) : undefined,
       kind: (b.kind ?? "reference") as GoldenKind,
-      enforcement: b.enforcement, appliesTo: b.appliesTo, tags: b.tags,
+      enforcement: b.enforcement, appliesTo: b.appliesTo, tags: b.tags, aliases: b.aliases,
       owner: b.owner, approvedBy: b.approvedBy, status: b.status,
       content: String(b.content ?? ""), sourceName: b.sourceName,
     });
@@ -888,6 +941,49 @@ app.post("/api/golden/:id/archive", async (req, res) => {
     refreshGoldenForActiveProject();
     res.json({ ok: true, item });
   } catch (e) { res.status(400).json({ ok: false, error: (e as Error).message }); }
+});
+
+/**
+ * Test-run a golden item (Phase 4). Runs a real agent against the active project and
+ * reports whether the item was actually picked up — the feedback loop an author needs
+ * to know their skill/standard works, and the thing the test report asked for
+ * (evidence, not assertion).
+ */
+app.post("/api/golden/:id/test", async (req, res) => {
+  const item = golden.get(req.params.id);
+  if (!item) { res.status(404).json({ ok: false, error: "Not found" }); return; }
+  if (!mcpReady) { res.status(409).json({ ok: false, error: mcpError ?? "Load a project first — a test run needs a codebase." }); return; }
+  if (!process.env.ANTHROPIC_API_KEY) { res.status(409).json({ ok: false, error: "Set an API key in Settings to run a test." }); return; }
+
+  const agentId = String(req.body?.agentId ?? "");
+  const task = String(req.body?.task ?? "").trim();
+  const agent = agents.find((a) => a.id === agentId);
+  if (!agent) { res.status(400).json({ ok: false, error: "Pick an agent to run the test with." }); return; }
+  if (!task) { res.status(400).json({ ok: false, error: "Describe a task to test the item against." }); return; }
+
+  const alive = keepJsonAlive(res);
+  const used: string[] = [];
+  try {
+    const answer = await runAgent(agent, task, (e: any) => {
+      if (e.type === "tool_call" && e.name === "golden_read") {
+        const id = String(e.input?.id ?? "").trim().toUpperCase();
+        if (id) used.push(id);
+      }
+    }, 0);
+    const picked = used.includes(item.id.toUpperCase());
+    alive.send(200, {
+      ok: true, itemId: item.id, agent: agent.name,
+      pickedUp: picked,
+      goldenRead: [...new Set(used)],
+      citedIdVersion: new RegExp(`${item.id}@\\d+`, "i").test(answer),
+      answer: answer.slice(0, 8000),
+      verdict: picked
+        ? "The agent read this item during the run."
+        : "The agent did NOT read this item. Usually the description or appliesTo doesn't match the task — sharpen the description so it's obvious when this applies.",
+    });
+  } catch (e) {
+    alive.send(500, { ok: false, error: (e as Error).message });
+  }
 });
 
 /** What the ACTIVE project's agents would currently see (admin preview / debugging). */

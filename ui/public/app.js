@@ -828,12 +828,62 @@ function renderGoldenLibrary() {
         </div>
       </div>
       <div class="gr-actions">
+        ${i.status === "published" ? `<button class="btn ghost sm" data-test="${esc(i.id)}">Try it</button>` : ""}
         <button class="btn ghost sm" data-edit="${esc(i.id)}">Edit</button>
         ${i.status !== "archived" ? `<button class="btn ghost sm" data-arch="${esc(i.id)}">Archive</button>` : ""}
       </div>
+      <div class="gr-test" id="gt-${esc(i.id)}" hidden></div>
     </div>`).join("");
   list.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => openGoldenEditor(b.dataset.edit)));
   list.querySelectorAll("[data-arch]").forEach((b) => (b.onclick = () => archiveGoldenItem(b.dataset.arch)));
+  list.querySelectorAll("[data-test]").forEach((b) => (b.onclick = () => toggleGoldenTest(b.dataset.test)));
+}
+
+/**
+ * "Try it" — runs a real agent and reports whether it actually opened this item.
+ * Authors otherwise have no way to tell a well-written item from one the agents
+ * never notice, which is the single most common way a golden library goes stale.
+ */
+function toggleGoldenTest(id) {
+  const box = document.getElementById(`gt-${id}`);
+  if (!box) return;
+  if (!box.hidden) { box.hidden = true; return; }
+  const item = goldenItems.find((i) => i.id === id);
+  const targets = (item?.appliesTo || []).filter((a) => a !== "all");
+  const usable = agents.filter((a) => !targets.length || targets.includes(a.id));
+  box.hidden = false;
+  box.innerHTML = `
+    <div class="gt-form">
+      <select class="gt-agent">${(usable.length ? usable : agents)
+        .map((a) => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join("")}</select>
+      <input class="gt-task" type="text" placeholder="Ask something this item should answer, e.g. &quot;How should I log a failed payment?&quot;" />
+      <button class="btn primary sm gt-run">Run</button>
+    </div>
+    <div class="gt-out set-hint">A real agent run — it uses your API key and takes up to a minute.</div>`;
+  const out = box.querySelector(".gt-out");
+  const run = box.querySelector(".gt-run");
+  run.onclick = async () => {
+    const task = box.querySelector(".gt-task").value.trim();
+    if (!task) { out.textContent = "Type a question first."; return; }
+    run.disabled = true;
+    out.textContent = "Running…";
+    try {
+      const r = await (await fetch(`/api/golden/${encodeURIComponent(id)}/test`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agentId: box.querySelector(".gt-agent").value, task }),
+      })).json();
+      if (!r.ok) { out.textContent = r.error || "The test could not run."; return; }
+      out.innerHTML = `
+        <div class="gt-verdict ${r.pickedUp ? "good" : "bad"}">
+          ${r.pickedUp ? "✓ Found and used" : "✗ Not used"} — ${esc(r.verdict)}
+        </div>
+        <div class="gt-detail">Opened: ${r.goldenRead.length ? r.goldenRead.map(esc).join(", ") : "nothing"}
+          · Cited by version: ${r.citedIdVersion ? "yes" : "no"}</div>
+        <details class="gt-answer"><summary>What the agent replied</summary><pre>${esc(r.answer)}</pre></details>`;
+    } catch (e) {
+      out.textContent = e.message || "The test could not run.";
+    } finally { run.disabled = false; }
+  };
 }
 
 function renderGoldenSelection() {
@@ -907,6 +957,7 @@ function openGoldenEditor(id) {
   $("#gi-owner").value = i?.owner || "";
   $("#gi-approver").value = i?.approvedBy || "";
   $("#gi-tags").value = (i?.tags || []).join(", ");
+  $("#gi-aliases").value = (i?.aliases || []).join(", ");
   $("#gi-applies").value = (i?.appliesTo || ["all"]).join(", ");
   $("#gi-content").value = "";
   $("#gi-file").value = "";
@@ -934,6 +985,7 @@ async function saveGoldenItem() {
     owner: $("#gi-owner").value.trim() || "unassigned",
     approvedBy: $("#gi-approver").value.trim() || undefined,
     tags: split($("#gi-tags").value),
+    aliases: split($("#gi-aliases").value),
     appliesTo: split($("#gi-applies").value).length ? split($("#gi-applies").value) : ["all"],
     content: $("#gi-content").value,
   };

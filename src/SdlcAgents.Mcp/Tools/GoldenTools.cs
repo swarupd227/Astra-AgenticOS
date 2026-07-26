@@ -65,37 +65,81 @@ public static class GoldenTools
         var (items, err) = Load();
         if (err is not null) return err;
 
-        var hits = new List<string>();
+        // Multi-term, ranked retrieval. A plain substring scan misses the common case
+        // where business docs and code use different words for the same thing
+        // ("levy computation" vs "tax calculation"), so we score every term
+        // independently and rank, rather than requiring the whole phrase verbatim.
+        var terms = Tokenise(query);
+        if (terms.Count == 0) return "Provide a more specific search query.";
+
+        var scored = new List<(double Score, string Line)>();
         var matchedItems = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var item in items.Where(i => string.IsNullOrWhiteSpace(kind) || i.Kind.Equals(kind, StringComparison.OrdinalIgnoreCase)))
         {
             var content = ReadItem(item.Id);
             if (content is null) continue;
+
+            // Metadata matches are strong signals — a query naming the item's own
+            // subject should surface it even when the body words differ.
+            var meta = $"{item.Title} {item.Description} {string.Join(' ', item.Tags)} {string.Join(' ', item.Aliases)}";
+            var metaHits = terms.Count(t => meta.Contains(t, StringComparison.OrdinalIgnoreCase));
+
             var lines = content.Replace("\r\n", "\n").Split('\n');
             var heading = "";
+            var bodyHits = 0;
             for (var n = 0; n < lines.Length; n++)
             {
                 var line = lines[n];
-                // track the nearest heading / numbered clause so a hit is citable
                 var t = line.TrimStart();
+                var isHeading = t.StartsWith("#") || System.Text.RegularExpressions.Regex.IsMatch(t, @"^\d+(\.\d+)*[\.\)]\s*$");
                 if (t.StartsWith("#") || System.Text.RegularExpressions.Regex.IsMatch(t, @"^\d+(\.\d+)*[\.\)]\s"))
                     heading = t.TrimStart('#').Trim();
 
-                if (line.IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                var termHits = terms.Count(term => line.Contains(term, StringComparison.OrdinalIgnoreCase));
+                if (termHits == 0) continue;
+
+                // all terms on one line > some terms; whole phrase > scattered terms;
+                // metadata relevance lifts the whole item. A bare heading is a pointer,
+                // not an answer, so it ranks below a clause that says something.
+                var score = termHits * 2.0
+                          + (termHits == terms.Count ? 3.0 : 0)
+                          + (line.Contains(query, StringComparison.OrdinalIgnoreCase) ? 4.0 : 0)
+                          + metaHits * 1.5
+                          + (item.Enforcement == "mandatory" ? 1.0 : 0)
+                          - (isHeading ? 1.0 : 0);
+
+                bodyHits++;
                 matchedItems.Add(item.Id);
                 var where = string.IsNullOrWhiteSpace(heading) ? "" : $" · under “{Trunc(heading, 60)}”";
-                hits.Add($"- `{item.Id}` v{item.Version} line {n + 1}{where}  \n  `{Trunc(line.Trim(), 160)}`");
-                if (hits.Count >= maxResults) break;
+                scored.Add((score, $"- `{item.Id}` v{item.Version} line {n + 1}{where}  \n  `{Trunc(line.Trim(), 160)}`"));
             }
-            if (hits.Count >= maxResults) break;
+
+            // The item is clearly about the subject asked for — its title, tags or the
+            // alternative wording its owner registered all say so — but the body happens
+            // to use different words throughout. Surface the item anyway; hiding it is
+            // exactly the failure the alias field exists to prevent.
+            if (bodyHits == 0 && metaHits > 0)
+            {
+                matchedItems.Add(item.Id);
+                var why = item.Aliases.Any(a => terms.Any(t => a.Contains(t, StringComparison.OrdinalIgnoreCase)))
+                    ? "your organisation registered this wording for it" : "its title/description covers this subject";
+                scored.Add((metaHits * 1.5 + (item.Enforcement == "mandatory" ? 1.0 : 0),
+                    $"- `{item.Id}` v{item.Version} · **{Trunc(item.Title, 70)}** — no exact wording match inside, but {why}.  \n  `golden_read` it to check."));
+            }
         }
 
-        if (hits.Count == 0)
-            return $"No Golden Repository match for '{query}'. Absence of a match is not proof that no standard applies — check golden_catalog.";
+        if (scored.Count == 0)
+        {
+            LogMiss(query);   // measured trigger data for whether embeddings are ever needed
+            return $"No Golden Repository match for '{query}'. Try fewer or different words, or `golden_catalog` to see what exists. " +
+                   "Absence of a match is not proof that no standard applies — say so rather than concluding there is no rule.";
+        }
+
+        var hits = scored.OrderByDescending(s => s.Score).Take(maxResults).Select(s => s.Line).ToList();
 
         var sb = new StringBuilder();
-        sb.AppendLine($"# {hits.Count} match(es) for '{query}' across {matchedItems.Count} item(s)");
+        sb.AppendLine($"# {hits.Count} match(es) for '{query}' across {matchedItems.Count} item(s), most relevant first");
         sb.AppendLine("_Now `golden_read` the whole item(s) before applying anything._");
         sb.AppendLine();
         foreach (var h in hits) sb.AppendLine(h);
@@ -143,7 +187,36 @@ public static class GoldenTools
     // ---- store access -------------------------------------------------------
 
     private sealed record GItem(string Id, string Title, string Description, string Kind,
-                                string Enforcement, string Owner, int Version, string Status, string[] Tags);
+                                string Enforcement, string Owner, int Version, string Status,
+                                string[] Tags, string[] Aliases);
+
+    private static readonly HashSet<string> Stop = new(StringComparer.OrdinalIgnoreCase)
+    { "the","a","an","of","for","and","or","to","in","on","is","are","we","our","do","does","what","how","should","must","can","any" };
+
+    /// <summary>Query → meaningful lower-case terms (stopwords and 1-char noise removed).</summary>
+    private static List<string> Tokenise(string q) =>
+        System.Text.RegularExpressions.Regex.Split(q ?? "", @"[^\w]+")
+            .Where(t => t.Length > 1 && !Stop.Contains(t))
+            .Select(t => t.ToLowerInvariant())
+            .Distinct()
+            .ToList();
+
+    /// <summary>
+    /// Records searches that found nothing. This is the evidence that decides whether a
+    /// vector/semantic tier is ever actually needed — the architecture defers that
+    /// decision to measurement rather than assumption.
+    /// </summary>
+    private static void LogMiss(string query)
+    {
+        try
+        {
+            var dir = Dir;
+            if (string.IsNullOrWhiteSpace(dir)) return;
+            File.AppendAllText(Path.Combine(dir, "retrieval-misses.log"),
+                $"{DateTime.UtcNow:O}\t{query.Replace('\t', ' ')}{Environment.NewLine}");
+        }
+        catch { /* never let telemetry break a tool call */ }
+    }
 
     private static string Dir => Environment.GetEnvironmentVariable("GOLDEN_DIR") ?? "";
 
@@ -167,9 +240,7 @@ public static class GoldenTools
                 Str(e, "id"), Str(e, "title"), Str(e, "description"), Str(e, "kind"),
                 Str(e, "enforcement"), Str(e, "owner"),
                 e.TryGetProperty("version", out var v) && v.TryGetInt32(out var vi) ? vi : 1,
-                Str(e, "status"),
-                e.TryGetProperty("tags", out var tg) && tg.ValueKind == JsonValueKind.Array
-                    ? tg.EnumerateArray().Select(x => x.GetString() ?? "").ToArray() : Array.Empty<string>()
+                Str(e, "status"), Arr(e, "tags"), Arr(e, "aliases")
             )).ToList();
         }
         catch (Exception ex) { return (new(), $"Could not read the Golden Repository index: {ex.Message}"); }
@@ -189,6 +260,11 @@ public static class GoldenTools
 
     private static string Str(JsonElement e, string name)
         => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+
+    private static string[] Arr(JsonElement e, string name)
+        => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Array
+            ? v.EnumerateArray().Select(x => x.GetString() ?? "").Where(s => s.Length > 0).ToArray()
+            : Array.Empty<string>();
 
     private static string? ReadItem(string id)
     {
