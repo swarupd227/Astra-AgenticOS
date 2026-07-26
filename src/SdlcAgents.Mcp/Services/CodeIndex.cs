@@ -46,9 +46,26 @@ public sealed class CodeIndex
         _indexers = new ILanguageIndexer[]
         {
             new CSharpIndexer(_logger),
-            new JavaIndexer(_logger),
-            new TypeScriptIndexer(_logger),
+            // Prefer the tree-sitter backend; fall back to the regex indexer if the
+            // native grammar can't load in this environment (so Java/TS never break).
+            TreeSitterOrRegex(() => new JavaTreeSitterIndexer(_logger), () => new JavaIndexer(_logger), "Java"),
+            TreeSitterOrRegex(() => new TypeScriptTreeSitterIndexer(_logger), () => new TypeScriptIndexer(_logger), "TypeScript/JS"),
         };
+    }
+
+    private ILanguageIndexer TreeSitterOrRegex(Func<ILanguageIndexer> treeSitter, Func<ILanguageIndexer> regex, string label)
+    {
+        try
+        {
+            var ix = treeSitter();
+            _logger.LogInformation("{Lang}: using tree-sitter backend", label);
+            return ix;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "{Lang}: tree-sitter unavailable ({Err}); using lightweight syntactic backend", label, ex.Message);
+            return regex();
+        }
     }
 
     private static readonly string[] SkipDirs =
