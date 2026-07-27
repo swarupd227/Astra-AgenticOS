@@ -531,6 +531,56 @@ const MAX_TURNS = Number(process.env.MAX_TURNS_PER_RUN ?? 44);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// ---- prompt caching over the conversation ---------------------------------
+// The API allows 4 cache breakpoints per request; the system block takes one.
+const MSG_BREAKPOINTS = 3;
+// Each breakpoint searches back at most 20 content blocks for an existing cache
+// entry. A single turn here can add far more than that (57 tool calls observed),
+// so consecutive breakpoints must stay inside that window or the newest one
+// silently finds nothing and the whole conversation is re-billed.
+const LOOKBACK_GAP = 15;
+
+/** Block types that accept cache_control. */
+const CACHEABLE = new Set(["text", "tool_use", "tool_result", "image", "document"]);
+
+const LOG_CACHE = process.env.LOG_CACHE === "1";
+/** Cumulative since boot; exposed on /api/health so hit rate is checkable in prod. */
+const cacheStats = { read: 0, written: 0, uncached: 0 };
+
+const blocksOf = (m: Anthropic.MessageParam) =>
+  typeof m.content === "string" ? 1 : m.content.length;
+
+/**
+ * Return a copy of the conversation with rolling cache breakpoints, so each turn
+ * reuses the previous turn's cached prefix instead of re-sending it at full price.
+ *
+ * Copies rather than mutates: `messages` is reused across turns of a run, and
+ * leaving markers behind would accumulate stale breakpoints past the limit of 4.
+ */
+function withConversationCache(msgs: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+  if (!msgs.length) return msgs;
+
+  const mark = new Set<number>();
+  let since = 0;
+  for (let i = msgs.length - 1; i >= 0 && mark.size < MSG_BREAKPOINTS; i--) {
+    if (mark.size === 0) { mark.add(i); since = 0; continue; }  // newest turn always
+    since += blocksOf(msgs[i]);
+    if (since >= LOOKBACK_GAP) { mark.add(i); since = 0; }
+  }
+
+  return msgs.map((m, i) => {
+    if (!mark.has(i)) return m;
+    const blocks = (typeof m.content === "string"
+      ? [{ type: "text", text: m.content } as Anthropic.TextBlockParam]
+      : [...m.content]) as any[];
+    // Anchor on the last block the API will accept a marker on.
+    const at = blocks.map((b) => CACHEABLE.has(b?.type)).lastIndexOf(true);
+    if (at < 0) return m;
+    blocks[at] = { ...blocks[at], cache_control: { type: "ephemeral" } };
+    return { ...m, content: blocks } as Anthropic.MessageParam;
+  });
+}
+
 // The code index and tools are multi-language (C#, Java, TypeScript/JS incl.
 // Angular & React). Agent personas were originally written for .NET, so this
 // shared note tells every agent to adapt to whatever stack the active project
@@ -739,9 +789,22 @@ async function runAgent(
         const stream = anthropic.messages.stream({
           model: MODEL,
           max_tokens: MAX_TOKENS,
-          system: `${agent.systemPrompt}\n\n---\n**Today's date is ${new Date().toISOString().slice(0, 10)}.** Use it for any date you write (document dates, changelogs, gate records). Never invent or guess a date.\n${STACK_AWARENESS}\n${goldenCatalogFor(agent.id)}\n${OPERATING_CONTRACT}`,
+          // Caching is a prefix match and the render order is tools -> system ->
+          // messages, so this single breakpoint on the system block caches the
+          // whole tool schema set with it. Both are identical on every turn of a
+          // run, and a run makes one request per tool call — 57 on the heaviest
+          // agent observed — so without this the same prefix is re-billed at full
+          // price 57 times. The interpolated date is YYYY-MM-DD, stable for the
+          // day, so it does not invalidate the prefix.
+          system: [
+            {
+              type: "text",
+              text: `${agent.systemPrompt}\n\n---\n**Today's date is ${new Date().toISOString().slice(0, 10)}.** Use it for any date you write (document dates, changelogs, gate records). Never invent or guess a date.\n${STACK_AWARENESS}\n${goldenCatalogFor(agent.id)}\n${OPERATING_CONTRACT}`,
+              cache_control: { type: "ephemeral" },
+            },
+          ],
           tools,
-          messages,
+          messages: withConversationCache(messages),
         });
         stream.on("text", (delta) => {
           emittedThisAttempt++;
@@ -764,6 +827,18 @@ async function runAgent(
     }
     if (!resp) break;
     lastStop = resp.stop_reason;
+
+    // Cache hit rate is invisible unless measured — a silent invalidator looks
+    // exactly like working code. Zero reads across turns means it isn't working.
+    const u: any = resp.usage ?? {};
+    cacheStats.read += u.cache_read_input_tokens ?? 0;
+    cacheStats.written += u.cache_creation_input_tokens ?? 0;
+    cacheStats.uncached += u.input_tokens ?? 0;
+    if (LOG_CACHE)
+      console.error(
+        `[cache] ${agent.id} turn ${turn + 1}: read=${u.cache_read_input_tokens ?? 0} ` +
+        `write=${u.cache_creation_input_tokens ?? 0} uncached=${u.input_tokens ?? 0}`
+      );
 
     const toolUses = resp.content.filter(
       (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
@@ -889,6 +964,14 @@ app.get("/api/health", (_req, res) => {
     model: MODEL,
     hasApiKey: Boolean(process.env.ANTHROPIC_API_KEY),
     activeProject: p ? publicProject(p) : null,
+    // Prompt-cache totals since boot. hitRate near 0 after a few agent runs means
+    // something is invalidating the prefix — the numbers are the only way to tell.
+    cache: {
+      ...cacheStats,
+      hitRate: cacheStats.read + cacheStats.uncached
+        ? +(cacheStats.read / (cacheStats.read + cacheStats.uncached)).toFixed(3)
+        : null,
+    },
     // Lets the UI explain that "local folder" means a folder on the server.
     host: { platform: process.platform, cloud: IS_CLOUD, maxUploadMb: MAX_UPLOAD_MB },
   });
