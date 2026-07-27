@@ -46,7 +46,11 @@ public static class GoldenTools
         foreach (var i in filtered)
         {
             var must = i.Enforcement == "mandatory" ? " **MANDATORY**" : "";
-            sb.AppendLine($"- `{i.Id}` v{i.Version} · **{i.Kind}**{must} — {i.Title}");
+            // No version here on purpose — printing `id vN` hands over everything
+            // needed to write a well-formed `id@N` citation without opening the
+            // document. Only golden_read reports the version, so a correct
+            // citation implies the document was actually read.
+            sb.AppendLine($"- `{i.Id}` · **{i.Kind}**{must} — {i.Title}");
             if (!string.IsNullOrWhiteSpace(i.Description)) sb.AppendLine($"  {i.Description}");
         }
         return sb.ToString();
@@ -112,7 +116,7 @@ public static class GoldenTools
                 bodyHits++;
                 matchedItems.Add(item.Id);
                 var where = string.IsNullOrWhiteSpace(heading) ? "" : $" · under “{Trunc(heading, 60)}”";
-                scored.Add((score, $"- `{item.Id}` v{item.Version} line {n + 1}{where}  \n  `{Trunc(line.Trim(), 160)}`"));
+                scored.Add((score, $"- `{item.Id}` line {n + 1}{where}  \n  `{Trunc(line.Trim(), 160)}`"));
             }
 
             // The item is clearly about the subject asked for — its title, tags or the
@@ -125,7 +129,7 @@ public static class GoldenTools
                 var why = item.Aliases.Any(a => terms.Any(t => a.Contains(t, StringComparison.OrdinalIgnoreCase)))
                     ? "your organisation registered this wording for it" : "its title/description covers this subject";
                 scored.Add((metaHits * 1.5 + (item.Enforcement == "mandatory" ? 1.0 : 0),
-                    $"- `{item.Id}` v{item.Version} · **{Trunc(item.Title, 70)}** — no exact wording match inside, but {why}.  \n  `golden_read` it to check."));
+                    $"- `{item.Id}` · **{Trunc(item.Title, 70)}** — no exact wording match inside, but {why}.  \n  `golden_read` it to check."));
             }
         }
 
