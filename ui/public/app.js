@@ -774,6 +774,39 @@ function initGoldenUI() {
   $("#golden-backdrop").onclick = (e) => { if (e.target === $("#golden-backdrop")) $("#golden-backdrop").hidden = true; };
   $("#golden-add").onclick = () => openGoldenEditor(null);
 
+  // Bulk import — a standards pack is dozens or hundreds of files, and adding
+  // them one at a time is what stops a team ever getting started.
+  $("#golden-import-btn").onclick = () => $("#golden-import-file").click();
+  $("#golden-import-file").onchange = async () => {
+    const f = $("#golden-import-file").files[0];
+    if (!f) return;
+    $("#golden-import-file").value = "";
+    if (!confirm(
+      `Import "${f.name}"?\n\n` +
+      `Every document found (.md, .txt, .docx, .pdf) becomes a Golden item as a DRAFT ` +
+      `marked "reference" — nothing is published and nothing becomes mandatory. ` +
+      `You publish the ones you want afterwards.`
+    )) return;
+
+    showBusy("Importing documents…", "Extracting, converting and indexing — this can take a minute.");
+    try {
+      const r = await (await fetch("/api/golden/import", {
+        method: "POST", headers: { "Content-Type": "application/zip" }, body: f,
+      })).json();
+      if (!r.ok) throw new Error(r.error || "Import failed");
+      await loadGolden();
+      renderGoldenLibrary();
+      renderGoldenSelection();
+      const bits = [`Imported ${r.imported} document${r.imported === 1 ? "" : "s"} as drafts.`];
+      if (r.flagged) bits.push(`⚠ ${r.flagged} contain text written as instructions to an AI — review before publishing.`);
+      if (r.skipped) bits.push(`${r.skipped} skipped (empty or unreadable).`);
+      if (r.overCap) bits.push(`${r.overCap} beyond the ${300} file cap were NOT imported.`);
+      alert(bits.join("\n"));
+    } catch (e) {
+      alert("Import failed: " + e.message);
+    } finally { hideBusy(); }
+  };
+
   document.querySelectorAll(".gt-btn").forEach((b) => (b.onclick = () => {
     document.querySelectorAll(".gt-btn").forEach((x) => x.classList.toggle("active", x === b));
     const sel = b.dataset.tab === "selection";

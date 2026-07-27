@@ -272,8 +272,12 @@ export function catalogBlock(items: GoldenItem[], cap = CATALOG_CAP, boundTempla
   // listed separately so the agent knows to load one when the task matches it.
   const skills = shown.filter((i) => i.kind === "skill");
   const docs = shown.filter((i) => i.kind !== "skill");
+  // Deliberately no version here. The catalog used to print `id vN`, which is
+  // everything needed to write a well-formed `id@N` citation without opening the
+  // document — and agents were observed doing exactly that. `golden_read` returns
+  // "Cite as id@version", so the version can now only come from actually reading.
   const line = (i: GoldenItem) =>
-    `- \`${i.id}\` v${i.version} · **${i.kind}** · ${i.enforcement === "mandatory" ? "**MANDATORY** · " : ""}${i.title} — ${i.description}`;
+    `- \`${i.id}\` · **${i.kind}** · ${i.enforcement === "mandatory" ? "**MANDATORY** · " : ""}${i.title} — ${i.description}`;
   const lines = docs.map(line);
 
   const skillBlock = skills.length

@@ -8,6 +8,7 @@ import crypto from "node:crypto";
 import matter from "gray-matter";
 import { GoldenStore, catalogBlock, CATALOG_CAP, type ProjectGoldenSelection, type GoldenKind } from "./golden.js";
 import { convertDocument } from "./doc-convert.js";
+import JSZip from "jszip";
 import Anthropic from "@anthropic-ai/sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -925,6 +926,28 @@ async function runAgent(
     emit({ type: "text_delta", text: note });
     outText += note;
   }
+
+  // A citation is the whole promise of the Golden Repository: it tells a reader
+  // "this claim rests on your organisation's actual standard". Agents were
+  // observed citing standards they never opened, which makes that promise
+  // unverifiable by eye — a hollow citation looks exactly like a real one.
+  // This is a factual comparison against what the run actually read, so it
+  // cannot be prompted away.
+  const unread = [...new Set(
+    [...outText.matchAll(/\b(GLD-[A-Z]+-\d+)@\d+/g)].map((m) => m[1].toUpperCase())
+  )].filter((id) => !goldenReadThisRun.has(id));
+
+  if (unread.length) {
+    const note =
+      `\n\n_⚠ **Unverified citation${unread.length > 1 ? "s" : ""}:** ` +
+      `${unread.join(", ")} ${unread.length > 1 ? "were" : "was"} cited above but never opened during this run. ` +
+      `The wording may still be right, but it was written from the catalog summary rather than the document — ` +
+      `treat ${unread.length > 1 ? "those claims" : "that claim"} as unverified until checked against the source._`;
+    emit({ type: "text_delta", text: note });
+    outText += note;
+    console.error(`[golden] ${agent.id} cited without reading: ${unread.join(", ")}`);
+  }
+
   return outText;
 }
 
@@ -1067,6 +1090,128 @@ app.post("/api/golden/convert", async (req, res) => {
     res.json({ ok: true, ...out, suggestedTitle: filename.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim() });
   } catch (e) {
     res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+/**
+ * Bulk import — a zip of documents becomes Golden Repository items in one step.
+ *
+ * Adding items one at a time is fine for a handful and impractical for a real
+ * standards library (the pack this was built against has 199 files), which made
+ * it the thing standing between a team and using the feature at all.
+ *
+ * Everything lands as **draft / reference**, never published and never mandatory.
+ * A bulk action must not be able to silently put a document in front of every
+ * agent as an enforced rule — publishing stays a deliberate, per-item decision
+ * (and a mandatory item still needs a named approver).
+ *
+ * MUST stay above `/api/golden/:id` — Express matches in registration order.
+ */
+const IMPORT_EXT = new Set([".md", ".markdown", ".txt", ".docx", ".pdf"]);
+const MAX_IMPORT_FILES = Number(process.env.MAX_IMPORT_FILES ?? 300);
+
+/** First heading or first non-empty line — the one-liner agents see in the catalog. */
+function deriveDescription(md: string, fallback: string): string {
+  for (const raw of md.split("\n").slice(0, 40)) {
+    const line = raw.replace(/^#+\s*/, "").replace(/[*_`>|-]/g, " ").trim();
+    if (line.length > 15 && !/^\s*$/.test(line)) return line.slice(0, 220);
+  }
+  return fallback;
+}
+
+app.post("/api/golden/import", async (req, res) => {
+  const alive = keepJsonAlive(res); // extraction + conversion runs long and silent
+  try {
+    const declared = Number(req.headers["content-length"] || 0);
+    if (declared && declared > MAX_UPLOAD_MB * 1024 * 1024)
+      throw new Error(`That zip is ${(declared / 1048576).toFixed(0)} MB — the limit is ${MAX_UPLOAD_MB} MB.`);
+
+    const chunks: Buffer[] = [];
+    let size = 0;
+    await new Promise<void>((resolve, reject) => {
+      req.on("data", (c: Buffer) => {
+        size += c.length;
+        if (size > MAX_UPLOAD_MB * 1024 * 1024) { req.pause(); req.resume();
+          reject(new Error(`That zip is larger than the ${MAX_UPLOAD_MB} MB limit.`)); return; }
+        chunks.push(c);
+      });
+      req.on("end", () => resolve());
+      req.on("error", reject);
+    });
+    const buf = Buffer.concat(chunks);
+    if (!buf.length) throw new Error("The upload was empty.");
+    if (!(buf[0] === 0x50 && buf[1] === 0x4b)) throw new Error("That is not a .zip file.");
+
+    // Read entries straight out of the archive. Nothing is written to disk, so
+    // there is no zip-slip surface and no dependency on an `unzip` binary being
+    // present (it is not, on Windows).
+    const zip = await JSZip.loadAsync(buf);
+    const found = Object.values(zip.files)
+      .filter((f: any) => !f.dir)
+      .filter((f: any) => {
+        const n = f.name;
+        if (n.includes("__MACOSX/") || n.split("/").some((s: string) => s.startsWith("."))) return false;
+        return IMPORT_EXT.has(path.extname(n).toLowerCase());
+      })
+      .sort((a: any, b: any) => a.name.localeCompare(b.name));
+
+    const imported: any[] = [];
+    const skipped: any[] = [];
+    for (const entry of found.slice(0, MAX_IMPORT_FILES) as any[]) {
+      // Strip a single wrapping folder so "Pack/09_Security/x.md" tags as "security".
+      const parts = entry.name.split("/").filter(Boolean);
+      const rel = (parts.length > 1 && found.every((f: any) => f.name.startsWith(parts[0] + "/")))
+        ? parts.slice(1).join("/") : parts.join("/");
+      const base = path.basename(rel, path.extname(rel));
+      try {
+        const ext = path.extname(rel).toLowerCase();
+        let content: string;
+        let warnings: string[] = [];
+        if (ext === ".docx" || ext === ".pdf") {
+          const out = await convertDocument(await entry.async("nodebuffer"), path.basename(rel));
+          content = out.markdown; warnings = out.warnings;
+        } else {
+          content = await entry.async("string");
+        }
+        if (!content.trim()) { skipped.push({ file: rel, reason: "empty" }); continue; }
+
+        // Top-level folder makes a sensible starting tag — it is how these packs
+        // are already organised (10_Coding_Standards, 09_Security, …).
+        const top = rel.includes("/") ? rel.split("/")[0] : "";
+        const tag = top.replace(/^\d+[_-]/, "").replace(/[_\s]+/g, "-").toLowerCase();
+
+        const item = await golden.create({
+          title: base.replace(/[_-]+/g, " ").trim(),
+          description: deriveDescription(content, `Imported from ${rel}`),
+          kind: "reference",
+          enforcement: "reference",
+          status: "draft",                     // never auto-publish
+          appliesTo: ["all"],
+          tags: tag ? [tag] : [],
+          owner: "imported",
+          sourceName: rel,
+          content,
+        });
+        imported.push({
+          file: rel, id: item.id, chars: item.contentChars,
+          warnings: warnings.filter((w) => w.startsWith("SECURITY")),
+        });
+      } catch (e) {
+        skipped.push({ file: rel, reason: (e as Error).message.slice(0, 160) });
+      }
+    }
+
+    refreshGoldenForActiveProject();
+    alive.send(200, {
+      ok: true,
+      imported: imported.length,
+      skipped: skipped.length,
+      overCap: found.length > MAX_IMPORT_FILES ? found.length - MAX_IMPORT_FILES : 0,
+      flagged: imported.filter((i) => i.warnings.length).length,
+      items: imported, skippedItems: skipped,
+    });
+  } catch (e) {
+    alive.send(400, { ok: false, error: (e as Error).message });
   }
 });
 
