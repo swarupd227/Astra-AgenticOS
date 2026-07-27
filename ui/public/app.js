@@ -166,11 +166,8 @@ function showTab(type) {
 // ---------- zip upload ----------
 let uploadFile = null;
 
-function fmtSize(b) {
-  if (b < 1024) return b + " B";
-  if (b < 1048576) return (b / 1024).toFixed(0) + " KB";
-  return (b / 1048576).toFixed(1) + " MB";
-}
+// fmtSize is defined once, further down. A second copy lived here and was dead —
+// function declarations hoist, so the later one had always won.
 
 function setUploadFile(f) {
   const drop = $("#np-drop");
@@ -327,8 +324,18 @@ function closeModal() { $("#modal-backdrop").hidden = true; }
 // and token on every retry is the difference between "fix it" and "give up".
 function reopenModal() { $("#modal-backdrop").hidden = false; }
 
+// One project operation at a time. Adding a project while the previous one is
+// still cloning/indexing used to do nothing at all — the button stayed enabled,
+// no error appeared, and the form just sat there. Silence reads as "broken".
+let projectOpInFlight = false;
+
 async function submitNewProject() {
-  const type = document.querySelector("#type-seg .seg-btn.active").dataset.type;
+  if (projectOpInFlight)
+    return showModalErr("Still setting up the previous project — wait for it to finish, then try again.");
+
+  const seg = document.querySelector("#type-seg .seg-btn.active");
+  if (!seg) return showModalErr("Pick where the code lives (local folder, git repository, or zip).");
+  const type = seg.dataset.type;
   const name = $("#np-name").value.trim();
   const sub = $("#np-sub").value.trim();
   const errEl = $("#np-error");
@@ -344,12 +351,17 @@ async function submitNewProject() {
   }
 
   errEl.hidden = true;
+  projectOpInFlight = true;
   $("#np-create").disabled = true;
   closeModal();
   showBusy(
     type === "git" ? "Cloning repository…" : type === "upload" ? "Uploading…" : "Adding project…",
     "Then indexing the codebase — this can take a moment."
   );
+  // The project either got created or it didn't. Re-opening the form on a
+  // post-creation refresh failure told the user it failed when it hadn't, and a
+  // retry then produced a duplicate — so the two outcomes are tracked apart.
+  let created = false;
   try {
     if (type === "upload") {
       showUploadProgress(0);
@@ -357,6 +369,7 @@ async function submitNewProject() {
       hideUploadProgress();
       showBusy("Indexing…", "Reading the uploaded codebase.");
       if (!r.ok) throw new Error(r.error || "Upload failed");
+      created = true;
       // The upload endpoint takes query params, so apply the knowledge selection after.
       if (body.golden?.mode === "subset" && r.project?.id) {
         try {
@@ -373,10 +386,20 @@ async function submitNewProject() {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     })).json();
     if (!r.ok) throw new Error(r.error || "Could not create project");
+    created = true;
     await afterProjectChange();
   } catch (e) {
-    reopenModal(); showModalErr(e.message);
+    if (created) {
+      // Created, but a refresh step failed. Do NOT re-open the form — that invites
+      // a duplicate. Reload instead, since the app's view of state is now stale.
+      console.error("[project] created, but refreshing the view failed:", e);
+      alert(`"${name}" was created, but the page could not refresh (${e.message}).\nReloading.`);
+      location.reload();
+    } else {
+      reopenModal(); showModalErr(e.message);
+    }
   } finally {
+    projectOpInFlight = false;
     hideUploadProgress();
     $("#np-create").disabled = false;
     hideBusy();
