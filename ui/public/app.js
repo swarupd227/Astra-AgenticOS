@@ -809,10 +809,12 @@ function initGoldenUI() {
 
   document.querySelectorAll(".gt-btn").forEach((b) => (b.onclick = () => {
     document.querySelectorAll(".gt-btn").forEach((x) => x.classList.toggle("active", x === b));
-    const sel = b.dataset.tab === "selection";
-    $("#golden-list").hidden = sel;
-    $("#golden-selection").hidden = !sel;
-    if (sel) renderGoldenSelection();
+    const tab = b.dataset.tab;
+    $("#golden-list").hidden = tab !== "library";
+    $("#golden-selection").hidden = tab !== "selection";
+    $("#golden-health").hidden = tab !== "health";
+    if (tab === "selection") renderGoldenSelection();
+    if (tab === "health") renderGoldenHealth();
   }));
 
   $("#gold-edit-close").onclick = closeGoldenEditor;
@@ -1118,6 +1120,62 @@ async function saveGoldenItem() {
   } catch (e) {
     err.textContent = e.message; err.hidden = false;
   } finally { $("#gi-save").disabled = false; }
+}
+
+/**
+ * Is the library earning its keep? Every run already knows which items it opened
+ * and which it cited; this is the first screen that reads that back. The two
+ * numbers answer different questions — reads say "an agent consulted this",
+ * citations say "it changed the answer enough to name it".
+ */
+async function renderGoldenHealth() {
+  const box = $("#golden-health");
+  box.innerHTML = `<div class="drawer-empty">Loading…</div>`;
+  let h;
+  try { h = await (await fetch("/api/golden/health")).json(); }
+  catch { box.innerHTML = `<div class="drawer-empty">Could not load usage.</div>`; return; }
+
+  if (!h.runs) {
+    box.innerHTML = `<div class="drawer-empty">No agent runs recorded yet.<br/>
+      Run an agent and this will show which documents it opened, and which it cited.</div>`;
+    return;
+  }
+
+  const s = h.summary;
+  const warn = (n, txt) => n ? `<span class="hz-warn">⚠ ${n} ${txt}</span>` : "";
+  // Never-read is only meaningful for items agents could actually see; a draft
+  // is not unused, it was never in the room.
+  const rows = [...h.items].sort((a, b) =>
+    (b.reads - a.reads) || a.id.localeCompare(b.id));
+
+  box.innerHTML = `
+    <div class="set-hint" style="margin-bottom:10px">
+      Across <b>${h.runs} run${h.runs === 1 ? "" : "s"}</b>${h.since ? ` since ${esc(h.since.slice(0, 10))}` : ""}.
+      ${warn(s.neverRead, "published item(s) never opened")}
+      ${warn(s.hidden, "item(s) not visible to agents")}
+      ${warn(s.unverified, "citation(s) written without opening the document")}
+    </div>
+    <table class="hz">
+      <thead><tr><th>Document</th><th title="Runs that opened this document">Read</th>
+        <th title="Runs that cited it in the answer">Cited</th><th>Last used</th></tr></thead>
+      <tbody>
+      ${rows.map((i) => {
+        const dead = i.visible && i.reads === 0;
+        const cls = !i.visible ? "unseen" : dead ? "dead" : "";
+        const note = !i.visible
+          ? `not visible to agents — ${esc(i.status)}`
+          : dead ? "never opened" : (i.agents.length ? `${i.agents.length} agent${i.agents.length === 1 ? "" : "s"}` : "");
+        return `<tr class="${cls}">
+          <td><span class="hz-title">${esc(i.title)}</span>
+              <span class="hz-sub">${esc(i.id)}${i.enforcement === "mandatory" ? " · mandatory" : ""}${note ? ` · ${note}` : ""}</span>
+              ${i.unverified ? `<span class="hz-warn">⚠ cited ${i.unverified}× without being opened</span>` : ""}</td>
+          <td class="hz-n">${i.reads || "—"}</td>
+          <td class="hz-n">${i.citations || "—"}</td>
+          <td class="hz-when">${i.lastUsed ? esc(i.lastUsed.slice(0, 10)) : "—"}</td>
+        </tr>`;
+      }).join("")}
+      </tbody>
+    </table>`;
 }
 
 /**

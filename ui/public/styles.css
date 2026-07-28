@@ -562,6 +562,25 @@ kbd {
 .field-hint { display: block; color: var(--text-3); font-size: 11px; margin-top: 4px; line-height: 1.35; }
 .field-hint.warn { color: var(--amber-c); }
 
+/* Knowledge health — which documents the agents actually consult. */
+.hz { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.hz th { text-align: left; font-weight: 550; color: var(--text-3); font-size: 11px;
+  text-transform: uppercase; letter-spacing: .04em; padding: 0 8px 6px 0; border-bottom: 1px solid var(--border); }
+.hz th:not(:first-child), .hz td:not(:first-child) { text-align: right; width: 1%; white-space: nowrap; }
+.hz td { padding: 8px 8px 8px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+.hz tr:last-child td { border-bottom: 0; }
+.hz-title { display: block; color: var(--text); font-weight: 550; }
+.hz-sub { display: block; color: var(--text-3); font-size: 11px; margin-top: 1px; }
+.hz-n { color: var(--text); font-variant-numeric: tabular-nums; }
+.hz-when { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.hz-warn { display: block; color: var(--amber-c); font-size: 11px; margin-top: 2px; }
+.set-hint .hz-warn { display: inline; margin: 0 0 0 6px; }
+/* Published but never opened: the row worth acting on. */
+.hz tr.dead .hz-title { color: var(--amber-c); }
+/* Not visible to agents at all — recede, it is a different problem.
+   Deliberately not called `hidden`: that reads as the HTML attribute. */
+.hz tr.unseen .hz-title, .hz tr.unseen .hz-n { color: var(--text-3); font-weight: 500; }
+
 .seg.sm .seg-btn { padding: 6px; font-size: 12px; }
 .gi-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
 .gi-row:has(> .field:nth-child(2):last-child) { grid-template-columns: 1fr 1fr; }

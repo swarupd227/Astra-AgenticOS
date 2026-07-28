@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import crypto from "node:crypto";
 import matter from "gray-matter";
 import { GoldenStore, catalogBlock, CATALOG_CAP, type ProjectGoldenSelection, type GoldenKind } from "./golden.js";
+import { GoldenUsageStore } from "./golden-usage.js";
 import { convertDocument } from "./doc-convert.js";
 import JSZip from "jszip";
 import Anthropic from "@anthropic-ai/sdk";
@@ -100,6 +101,7 @@ const GOLDEN_DIR = process.env.GOLDEN_DIR
   ? path.resolve(process.env.GOLDEN_DIR)
   : path.join(STATE_DIR, "golden");
 const golden = new GoldenStore(GOLDEN_DIR);
+const goldenUsage = new GoldenUsageStore(GOLDEN_DIR);
 
 // Running as a hosted container (Azure App Service / Docker)? Then "local folder"
 // means a folder on the SERVER, not on the user's PC — the UI needs to say so.
@@ -933,9 +935,10 @@ async function runAgent(
   // unverifiable by eye — a hollow citation looks exactly like a real one.
   // This is a factual comparison against what the run actually read, so it
   // cannot be prompted away.
-  const unread = [...new Set(
+  const cited = [...new Set(
     [...outText.matchAll(/\b(GLD-[A-Z]+-\d+)@\d+/g)].map((m) => m[1].toUpperCase())
-  )].filter((id) => !goldenReadThisRun.has(id));
+  )];
+  const unread = cited.filter((id) => !goldenReadThisRun.has(id));
 
   if (unread.length) {
     const note =
@@ -947,6 +950,18 @@ async function runAgent(
     outText += note;
     console.error(`[golden] ${agent.id} cited without reading: ${unread.join(", ")}`);
   }
+
+  // Record what this run consulted. A run that opened nothing still counts —
+  // "agents ran 40 times and never opened this standard" is the finding, and
+  // dropping those rows would quietly flatter the library.
+  void goldenUsage.record({
+    at: new Date().toISOString(),
+    agent: agent.id,
+    project: activeProjectId ?? "",
+    read: [...goldenReadThisRun],
+    cited,
+    unverified: unread,
+  });
 
   return outText;
 }
@@ -1023,6 +1038,40 @@ app.get("/api/golden", (req, res) => {
   const includeArchived = String(req.query.includeArchived) === "true";
   const items = golden.list({ includeArchived });
   res.json({ items, catalogCap: CATALOG_CAP, dir: GOLDEN_DIR });
+});
+
+/**
+ * Is the library working? Joins each item against what agents actually consulted.
+ * MUST stay above `/:id` or "health" is read as an item id.
+ */
+app.get("/api/golden/health", (_req, res) => {
+  const { runs, since, byItem } = goldenUsage.health();
+  const items = golden.list({ includeArchived: false }).map((i) => {
+    const h = byItem.get(i.id.toUpperCase()) ?? byItem.get(i.id);
+    return {
+      id: i.id, title: i.title, kind: i.kind,
+      enforcement: i.enforcement, status: i.status,
+      // Agents only ever see published items, so an unpublished one is not
+      // "unused" — it was never in the room. Keep the two apart.
+      visible: i.status === "published",
+      reads: h?.reads ?? 0,
+      citations: h?.citations ?? 0,
+      unverified: h?.unverified ?? 0,
+      lastUsed: h?.lastUsed ?? null,
+      agents: h?.agents ?? [],
+    };
+  });
+
+  const visible = items.filter((i) => i.visible);
+  res.json({
+    runs, since, items,
+    summary: {
+      total: items.length,
+      hidden: items.length - visible.length,
+      neverRead: visible.filter((i) => i.reads === 0).length,
+      unverified: items.reduce((n, i) => n + i.unverified, 0),
+    },
+  });
 });
 
 app.get("/api/golden/:id", (req, res) => {
