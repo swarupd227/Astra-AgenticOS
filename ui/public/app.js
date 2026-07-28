@@ -866,6 +866,14 @@ function initGoldenUI() {
     const need = $("#gi-enf").value === "mandatory" && $("#gi-status").value === "published";
     $("#gi-approver-field").style.opacity = need ? "1" : ".6";
     $("#gi-approver").placeholder = need ? "Required to publish a mandatory item" : "e.g. J. Weber (Chief Architect)";
+    // Draft is the safe default, but it is also silent — agents skip drafts
+    // entirely, so the cost of leaving it here has to be on screen.
+    const draft = $("#gi-status").value !== "published";
+    const hint = $("#gi-status-hint");
+    hint.textContent = draft
+      ? "Drafts are not visible to agents. Publish when it is ready to be used."
+      : "Agents can read this.";
+    hint.classList.toggle("warn", draft);
   };
   $("#gi-enf").onchange = syncApprover;
   $("#gi-status").onchange = syncApprover;
@@ -987,10 +995,13 @@ function renderGoldenSelection() {
   const all = goldenSel.selection?.mode !== "subset";
   const chosen = new Set(goldenSel.selection?.itemIds || []);
   const over = goldenSel.overCap;
+  // Count what agents will *actually* receive, not what is ticked.
+  const drafts = live.filter((i) => i.status !== "published" && (all || chosen.has(i.id))).length;
   box.innerHTML = `
     <div class="set-hint" style="margin-bottom:8px">
       What <b>${esc(activeProjectName())}</b>'s agents can see. ${goldenSel.selectedCount} selected${
         goldenSel.mandatoryCount ? ` · <b>${goldenSel.mandatoryCount} mandatory</b>` : ""}.
+      ${drafts ? `<span style="color:var(--amber-c)">⚠ ${drafts} of these ${drafts === 1 ? "is a draft and is" : "are drafts and are"} not visible to agents — publish ${drafts === 1 ? "it" : "them"} to make ${drafts === 1 ? "it" : "them"} count.</span>` : ""}
       ${over ? `<span style="color:var(--amber-c)">⚠ Over the ${goldenSel.catalogCap}-item catalog cap — narrow the selection so nothing relevant is hidden.</span>` : ""}
     </div>
     <div class="seg sm" id="gs-seg" style="margin-bottom:8px">
@@ -998,12 +1009,19 @@ function renderGoldenSelection() {
       <button type="button" class="seg-btn ${all ? "" : "active"}" data-gs="subset">Selected</button>
     </div>
     <div class="gold-pick" id="gs-pick" ${all ? "hidden" : ""}>
-      ${live.map((i) => `
-        <label class="gp-item">
+      ${live.map((i) => {
+        // A draft can be ticked, but agents never see it. Say so on the row —
+        // silently accepting the tick is how a selected document ends up
+        // looking like an empty repository.
+        const draft = i.status !== "published";
+        return `
+        <label class="gp-item${draft ? " draft" : ""}">
           <input type="checkbox" value="${esc(i.id)}" ${chosen.has(i.id) ? "checked" : ""} />
           <span><span class="gp-title">${esc(i.title)}</span>
-          <span class="gp-sub"> — ${esc(i.id)} · ${esc(i.kind)}${i.enforcement === "mandatory" ? " · mandatory" : ""}</span></span>
-        </label>`).join("")}
+          <span class="gp-sub"> — ${esc(i.id)} · ${esc(i.kind)}${i.enforcement === "mandatory" ? " · mandatory" : ""}</span>
+          ${draft ? `<span class="gp-warn">Draft — agents cannot see this until it is published</span>` : ""}</span>
+        </label>`;
+      }).join("")}
     </div>
     <button class="btn primary" id="gs-save" style="margin-top:10px">Save knowledge selection</button>`;
 

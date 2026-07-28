@@ -37,7 +37,13 @@ public static class GoldenTools
             .ToList();
 
         if (filtered.Count == 0)
+        {
+            if (_unpublishedSelected.Count > 0 && string.IsNullOrWhiteSpace(kind) && string.IsNullOrWhiteSpace(tag))
+                return $"No Golden Repository items are available to this project, but {_unpublishedSelected.Count} selected item(s) exist as **unpublished drafts** and are therefore invisible to agents: {string.Join(", ", _unpublishedSelected.Select(i => $"`{i}`"))}.\n\n"
+                     + "Tell the user this plainly: their document was uploaded and selected correctly, but its Status is still Draft. Setting it to Published in the Golden Repository makes it available. Do not treat this as 'no standard exists'.";
+
             return "No Golden Repository items match. (An empty catalog means nothing is selected for this project — it is not evidence that no standard exists.)";
+        }
 
         var sb = new StringBuilder();
         sb.AppendLine($"# Golden Repository — {filtered.Count} item(s) available to this project");
@@ -254,13 +260,25 @@ public static class GoldenTools
         var allowed = sel.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                          .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var visible = all
-            .Where(i => i.Status == "published")
+        var forProject = all
             .Where(i => allowed.Count == 0 || allowed.Contains(i.Id))
             .ToList();
 
-        return (visible, null);
+        // Remembered so an empty catalog can say *why* it is empty. A document a
+        // user uploaded and selected but never published is invisible here, and
+        // "no standards exist" is a very different answer from "your standard is
+        // still a draft" — the agent must be able to tell them apart.
+        _unpublishedSelected = forProject
+            .Where(i => i.Status != "published" && i.Status != "archived")
+            .Select(i => i.Id)
+            .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return (forProject.Where(i => i.Status == "published").ToList(), null);
     }
+
+    /// <summary>Ids selected for this project that exist but are not published yet.</summary>
+    private static List<string> _unpublishedSelected = new();
 
     private static string Str(JsonElement e, string name)
         => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";

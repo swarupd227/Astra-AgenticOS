@@ -551,6 +551,12 @@ kbd {
 .gp-item input { margin-top: 2px; flex: 0 0 auto; }
 .gp-title { color: var(--text); font-weight: 550; }
 .gp-sub { color: var(--text-3); font-size: 11.5px; }
+/* A draft can be ticked but agents never receive it — the row has to admit that. */
+.gp-item.draft .gp-title { color: var(--text-2); font-weight: 500; }
+.gp-warn { display: block; color: var(--amber-c); font-size: 11px; margin-top: 1px; }
+
+.field-hint { display: block; color: var(--text-3); font-size: 11px; margin-top: 4px; line-height: 1.35; }
+.field-hint.warn { color: var(--amber-c); }
 
 .seg.sm .seg-btn { padding: 6px; font-size: 12px; }
 .gi-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
