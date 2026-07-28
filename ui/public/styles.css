@@ -447,6 +447,10 @@ kbd {
 .btn { font-size: 13.5px; font-weight: 600; border-radius: 10px; padding: 9px 16px; cursor: pointer; transition: .15s; border: 1px solid transparent; }
 .btn.ghost { background: transparent; border-color: var(--border); color: var(--text-2); }
 .btn.ghost:hover { background: var(--surface-2); color: var(--text); }
+/* The one action a draft row is usually waiting for — worth finding at a glance. */
+.btn.ghost.publish { color: var(--accent); border-color: var(--accent-ring); }
+.btn.ghost.publish:hover { background: var(--accent-bg); color: var(--accent); }
+.btn.ghost.publish:disabled { opacity: .6; cursor: default; }
 .btn.primary { background: linear-gradient(140deg, var(--accent), var(--accent-2)); color: #fff; box-shadow: 0 3px 10px var(--accent-ring); }
 .btn.primary:hover { filter: brightness(1.08); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }

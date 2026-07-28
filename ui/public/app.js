@@ -929,11 +929,13 @@ function renderGoldenLibrary() {
       </div>
       <div class="gr-actions">
         ${i.status === "published" ? `<button class="btn ghost sm" data-test="${esc(i.id)}">Try it</button>` : ""}
+        ${i.status === "draft" ? `<button class="btn ghost sm publish" data-pub="${esc(i.id)}">Publish</button>` : ""}
         <button class="btn ghost sm" data-edit="${esc(i.id)}">Edit</button>
         ${i.status !== "archived" ? `<button class="btn ghost sm" data-arch="${esc(i.id)}">Archive</button>` : ""}
       </div>
       <div class="gr-test" id="gt-${esc(i.id)}" hidden></div>
     </div>`).join("");
+  list.querySelectorAll("[data-pub]").forEach((b) => (b.onclick = () => publishGoldenItem(b.dataset.pub, b)));
   list.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => openGoldenEditor(b.dataset.edit)));
   list.querySelectorAll("[data-arch]").forEach((b) => (b.onclick = () => archiveGoldenItem(b.dataset.arch)));
   list.querySelectorAll("[data-test]").forEach((b) => (b.onclick = () => toggleGoldenTest(b.dataset.test)));
@@ -1116,6 +1118,39 @@ async function saveGoldenItem() {
   } catch (e) {
     err.textContent = e.message; err.hidden = false;
   } finally { $("#gi-save").disabled = false; }
+}
+
+/**
+ * Publish straight from the library row. A bulk zip import lands 300 drafts, and
+ * making each one live should not cost an edit-form round trip — but publishing
+ * stays per-item on purpose, so nobody makes 300 unreviewed documents live at once.
+ *
+ * A mandatory item cannot be published without an approver, so that case hands
+ * over to the editor rather than failing with a message the row cannot act on.
+ */
+async function publishGoldenItem(id, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "Publishing…"; }
+  try {
+    const r = await (await fetch(`/api/golden/${encodeURIComponent(id)}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "published" }),
+    })).json();
+
+    if (!r.ok) {
+      openGoldenEditor(id);
+      $("#gi-status").value = "published";
+      $("#gi-enf").onchange();
+      $("#gi-error").textContent = r.error || "Could not publish this item.";
+      $("#gi-error").hidden = false;
+      $("#gi-approver").focus();
+      return;
+    }
+    await loadGolden();
+    renderGoldenLibrary();
+    renderGoldenSelection();
+  } catch {
+    if (btn) { btn.disabled = false; btn.textContent = "Publish"; }
+  }
 }
 
 async function archiveGoldenItem(id) {
