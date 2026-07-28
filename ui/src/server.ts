@@ -1555,7 +1555,11 @@ app.post("/api/projects", async (req, res) => {
       fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
       const dir = path.join(WORKSPACE_DIR, id);
       try {
-        await execFileP("git", ["clone", "--depth", "1", withCredentials(cleanUrl, pat), dir], {
+        // Deep enough to answer "what changed on my branch", cheap enough not to
+        // pay for a decade of history. `--depth 1 --single-branch` (the default
+        // pairing) leaves git_diff/git_log with one commit and one branch, so every
+        // range an agent might ask for fails to resolve.
+        await execFileP("git", ["clone", "--depth", "50", "--no-single-branch", withCredentials(cleanUrl, pat), dir], {
           timeout: 300000,
           // Without this git blocks on a hidden credential prompt and dies with the
           // cryptic "could not read Username … No such device or address".

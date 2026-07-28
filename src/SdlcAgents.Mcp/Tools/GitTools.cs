@@ -13,6 +13,8 @@ namespace SdlcAgents.Mcp.Tools;
 [McpServerToolType]
 public static class GitTools
 {
+    private const int GitTimeoutMs = 20000;
+
     private static (bool ok, string output) RunGit(string root, string args)
     {
         try
@@ -20,19 +22,43 @@ public static class GitTools
             var psi = new ProcessStartInfo("git", args)
             {
                 WorkingDirectory = root,
+                // Redirected so the child cannot inherit ours. This server speaks
+                // JSON-RPC over stdio, so an un-redirected git that decides to ask a
+                // question blocks reading the protocol stream itself.
+                RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
+            // Belt and braces: git must never have a question to ask in the first place.
+            psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
+            psi.Environment["GCM_INTERACTIVE"] = "never";
+            psi.Environment["GIT_PAGER"] = "cat";
+
             using var p = Process.Start(psi);
             if (p is null) return (false, "Could not start git.");
-            var so = p.StandardOutput.ReadToEnd();
-            var se = p.StandardError.ReadToEnd();
-            p.WaitForExit(20000);
-            if (p.ExitCode != 0 && string.IsNullOrWhiteSpace(so))
-                return (false, string.IsNullOrWhiteSpace(se) ? $"git exited {p.ExitCode}" : se.Trim());
-            return (true, so);
+            p.StandardInput.Close();
+
+            // Drain asynchronously. ReadToEnd() has no timeout, so it ran *before*
+            // the guard below and a git that never exited hung here forever — taking
+            // the whole MCP session with it, because every later tool call queues
+            // behind this one. The timeout was unreachable dead code.
+            var so = p.StandardOutput.ReadToEndAsync();
+            var se = p.StandardError.ReadToEndAsync();
+
+            if (!p.WaitForExit(GitTimeoutMs))
+            {
+                try { p.Kill(entireProcessTree: true); } catch { /* already gone */ }
+                return (false, $"git did not finish within {GitTimeoutMs / 1000}s and was stopped.");
+            }
+            Task.WhenAll(so, se).Wait(2000);   // exit does not imply the pipes are drained
+
+            var outp = so.IsCompletedSuccessfully ? so.Result : "";
+            var err = se.IsCompletedSuccessfully ? se.Result : "";
+            if (p.ExitCode != 0 && string.IsNullOrWhiteSpace(outp))
+                return (false, string.IsNullOrWhiteSpace(err) ? $"git exited {p.ExitCode}" : err.Trim());
+            return (true, outp);
         }
         catch (Exception ex)
         {
@@ -42,6 +68,35 @@ public static class GitTools
 
     private static string Cap(string s, int max) =>
         max > 0 && s.Length > max ? s[..max] + "\n… (truncated)" : s;
+
+    /// <summary>
+    /// A project here is a clone, not somebody's working copy. Its history may be
+    /// truncated and most branches were never fetched, so an empty result usually
+    /// means "not in this checkout" rather than "nothing changed" — and an agent
+    /// told the latter will confidently review a diff it never saw. Returns a note
+    /// describing the limit, or null when the checkout can answer normally.
+    /// </summary>
+    private static string? CheckoutLimits(string root)
+    {
+        var (sok, sh) = RunGit(root, "rev-parse --is-shallow-repository");
+        var shallow = sok && sh.Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
+
+        // A single-branch clone pins the refspec to one branch; a normal clone
+        // wildcards it. Counting branches instead would cry wolf on the many repos
+        // that legitimately have only one.
+        var (rok, refspec) = RunGit(root, "config --get remote.origin.fetch");
+        var singleBranch = rok && !refspec.Contains('*');
+
+        if (!shallow && !singleBranch) return null;
+
+        var parts = new List<string>();
+        if (shallow) parts.Add("its history is truncated");
+        if (singleBranch) parts.Add($"only one branch was fetched ({refspec.Trim()})");
+
+        return $"NOTE — this project is a clone and {string.Join(" and ", parts)}. "
+             + "Anything outside what was fetched cannot be resolved here. That is a limit of this checkout, "
+             + "not evidence that nothing changed — do not report 'no changes' on the strength of it.";
+    }
 
     [McpServerTool(Name = "git_status")]
     [Description("Show the working-tree status of the target repo (staged/unstaged/untracked files). Use to find pending, uncommitted changes before assessing regression risk.")]
@@ -77,9 +132,24 @@ public static class GitTools
         var sub = statOnly ? "--stat" : "";
         var args = string.IsNullOrWhiteSpace(@ref) ? $"diff {sub}".Trim() : $"diff {sub} {@ref}".Trim();
         var (ok, outp) = RunGit(index.Root, args);
-        if (!ok) return $"git_diff failed: {outp}.";
+        var limits = CheckoutLimits(index.Root);
+
+        // An unresolvable ref and an identical ref produce very different truths.
+        // Both used to read as "nothing to see here".
+        if (!ok)
+            return $"git_diff could not resolve `{@ref}`: {outp.Trim()}"
+                 + (limits is null ? "" : "\n\n" + limits);
+
         if (string.IsNullOrWhiteSpace(outp))
-            return "No differences for " + (string.IsNullOrWhiteSpace(@ref) ? "the working tree" : @ref) + ".";
+        {
+            if (!string.IsNullOrWhiteSpace(@ref)) return $"No differences for {@ref}.";
+            return "The working tree is clean — there are no uncommitted edits."
+                 + (limits is null
+                     ? ""
+                     : "\n\n" + limits + "\nTo review a change, diff against a branch or commit instead, "
+                       + "e.g. ref: 'main..my-branch'.");
+        }
+
         return $"# git diff {@ref}".TrimEnd() + "\n```diff\n" + Cap(outp, maxChars) + "\n```";
     }
 
