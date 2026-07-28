@@ -723,6 +723,22 @@ const OPERATING_CONTRACT = `
    through a tool and captured the output. If you did not run it, say so and mark it
    **Unverified**.
 
+   Every tool you have is **static** — it reads files, searches text, walks git history and
+   runs a linter. None of them start the application, reach a deployed environment, compile
+   anything, or run a test. So you are never in a position to write these:
+
+   | Don't write | Write instead |
+   |---|---|
+   | "Authentication is disabled in production." | "\`Auth__Enabled=false\` in \`appsettings.json:12\` (**Observed**). If this file is the one deployed, authentication would be off (**Inferred** — deployment config not visible here)." |
+   | "This endpoint is actively exploited." | "This route has no authorization attribute (**Observed**, \`Foo.cs:44\`). Exploitable only if it is reachable unauthenticated in a deployed environment (**Unverified**)." |
+   | "All 14 tests pass." | "14 test methods exist (**Observed**). Nothing was executed in this run, so pass/fail is **Unverified**." |
+   | "Coverage is 78%." | "\`coverlet.collector\` is absent from the test project (**Observed**), so no coverage figure can be produced here." |
+
+   **This is checked after every run.** Sentences asserting live behaviour, active
+   compromise, or build/test results without a qualifier are detected and flagged beneath
+   your answer. The flag is factual and you cannot argue with it — so write the qualified
+   version the first time.
+
 4. **Never reproduce secrets.** If you encounter credential-like values (keys, tokens,
    connection strings, passwords), refer to them by key/location only — never echo the value.
 
@@ -739,6 +755,50 @@ const OPERATING_CONTRACT = `
 7. **Report state honestly.** Distinguish response text from a saved artifact from a proposed
    patch from an applied change. If you cut a corner, ran out of turns, or skipped a step,
    say so plainly rather than implying completeness.`;
+
+/**
+ * Claims this platform cannot possibly have observed.
+ *
+ * Every tool here is static: it reads files, searches text, walks git history, runs a
+ * linter. Nothing starts the application, reaches a deployed environment, compiles, or
+ * runs a test. So an unhedged sentence asserting live behaviour, an active compromise,
+ * or a test result is not a judgement call — it is describing something no tool in this
+ * run could have seen.
+ *
+ * The operating contract has asked agents to label these since the July 24 report and
+ * the July 28 report still scored Precision at 1.12/3, so asking again is not the fix.
+ * This is the same trick as the citation check: a factual comparison, applied after the
+ * fact, that cannot be prompted away — and the contract tells agents it runs.
+ */
+const RUNTIME_CLAIM =
+  /\b(?:is|are|was|were|has been|have been)\s+(?:currently\s+)?(?:deployed|live|running in production|actively exploited|compromised|breached)\b|\bin (?:the )?(?:live|production) environment\b|\bconfirmed compromise\b|\battackers? (?:can|are) (?:currently|now)\b|\bexploitable\b/gi;
+
+const MEASURED_CLAIM =
+  /\b(?:all|the)\s+\d*\s*tests?\s+(?:pass|passed|are passing)\b|\b\d+\s+tests?\s+(?:pass|passed|fail|failed)\b|\bcompiles?\s+(?:cleanly|successfully|without errors)\b|\bbuild\s+succeed(?:s|ed)\b|\bcoverage\s+(?:is|of|at)\s+\d+(?:\.\d+)?\s*%/gi;
+
+/** Words that show the writer already marked the claim as not-observed. */
+const HEDGED =
+  /\b(?:unverified|inferred|inference|assumption|assumed|not verified|cannot confirm|could not verify|unable to verify|would|could|may|might|appears|suggests|hypothetical|if deployed|if enabled|once deployed|expected to|should|propos(?:e|es|ed|ing)|recommend(?:s|ed|ing)?|plans? to)\b/i;
+
+/**
+ * Sentences asserting runtime or measured facts without hedging them. Scans per
+ * sentence — a caveat three paragraphs away must not excuse an unqualified claim,
+ * which is precisely how "static config" became "confirmed compromise" in CSA-01.
+ */
+function unprovenClaims(text: string): string[] {
+  const found: string[] = [];
+  for (const raw of text.split(/(?<=[.!?])\s+|\n+/)) {
+    const s = raw.trim();
+    if (!s || s.length > 400) continue;      // long lines are usually tables/code, not assertions
+    if (HEDGED.test(s)) continue;
+    RUNTIME_CLAIM.lastIndex = 0; MEASURED_CLAIM.lastIndex = 0;
+    if (RUNTIME_CLAIM.test(s) || MEASURED_CLAIM.test(s)) {
+      found.push(s.replace(/\s+/g, " ").slice(0, 150));
+      if (found.length >= 5) break;
+    }
+  }
+  return found;
+}
 
 // Transient API failures worth retrying (connection drops, overload, 5xx).
 function isRetryable(e: any): boolean {
@@ -1050,6 +1110,22 @@ async function runAgent(
     emit({ type: "text_delta", text: note });
     outText += note;
     console.error(`[golden] ${agent.id} cited without reading: ${unread.join(", ")}`);
+  }
+
+  // Same idea as the citation check, applied to claims about the running world.
+  // Static tools cannot see a deployment or a test result, so these sentences are
+  // describing something this run did not observe — whatever their wording implies.
+  const overreach = unprovenClaims(outText);
+  if (overreach.length) {
+    const note =
+      `\n\n_⚠ **Unproven claim${overreach.length > 1 ? "s" : ""} about runtime or test state:** ` +
+      `every tool available here is static — nothing was deployed, executed, compiled or measured during this run. ` +
+      `${overreach.length > 1 ? "These sentences read" : "This sentence reads"} as observed fact:_\n` +
+      overreach.map((s) => `> ${s}`).join("\n") +
+      `\n\n_Treat ${overreach.length > 1 ? "them" : "it"} as inference until confirmed against a real environment._`;
+    emit({ type: "text_delta", text: note });
+    outText += note;
+    console.error(`[precision] ${agent.id} unproven runtime/test claims: ${overreach.length}`);
   }
 
   // Record what this run consulted. A run that opened nothing still counts —

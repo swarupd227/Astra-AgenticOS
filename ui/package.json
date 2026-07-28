@@ -6,7 +6,8 @@
   "description": "ASTRA AgenticOS — visual UI driving the SDLC agents against any project (local folder or git repo) via the same C# MCP server.",
   "scripts": {
     "start": "tsx src/server.ts",
-    "dev": "tsx watch src/server.ts"
+    "dev": "tsx watch src/server.ts",
+    "test": "node test/precision-claims.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.2",
