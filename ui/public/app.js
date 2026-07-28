@@ -228,6 +228,8 @@ async function loadProjects() {
     activeProjectId = d.activeProjectId;
     const active = projects.find((p) => p.id === activeProjectId);
     if (active) $("#project-name").textContent = active.name;
+    // A different project means a different repo, so the scope chip is stale.
+    if (!$("#chat-topbar").hidden) refreshScopeChip();
   } catch {}
 }
 
@@ -536,6 +538,7 @@ async function selectAgent(id) {
   $("#ct-ico").innerHTML = icon(vis(activeAgent.id).icon, 15);
   $("#ct-name").textContent = activeAgent.name;
   $("#chat-topbar").hidden = false;
+  refreshScopeChip();
   document.body.classList.remove("nav-open"); // close mobile drawer after picking
   renderAgentIntro();
   inputEl.focus();
@@ -816,6 +819,12 @@ function initGoldenUI() {
     if (tab === "selection") renderGoldenSelection();
     if (tab === "health") renderGoldenHealth();
   }));
+
+  $("#scope-chip").onclick = openScopeModal;
+  $("#scope-close").onclick = closeScopeModal;
+  $("#scope-cancel").onclick = closeScopeModal;
+  $("#scope-save").onclick = saveScope;
+  $("#scope-backdrop").onclick = (e) => { if (e.target === $("#scope-backdrop")) closeScopeModal(); };
 
   $("#gold-edit-close").onclick = closeGoldenEditor;
   $("#gi-cancel").onclick = closeGoldenEditor;
@@ -1120,6 +1129,75 @@ async function saveGoldenItem() {
   } catch (e) {
     err.textContent = e.message; err.hidden = false;
   } finally { $("#gi-save").disabled = false; }
+}
+
+// --- Review scope: whole repo, or just my branch --------------------------
+let scopeState = null; // last /branches response for the active project
+
+/**
+ * The chip states what agents are about to look at, in the place you are when
+ * you ask them. A scope you cannot see is one you forget you set — and
+ * "why is it reviewing files I never touched" is a slow thing to work out.
+ */
+async function refreshScopeChip() {
+  const chip = $("#scope-chip");
+  const pid = activeProjectId;
+  if (!pid) { chip.hidden = true; return; }
+  try {
+    const s = await (await fetch(`/api/projects/${encodeURIComponent(pid)}/branches`)).json();
+    scopeState = s;
+    if (!s.git) { chip.hidden = true; return; }   // local folder / upload — nothing to scope
+    const scoped = s.branch && s.baseBranch && s.branch !== s.baseBranch;
+    chip.hidden = false;
+    chip.classList.toggle("on", !!scoped);
+    chip.textContent = scoped ? `${s.branch} vs ${s.baseBranch}` : "Whole repo";
+    chip.title = scoped
+      ? `Agents review only what ${s.branch} changed relative to ${s.baseBranch}.`
+      : "Agents review the whole repository. Click to scope them to one branch's changes.";
+  } catch { chip.hidden = true; }
+}
+
+function openScopeModal() {
+  const s = scopeState;
+  if (!s || !s.git) return;
+  const opts = (sel, list, chosen, blankLabel) => {
+    sel.innerHTML = (blankLabel ? `<option value="">${blankLabel}</option>` : "") +
+      list.map((b) => `<option value="${esc(b)}" ${b === chosen ? "selected" : ""}>${esc(b)}</option>`).join("");
+  };
+  opts($("#scope-branch"), s.branches, s.branch || s.current, "");
+  opts($("#scope-base"), s.branches, s.baseBranch || "", "Whole repository (no comparison)");
+  $("#scope-base-hint").textContent =
+    "Leave blank to review everything. Otherwise agents diff against where your branch split off.";
+  $("#scope-error").hidden = true;
+  $("#scope-backdrop").hidden = false;
+}
+
+function closeScopeModal() { $("#scope-backdrop").hidden = true; }
+
+async function saveScope() {
+  const pid = activeProjectId;
+  if (!pid) return;
+  const branch = $("#scope-branch").value;
+  const baseBranch = $("#scope-base").value;
+  if (branch && baseBranch && branch === baseBranch) {
+    $("#scope-error").textContent = "A branch cannot be compared against itself.";
+    $("#scope-error").hidden = false;
+    return;
+  }
+  closeScopeModal();
+  // Switching branches rewrites the working tree and re-indexes it — that is not
+  // instant, and a silent pause here reads as a hang.
+  showBusy("Switching branch", "Checking out and re-indexing the code…");
+  try {
+    const r = await (await fetch(`/api/projects/${encodeURIComponent(pid)}/scope`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ branch, baseBranch }),
+    })).json();
+    if (!r.ok) { alert(r.error || "Could not change the review scope."); return; }
+    await refreshScopeChip();
+  } catch (e) {
+    alert("Could not change the review scope: " + e.message);
+  } finally { hideBusy(); }
 }
 
 /**

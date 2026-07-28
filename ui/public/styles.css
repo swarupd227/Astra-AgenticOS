@@ -562,6 +562,13 @@ kbd {
 .field-hint { display: block; color: var(--text-3); font-size: 11px; margin-top: 4px; line-height: 1.35; }
 .field-hint.warn { color: var(--amber-c); }
 
+/* Review scope — what the agents are about to look at, stated where you ask. */
+.scope-chip { margin-left: 10px; padding: 3px 9px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent; color: var(--text-3);
+  font-size: 11.5px; font-family: inherit; white-space: nowrap; }
+.scope-chip:hover { color: var(--text); border-color: var(--border-strong); background: var(--surface-2); }
+.scope-chip.on { color: var(--accent); border-color: var(--accent-ring); background: var(--accent-bg); }
+
 /* Knowledge health — which documents the agents actually consult. */
 .hz { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .hz th { text-align: left; font-weight: 550; color: var(--text-3); font-size: 11px;

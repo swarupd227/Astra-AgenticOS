@@ -282,6 +282,13 @@ interface Project {
   createdAt: string;
   /** Which Golden Repository items this project's agents may see. Defaults to all. */
   golden?: ProjectGoldenSelection;
+  /**
+   * Review scope. When both are set and differ, agents are told to confine
+   * themselves to `base...branch` — the developer's actual change — rather than
+   * the whole repository. Unset means review everything.
+   */
+  branch?: string;
+  baseBranch?: string;
 }
 let projects: Project[] = [];
 let activeProjectId: string | null = null;
@@ -482,6 +489,85 @@ async function activateProject(id: string) {
   activeProjectId = id;
   saveProjects();
   await connectMcp(p);
+}
+
+const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" };
+
+/** The repo root for a project, or null when it isn't a git checkout. */
+async function repoRootOf(p: Project): Promise<string | null> {
+  try {
+    const { stdout } = await execFileP("git", ["-C", p.sourceRoot, "rev-parse", "--show-toplevel"],
+      { timeout: 20000, env: GIT_ENV });
+    return stdout.trim() || null;
+  } catch { return null; }
+}
+
+/** Branch names in the checkout (remote-tracking names normalised), plus the one currently out. */
+async function gitBranches(root: string): Promise<{ branches: string[]; current: string }> {
+  const run = async (args: string[]) =>
+    (await execFileP("git", ["-C", root, ...args], { timeout: 20000, env: GIT_ENV })).stdout;
+
+  let current = "";
+  try { current = (await run(["rev-parse", "--abbrev-ref", "HEAD"])).trim(); } catch { /* detached or no repo */ }
+
+  const names = new Set<string>();
+  try {
+    for (const raw of (await run(["branch", "-a", "--format=%(refname:short)"])).split("\n")) {
+      // `origin/main` and `main` are the same branch to a developer; collapse them
+      // so the picker doesn't show every branch twice.
+      const b = raw.trim().replace(/^origin\//, "");
+      if (b && b !== "HEAD" && !b.includes("->")) names.add(b);
+    }
+  } catch { /* leave the list empty — the UI degrades to "whole repo" */ }
+  if (current && current !== "HEAD") names.add(current);
+
+  return { branches: [...names].sort(), current };
+}
+
+/**
+ * `base...head` needs the commit where the branch split off, and a shallow clone
+ * usually doesn't have it — a branch cut more than 50 commits ago resolves to
+ * "no merge base". Deepen until it does, rather than quietly falling back to
+ * `base..head`, which would report every commit that landed on the base branch
+ * since as if the developer had written it.
+ */
+async function ensureMergeBase(root: string, base: string, head: string): Promise<boolean> {
+  const found = async () => {
+    try {
+      await execFileP("git", ["-C", root, "merge-base", base, head], { timeout: 20000, env: GIT_ENV });
+      return true;
+    } catch { return false; }
+  };
+  if (await found()) return true;
+
+  for (const args of [["fetch", "--deepen", "500", "--quiet"], ["fetch", "--unshallow", "--quiet"]]) {
+    // Either can fail harmlessly: --unshallow errors on an already-complete repo,
+    // and both fail when the remote is unreachable. The check below is the truth.
+    try { await execFileP("git", ["-C", root, ...args], { timeout: 300000, env: GIT_ENV }); } catch { /* see above */ }
+    if (await found()) return true;
+  }
+  return false;
+}
+
+/**
+ * The instruction that turns "review this repo" into "review my change".
+ *
+ * `base...branch` (three dots) is deliberate: it diffs against the point the
+ * branch diverged, so unrelated commits landing on main afterwards don't show up
+ * as the developer's work. Two dots would blame them for everyone else's changes.
+ */
+function reviewScopeBlock(): string {
+  const p = projects.find((x) => x.id === activeProjectId);
+  const head = p?.branch?.trim();
+  const base = p?.baseBranch?.trim();
+  if (!p || !head || !base || head === base) return "";
+
+  return `\n---\n## Review scope — this run is about one change, not the whole repository\n` +
+    `The user is working on branch \`${head}\` and reviewing it against \`${base}\`.\n` +
+    `Call \`git_diff\` with ref \`${base}...${head}\` to see exactly what changed, and keep your ` +
+    `findings to those changes. Read the wider codebase only to judge whether a change is safe — ` +
+    `do not report pre-existing issues in untouched files as if they were part of this change.\n` +
+    `If that range cannot be resolved, say so and stop; do not silently review everything instead.`;
 }
 
 // The MCP SDK defaults to a 60s per-call timeout. That is fine for a warm index but
@@ -693,6 +779,8 @@ const ORCH_GROUNDING = ["solution_overview", "find_symbol", "search_code", "read
  * makes it return BLOCKED instead of answering.
  */
 const GOLDEN_TOOLS = ["golden_catalog", "golden_search", "golden_read"];
+/** What an agent needs to answer "what did this branch change?". */
+const SCOPE_TOOLS = ["git_diff", "git_log", "git_show", "git_status"];
 
 /**
  * Templates bound to a specific agent: published `template` items whose appliesTo
@@ -771,6 +859,17 @@ async function runAgent(
   );
   if (missingGolden.length) tools = [...tools, ...missingGolden];
 
+  // A scoped run is an instruction to diff a range, so grant the tools that do it
+  // whatever the agent declared. Telling an agent to call git_diff and then not
+  // handing it over turns the review into a refusal — observed, not theorised.
+  const scoped = reviewScopeBlock() !== "";
+  if (scoped) {
+    const missingGit = mcpTools.filter(
+      (t) => SCOPE_TOOLS.includes(t.name) && !tools.some((x) => x.name === t.name)
+    );
+    if (missingGit.length) tools = [...tools, ...missingGit];
+  }
+
   // Prior turns give the conversation memory; the new question goes last.
   const messages: Anthropic.MessageParam[] = [
     ...prior,
@@ -802,7 +901,9 @@ async function runAgent(
           system: [
             {
               type: "text",
-              text: `${agent.systemPrompt}\n\n---\n**Today's date is ${new Date().toISOString().slice(0, 10)}.** Use it for any date you write (document dates, changelogs, gate records). Never invent or guess a date.\n${STACK_AWARENESS}\n${goldenCatalogFor(agent.id)}\n${OPERATING_CONTRACT}`,
+              // The scope block goes last: it changes only when the user switches
+              // branches, so the expensive prefix above it stays cacheable.
+              text: `${agent.systemPrompt}\n\n---\n**Today's date is ${new Date().toISOString().slice(0, 10)}.** Use it for any date you write (document dates, changelogs, gate records). Never invent or guess a date.\n${STACK_AWARENESS}\n${goldenCatalogFor(agent.id)}\n${OPERATING_CONTRACT}${reviewScopeBlock()}`,
               cache_control: { type: "ephemeral" },
             },
           ],
@@ -1336,6 +1437,75 @@ app.get("/api/golden-selection", (_req, res) => {
     catalogCap: CATALOG_CAP,
     overCap: selected.filter((i) => i.status === "published").length > CATALOG_CAP,
   });
+});
+
+/** Branches available for review scoping, plus the project's current scope. */
+app.get("/api/projects/:id/branches", async (req, res) => {
+  const p = projects.find((x) => x.id === req.params.id);
+  if (!p) { res.status(404).json({ ok: false, error: "Project not found." }); return; }
+
+  const root = await repoRootOf(p);
+  if (!root) { res.json({ ok: true, git: false, branches: [], current: "", branch: "", baseBranch: "" }); return; }
+
+  const { branches, current } = await gitBranches(root);
+  res.json({ ok: true, git: true, branches, current, branch: p.branch ?? current, baseBranch: p.baseBranch ?? "" });
+});
+
+/**
+ * Set what this project's agents are reviewing. Checking the branch out matters
+ * as much as recording it: agents read files through the index, so reviewing a
+ * diff while the working tree still holds another branch would have them reading
+ * one version and reporting on another.
+ */
+app.post("/api/projects/:id/scope", async (req, res) => {
+  const p = projects.find((x) => x.id === req.params.id);
+  if (!p) { res.status(404).json({ ok: false, error: "Project not found." }); return; }
+
+  const branch = String(req.body?.branch ?? "").trim();
+  const baseBranch = String(req.body?.baseBranch ?? "").trim();
+
+  const root = await repoRootOf(p);
+  if (!root) { res.status(400).json({ ok: false, error: "This project is not a git checkout." }); return; }
+
+  if (branch) {
+    const { branches, current } = await gitBranches(root);
+    if (!branches.includes(branch)) {
+      res.status(400).json({ ok: false, error: `No branch named "${branch}" in this checkout.` });
+      return;
+    }
+    if (branch !== current) {
+      try {
+        await execFileP("git", ["-C", root, "checkout", branch], { timeout: 60000, env: GIT_ENV });
+      } catch (e: any) {
+        const why = String(e?.stderr || e?.message || e).slice(0, 300);
+        res.status(400).json({ ok: false, error: `Could not check out "${branch}": ${why}` });
+        return;
+      }
+    }
+  }
+
+  if (branch && baseBranch && branch !== baseBranch) {
+    if (!(await ensureMergeBase(root, baseBranch, branch))) {
+      res.status(400).json({
+        ok: false,
+        error: `This checkout cannot work out where "${branch}" split off from "${baseBranch}", ` +
+          `even after fetching more history. Reviewing the change would mean guessing which commits are yours, ` +
+          `so the scope was not applied.`,
+      });
+      return;
+    }
+  }
+
+  p.branch = branch || undefined;
+  p.baseBranch = baseBranch || undefined;
+  saveProjects();
+
+  // Re-index: the files on disk just changed underneath the agents.
+  if (activeProjectId === p.id) {
+    try { await activateProject(p.id); }
+    catch (e) { console.error("[scope] re-activate failed:", (e as Error).message); }
+  }
+  res.json({ ok: true, branch: p.branch ?? "", baseBranch: p.baseBranch ?? "" });
 });
 
 /** Change a project's Golden selection (works before and after creation). */

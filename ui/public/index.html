@@ -53,7 +53,36 @@
       <div class="chat-topbar" id="chat-topbar" hidden>
         <span class="ct-ico" id="ct-ico"></span>
         <span class="ct-name" id="ct-name"></span>
+        <button class="scope-chip" id="scope-chip" type="button" hidden></button>
         <button class="ct-new" id="ct-new" type="button">New conversation</button>
+      </div>
+
+      <div class="modal-backdrop" id="scope-backdrop" hidden>
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="scope-title">
+          <div class="modal-head"><h3 id="scope-title">What should agents review?</h3>
+            <button class="icon-btn" id="scope-close" type="button" aria-label="Close"></button></div>
+          <div class="modal-body">
+            <div class="set-hint" style="margin-bottom:10px">
+              Scope agents to one change instead of the whole repository. They compare your
+              branch against its base, and report only what that change touched.
+            </div>
+            <label class="field">
+              <span class="field-label">Your branch</span>
+              <select id="scope-branch"></select>
+              <span class="field-hint">Checked out so agents read the same code they review.</span>
+            </label>
+            <label class="field">
+              <span class="field-label">Compare against</span>
+              <select id="scope-base"></select>
+              <span class="field-hint" id="scope-base-hint"></span>
+            </label>
+            <div class="modal-error" id="scope-error" hidden></div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn ghost" id="scope-cancel" type="button">Cancel</button>
+            <button class="btn primary" id="scope-save" type="button">Apply</button>
+          </div>
+        </div>
       </div>
       <div id="conversation" class="conversation"></div>
 
