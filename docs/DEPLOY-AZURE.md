@@ -9,6 +9,46 @@ alternative is at the bottom.
 
 ---
 
+## Redeploying the existing app
+
+**This is the common case — skip everything below it.** Sections 0-6 build a deployment from
+nothing; once one exists you only ever do three things: build a new image, point the app at it,
+restart. The registry credentials, port, and app settings are already stored on the web app and
+do not need to be set again.
+
+Current deployment:
+
+| | |
+|---|---|
+| Subscription | Microsoft Azure Sponsorship |
+| Resource group | `astra-rg` |
+| Registry | `astraacr9030` |
+| Web app | `astra-agenticos-22676` → https://astra-agenticos-22676.azurewebsites.net |
+
+```bash
+az account set --subscription "Microsoft Azure Sponsorship"
+TAG=$(date +%Y%m%d-%H%M%S)
+
+rm -rf Astra-AgenticOS && git clone https://github.com/swarupd227/Astra-AgenticOS.git
+az acr build -r astraacr9030 -t astra-agenticos:$TAG ./Astra-AgenticOS
+
+az webapp config container set -g astra-rg -n astra-agenticos-22676 \
+  --docker-custom-image-name astraacr9030.azurecr.io/astra-agenticos:$TAG
+
+az webapp restart -g astra-rg -n astra-agenticos-22676
+```
+
+The build takes ~3 minutes; the first request after the restart pays for a ~1.9 GB image pull.
+
+**Use a fresh tag every time.** Rebuilding `:latest` leaves the tag unchanged, so App Service has
+no reason to re-pull and quietly keeps serving the old image — which looks exactly like a deploy
+that succeeded but changed nothing.
+
+`/home` holds the state directory, artifacts, workspaces and the Golden Repository, and is backed
+by the App Service file share — so a redeploy keeps everyone's projects, documents and history.
+
+---
+
 ## 0. Variables (edit these)
 
 ```bash
@@ -17,7 +57,7 @@ LOC=germanywestcentral                 # Frankfurt (data residency); or westeuro
 ACR=astraacr$RANDOM                    # must be globally unique, lowercase alphanumeric
 APP=astra-agenticos-$RANDOM            # web app name → https://<APP>.azurewebsites.net
 PLAN=astra-plan
-IMAGE=astra-agenticos:latest
+IMAGE=astra-agenticos:$(date +%Y%m%d-%H%M%S)   # never :latest — see the redeploy note above
 ANTHROPIC_KEY='sk-ant-REPLACE-ME'      # your Anthropic API key
 ```
 
