@@ -57,6 +57,54 @@ export function unprovenClaims(text: string): string[] {
   return found;
 }
 
+/**
+ * Verdicts that tell a reader a change is safe to take.
+ *
+ * "Backward compatible" is five different questions wearing one coat. A method whose
+ * signature is unchanged in source can still break every compiled caller; a field
+ * renamed in a DTO breaks nothing at compile time and every persisted document at read
+ * time. Round 2 marked this incomplete across SPV, DHA, DC, DEP and FVM — Spec
+ * Validator missed public-API binary compatibility outright.
+ */
+export const COMPAT_VERDICT =
+  /\b(?:backwards?[- ]compatible|non[- ]breaking|not a breaking change|no breaking changes|purely additive|additive[- ]only|drop[- ]in replacement|safe to (?:remove|delete)|no impact on (?:consumers|callers|clients))\b/i;
+
+/**
+ * Words that make such a verdict answerable: which compatibility, or — for a removal —
+ * which of the ways a symbol stays reachable without a visible call site.
+ */
+export const COMPAT_KIND =
+  /\b(?:source|binary|ABI|schema|serial(?:is|iz)(?:ation|ed|able)|wire|package|NuGet|npm|semver|migration|API surface|on[- ]disk|reflection|dependency injection|DI|config(?:uration)?[- ]bound|Activator|dynamic(?:ally)?|entry ?point|public API|(?:un)?exported|internal|private)\b/i;
+
+/**
+ * Reporting somebody else's compatibility claim is not making one. "The vendor
+ * documents this as a drop-in replacement" is an accurate observation about the
+ * documentation, and demanding a kind from it would punish exactly the sourcing we
+ * want.
+ */
+export const ATTRIBUTED =
+  /\b(?:documents?|documented|claims?|claimed|advertis(?:e|es|ed)|according to|per the|release notes|changelog|upstream says|states that)\b/i;
+
+/**
+ * Compatibility verdicts that never say which compatibility they mean.
+ *
+ * Naming a kind is enough to pass — this forces the question to be answered, it does
+ * not judge the answer. A hedged verdict passes too: "should be source-compatible" is
+ * already an admission that it was not verified.
+ */
+export function unqualifiedCompatibility(text: string): string[] {
+  const found: string[] = [];
+  for (const raw of text.split(SENTENCES)) {
+    const s = raw.trim();
+    if (!s || s.length > 400) continue;
+    if (!COMPAT_VERDICT.test(s)) continue;
+    if (COMPAT_KIND.test(s) || HEDGED.test(s) || ATTRIBUTED.test(s)) continue;
+    found.push(s.replace(/\s+/g, " ").slice(0, 150));
+    if (found.length >= 5) break;
+  }
+  return found;
+}
+
 /** Words that assert something was written down, not proposed or observed. */
 export const SAVE_VERB = /\b(?:saved|persisted|stored|written)\b/i;
 

@@ -8,7 +8,12 @@
  * are the shapes that scored Precision at 1.12/3 in the Round 2 black-box report
  * (28 July 2026); several are verbatim from real runs against gin.
  */
-import { unprovenClaims, unsavedArtifactClaims, missingInputGate } from "../src/verify.js";
+import {
+  unprovenClaims,
+  unsavedArtifactClaims,
+  unqualifiedCompatibility,
+  missingInputGate,
+} from "../src/verify.js";
 
 let failures = 0;
 const fail = (msg: string) => { console.error(msg); failures++; };
@@ -74,6 +79,43 @@ for (const [text, saved, expected] of SAVED) {
   if (got !== expected) fail(`SAVED    | expected ${expected} phantom(s), got ${got} | ${text}`);
 }
 
+// --- compatibility verdicts without a kind --------------------------------
+
+/** Tells the reader a change is safe to take, without saying safe in which sense. */
+const COMPAT_FLAG = [
+  "This change is backward compatible.",
+  "The refactor is non-breaking.",
+  "These additions are purely additive.",
+  "There are no breaking changes in this release.",
+  "The new client is a drop-in replacement.",
+  "`LegacyHelper` is unused and safe to remove.",
+  "Renaming the property has no impact on consumers.",
+  // SPV-01 missed exactly this: source unchanged, compiled callers broken.
+  "Adding the optional parameter is not a breaking change.",
+];
+
+/** Names a kind, or admits it was not verified. Either answers the question. */
+const COMPAT_QUIET = [
+  "Source-compatible; binary compatibility is broken by the added parameter (Observed).",
+  "Backward compatible at the source level only — compiled callers must be rebuilt.",
+  "Purely additive to the wire schema; the on-disk format is unchanged.",
+  "Safe to remove: no reflection, DI registration or configuration binding references it.",
+  "This should be backward compatible, but nothing was rebuilt to confirm it (Unverified).",
+  "The package bump is non-breaking under semver, though the transitive graph shifts.",
+  "No impact on consumers of the serialized contract; the property name is unchanged.",
+  // Reporting somebody else's claim, not making one.
+  "The vendor documents the upgrade as a drop-in replacement for the previous major.",
+  // The claim requiring reconciliation, called out by name in the report.
+  "Switching DateTime to DateTimeOffset is a schema change requiring a migration.",
+  // Visibility is the compatibility answer for a removal: nothing outside the
+  // package can reference an unexported symbol. Observed from a real dead-code run.
+  "These are unexported and have no production callers, so they are safe to remove.",
+  "`LegacyHelper` is private and safe to delete.",
+];
+
+for (const s of COMPAT_FLAG) if (unqualifiedCompatibility(s).length === 0) fail(`COMPAT ? | ${s}`);
+for (const s of COMPAT_QUIET) if (unqualifiedCompatibility(s).length > 0) fail(`COMPAT + | ${s}`);
+
 // --- the prerequisite gate ------------------------------------------------
 
 /** [label, tool, names that failed to read, successful reads, should it block] */
@@ -106,6 +148,7 @@ if (!msg.includes("brd.md")) fail("GATE     | block message does not name the mi
 
 console.log(
   `${FLAG.length} must-flag, ${QUIET.length} must-stay-quiet, ` +
+  `${COMPAT_FLAG.length + COMPAT_QUIET.length} compatibility, ` +
   `${SAVED.length} save-claim, ${GATE.length} gate cases — ${failures} failure(s)`
 );
 process.exit(failures ? 1 : 0);

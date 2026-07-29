@@ -8,7 +8,7 @@ import crypto from "node:crypto";
 import matter from "gray-matter";
 import { GoldenStore, catalogBlock, CATALOG_CAP, type ProjectGoldenSelection, type GoldenKind } from "./golden.js";
 import { GoldenUsageStore } from "./golden-usage.js";
-import { unprovenClaims, unsavedArtifactClaims, missingInputGate } from "./verify.js";
+import { unprovenClaims, unsavedArtifactClaims, unqualifiedCompatibility, missingInputGate } from "./verify.js";
 import { convertDocument } from "./doc-convert.js";
 import JSZip from "jszip";
 import Anthropic from "@anthropic-ai/sdk";
@@ -755,7 +755,29 @@ const OPERATING_CONTRACT = `
 
 7. **Report state honestly.** Distinguish response text from a saved artifact from a proposed
    patch from an applied change. If you cut a corner, ran out of turns, or skipped a step,
-   say so plainly rather than implying completeness.`;
+   say so plainly rather than implying completeness.
+
+8. **"Compatible" is not one question.** These fail independently, and a reader acts on your
+   verdict — so say which one you checked, and which you did not:
+
+   | Kind | Breaks when | Cheap tell |
+   |---|---|---|
+   | **Source** | callers no longer compile | signature, generic arity, optional params |
+   | **Binary** | *compiled* callers break though source is fine | reordered/added params, type→interface, const→static readonly, renamed public member |
+   | **Schema** | stored data no longer loads | column type/nullability, added NOT NULL, dropped default |
+   | **Serialization** | payloads or documents no longer round-trip | renamed DTO property, changed enum numbering, tightened contract |
+   | **Package** | resolution or transitive graph breaks | major bump, changed TFM, moved namespace |
+   | **Migration** | the upgrade path itself fails | irreversible step, no rollback, ordering dependency |
+
+   Source compatibility is the weakest of these and the easiest to mistake for the others: a
+   method whose signature is unchanged in source can still break every compiled caller, and a
+   renamed DTO property breaks nothing at compile time and every persisted document at read
+   time. **Never write "backward compatible", "non-breaking", "purely additive" or "safe to
+   remove" unqualified** — an unqualified verdict is flagged automatically beneath your answer.
+
+   For a removal, "safe" also means unreachable by the routes that have no visible call site:
+   reflection, DI registration, configuration binding, serialization, and entry points. If you
+   did not check those, say which you did not.`;
 
 
 // Transient API failures worth retrying (connection drops, overload, 5xx).
@@ -1123,6 +1145,22 @@ async function runAgent(
     emit({ type: "text_delta", text: note });
     outText += note;
     console.error(`[precision] ${agent.id} unproven runtime/test claims: ${overreach.length}`);
+  }
+
+  // "Backward compatible" is five questions in one coat, and the reader acts on the
+  // answer. Naming a kind clears this — it forces the question, it does not grade it.
+  const vague = unqualifiedCompatibility(outText);
+  if (vague.length) {
+    const one = vague.length === 1;
+    const note =
+      `\n\n_⚠ **Compatibility verdict without a kind:** source, binary, schema, serialization, ` +
+      `package and migration compatibility fail independently — a signature unchanged in source can ` +
+      `still break every compiled caller. ${one ? "This verdict does" : "These verdicts do"} not say which:_\n` +
+      vague.map((s) => `> ${s}`).join("\n") +
+      `\n\n_Name the kind you checked, and the kinds you did not._`;
+    emit({ type: "text_delta", text: note });
+    outText += note;
+    console.error(`[compat] ${agent.id} unqualified compatibility verdicts: ${vague.length}`);
   }
 
   // "Saved" has to survive someone going to look for it. This compares the answer's
