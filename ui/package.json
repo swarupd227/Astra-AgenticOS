@@ -7,7 +7,7 @@
   "scripts": {
     "start": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts",
-    "test": "node test/precision-claims.mjs"
+    "test": "tsx test/verify.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.2",

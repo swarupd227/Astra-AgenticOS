@@ -8,6 +8,7 @@ import crypto from "node:crypto";
 import matter from "gray-matter";
 import { GoldenStore, catalogBlock, CATALOG_CAP, type ProjectGoldenSelection, type GoldenKind } from "./golden.js";
 import { GoldenUsageStore } from "./golden-usage.js";
+import { unprovenClaims, unsavedArtifactClaims, missingInputGate } from "./verify.js";
 import { convertDocument } from "./doc-convert.js";
 import JSZip from "jszip";
 import Anthropic from "@anthropic-ai/sdk";
@@ -756,49 +757,6 @@ const OPERATING_CONTRACT = `
    patch from an applied change. If you cut a corner, ran out of turns, or skipped a step,
    say so plainly rather than implying completeness.`;
 
-/**
- * Claims this platform cannot possibly have observed.
- *
- * Every tool here is static: it reads files, searches text, walks git history, runs a
- * linter. Nothing starts the application, reaches a deployed environment, compiles, or
- * runs a test. So an unhedged sentence asserting live behaviour, an active compromise,
- * or a test result is not a judgement call — it is describing something no tool in this
- * run could have seen.
- *
- * The operating contract has asked agents to label these since the July 24 report and
- * the July 28 report still scored Precision at 1.12/3, so asking again is not the fix.
- * This is the same trick as the citation check: a factual comparison, applied after the
- * fact, that cannot be prompted away — and the contract tells agents it runs.
- */
-const RUNTIME_CLAIM =
-  /\b(?:is|are|was|were|has been|have been)\s+(?:currently\s+)?(?:deployed|live|running in production|actively exploited|compromised|breached)\b|\bin (?:the )?(?:live|production) environment\b|\bconfirmed compromise\b|\battackers? (?:can|are) (?:currently|now)\b|\bexploitable\b/gi;
-
-const MEASURED_CLAIM =
-  /\b(?:all|the)\s+\d*\s*tests?\s+(?:pass|passed|are passing)\b|\b\d+\s+tests?\s+(?:pass|passed|fail|failed)\b|\bcompiles?\s+(?:cleanly|successfully|without errors)\b|\bbuild\s+succeed(?:s|ed)\b|\bcoverage\s+(?:is|of|at)\s+\d+(?:\.\d+)?\s*%/gi;
-
-/** Words that show the writer already marked the claim as not-observed. */
-const HEDGED =
-  /\b(?:unverified|inferred|inference|assumption|assumed|not verified|cannot confirm|could not verify|unable to verify|would|could|may|might|appears|suggests|hypothetical|if deployed|if enabled|once deployed|expected to|should|propos(?:e|es|ed|ing)|recommend(?:s|ed|ing)?|plans? to)\b/i;
-
-/**
- * Sentences asserting runtime or measured facts without hedging them. Scans per
- * sentence — a caveat three paragraphs away must not excuse an unqualified claim,
- * which is precisely how "static config" became "confirmed compromise" in CSA-01.
- */
-function unprovenClaims(text: string): string[] {
-  const found: string[] = [];
-  for (const raw of text.split(/(?<=[.!?])\s+|\n+/)) {
-    const s = raw.trim();
-    if (!s || s.length > 400) continue;      // long lines are usually tables/code, not assertions
-    if (HEDGED.test(s)) continue;
-    RUNTIME_CLAIM.lastIndex = 0; MEASURED_CLAIM.lastIndex = 0;
-    if (RUNTIME_CLAIM.test(s) || MEASURED_CLAIM.test(s)) {
-      found.push(s.replace(/\s+/g, " ").slice(0, 150));
-      if (found.length >= 5) break;
-    }
-  }
-  return found;
-}
 
 // Transient API failures worth retrying (connection drops, overload, 5xx).
 function isRetryable(e: any): boolean {
@@ -841,6 +799,22 @@ const ORCH_GROUNDING = ["solution_overview", "find_symbol", "search_code", "read
 const GOLDEN_TOOLS = ["golden_catalog", "golden_search", "golden_read"];
 /** What an agent needs to answer "what did this branch change?". */
 const SCOPE_TOOLS = ["git_diff", "git_log", "git_show", "git_status"];
+
+/**
+ * Reading a previous stage's output is not a privilege — it is the handoff.
+ *
+ * Every one of the 32 personas declares `save_artifact`; only three declared
+ * `read_artifact`. So 29 agents could write a deliverable and none of them could open
+ * one, which makes a chain impossible by construction. Round 2 scored the consequences
+ * without naming the cause: Regression got 5 for assessing "candidate artifacts [that]
+ * could not be read" — it had no tool that could read them; Code Generation identified
+ * a missing ADR it could not have opened; ADR continued past a BRD it could not
+ * retrieve.
+ *
+ * Read-only and confined to the active project's own artifacts directory, so granting
+ * it universally costs nothing and removes the floor under those failures.
+ */
+const ARTIFACT_READ_TOOLS = ["list_artifacts", "read_artifact"];
 
 /**
  * Templates bound to a specific agent: published `template` items whose appliesTo
@@ -903,6 +877,11 @@ async function runAgent(
   let outText = ""; // this agent's own streamed answer (returned so it can be persisted)
   // Golden items this run has actually read — the evidence the template gate checks.
   const goldenReadThisRun = new Set<string>();
+  // Inputs this run named and could not retrieve, what it did retrieve, and what it
+  // actually wrote — the evidence behind the prerequisite gate and the saved-claim check.
+  const failedArtifactReads = new Set<string>();
+  let successfulArtifactReads = 0;
+  const savedThisRun = new Set<string>();
   // Orchestrator (top level only) gets read-only grounding tools + `delegate`.
   // Everyone else: intersect declared tools with what the MCP server provides.
   const isOrch = agent.id === ORCH_ID && depth === 0;
@@ -913,11 +892,13 @@ async function runAgent(
     const allowed = mcpTools.filter((t) => agent.tools.includes(t.name));
     tools = allowed.length ? allowed : mcpTools;
   }
-  // Always grant the Golden Repository tools — see GOLDEN_TOOLS.
-  const missingGolden = mcpTools.filter(
-    (t) => GOLDEN_TOOLS.includes(t.name) && !tools.some((x) => x.name === t.name)
+  // Always grant the Golden Repository tools — see GOLDEN_TOOLS — and the ability to
+  // read prior artifacts — see ARTIFACT_READ_TOOLS.
+  const alwaysOn = [...GOLDEN_TOOLS, ...ARTIFACT_READ_TOOLS];
+  const missingAlwaysOn = mcpTools.filter(
+    (t) => alwaysOn.includes(t.name) && !tools.some((x) => x.name === t.name)
   );
-  if (missingGolden.length) tools = [...tools, ...missingGolden];
+  if (missingAlwaysOn.length) tools = [...tools, ...missingAlwaysOn];
 
   // A scoped run is an instruction to diff a range, so grant the tools that do it
   // whatever the agent declared. Telling an agent to call git_diff and then not
@@ -1059,7 +1040,9 @@ async function runAgent(
         // Phase 3 — hard template binding. A template that names THIS agent must be
         // read before the agent is allowed to save a deliverable. Enforced here rather
         // than asked for in the prompt, so it can't be skipped.
-        const gate = templateGate(agent.id, tu.name, goldenReadThisRun);
+        const gate =
+          templateGate(agent.id, tu.name, goldenReadThisRun) ??
+          missingInputGate(tu.name, failedArtifactReads, successfulArtifactReads);
         if (gate) {
           resultText = gate;
           emit({ type: "tool_result", id: tu.id, name: tu.name, result: resultText });
@@ -1071,6 +1054,20 @@ async function runAgent(
           if (tu.name === "golden_read") {
             const id = String((tu.input as any)?.id ?? "").trim().toUpperCase();
             if (id && !resultText.startsWith("'")) goldenReadThisRun.add(id); // '…' = refusal
+          }
+          if (tu.name === "read_artifact") {
+            const asked = String((tu.input as any)?.name ?? "").trim();
+            if (resultText.startsWith("Artifact not found:")) {
+              if (asked) failedArtifactReads.add(asked);
+            } else if (!resultText.startsWith("Refused:")) {
+              successfulArtifactReads++;
+            }
+          }
+          if (tu.name === "save_artifact") {
+            // "Saved artifact to `path`", "Updated existing artifact `path`",
+            // "Artifact `path` already contains…" — "Refused:" deliberately matches none.
+            const m = resultText.match(/^(?:Saved artifact to|Updated existing artifact|Artifact) `([^`]+)`/);
+            if (m) savedThisRun.add(m[1]);
           }
         } catch (e) {
           resultText = `ERROR: ${(e as Error).message}`;
@@ -1126,6 +1123,21 @@ async function runAgent(
     emit({ type: "text_delta", text: note });
     outText += note;
     console.error(`[precision] ${agent.id} unproven runtime/test claims: ${overreach.length}`);
+  }
+
+  // "Saved" has to survive someone going to look for it. This compares the answer's
+  // own words against what the tool actually wrote — not a judgement, a lookup.
+  const phantom = unsavedArtifactClaims(outText, savedThisRun);
+  if (phantom.length) {
+    const one = phantom.length === 1;
+    const note =
+      `\n\n_⚠ **Artifact${one ? "" : "s"} reported as saved but not written this run:** ` +
+      `${phantom.map((p) => `\`${p}\``).join(", ")}. ` +
+      `Nothing by that name was persisted, so ${one ? "it" : "they"} cannot be retrieved or reviewed. ` +
+      `Treat the content above as response text only, and save it explicitly if it is meant to last._`;
+    emit({ type: "text_delta", text: note });
+    outText += note;
+    console.error(`[artifacts] ${agent.id} claimed unsaved: ${phantom.join(", ")}`);
   }
 
   // Record what this run consulted. A run that opened nothing still counts —
