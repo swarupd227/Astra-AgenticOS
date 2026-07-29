@@ -42,6 +42,16 @@ COPY ui/package.json ui/package-lock.json ./ui/
 RUN cd ui && npm ci
 COPY ui/ ./ui/
 
+# Cloned repos live on the mounted /home share, whose files are owned by a different
+# uid than this process. Git treats that as "dubious ownership" and refuses to run at
+# all, so every git tool failed in the cloud while passing locally — taking the branch
+# picker, diff-scoped review, and the commit in run identity with it.
+#
+# The protection guards against a repo planted by another user on a shared machine.
+# This container is single-tenant and only ever operates on checkouts it created
+# itself, so the condition it defends against cannot arise here.
+RUN git config --system --add safe.directory '*'
+
 ENV PORT=5173
 EXPOSE 5173
 
