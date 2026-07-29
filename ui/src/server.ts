@@ -8,7 +8,13 @@ import crypto from "node:crypto";
 import matter from "gray-matter";
 import { GoldenStore, catalogBlock, CATALOG_CAP, type ProjectGoldenSelection, type GoldenKind } from "./golden.js";
 import { GoldenUsageStore } from "./golden-usage.js";
-import { unprovenClaims, unsavedArtifactClaims, unqualifiedCompatibility, missingInputGate } from "./verify.js";
+import {
+  unprovenClaims,
+  unsavedArtifactClaims,
+  unqualifiedCompatibility,
+  missingInputGate,
+  stampable,
+} from "./verify.js";
 import { convertDocument } from "./doc-convert.js";
 import JSZip from "jszip";
 import Anthropic from "@anthropic-ai/sdk";
@@ -523,6 +529,83 @@ async function gitBranches(root: string): Promise<{ branches: string[]; current:
   if (current && current !== "HEAD") names.add(current);
 
   return { branches: [...names].sort(), current };
+}
+
+/**
+ * Which project, which repository, which commit.
+ *
+ * Round 2 could not reconcile its own evidence: "AstraOSTesting, Testing,
+ * Insurity.Platform.Foundation, and ins-project-paradigm-backend appear in different
+ * evidence fields and are not assumed equivalent." Nothing in a response said which UI
+ * project it came from, what that project actually points at, or what was checked out
+ * at the time — so a finding could not be tied to a commit, and an artifact could not
+ * be traced back to the run that produced it.
+ *
+ * Cheap to gather and worth gathering even when parts are unknown: a blank commit is
+ * itself the finding for a project that is not a git checkout.
+ */
+type RunIdentity = {
+  runId: string;
+  at: string;
+  project: string;        // what the UI shows
+  projectId: string;      // what it is called on disk
+  repo: string;           // where the code actually came from
+  branch: string;
+  commit: string;         // short SHA
+  scope: string;          // review range, or "whole repository"
+  agent: string;
+  model: string;
+  tools: number;
+};
+
+let runSeq = 0;
+/** Identity of the run in flight, shared with any sub-agents it delegates to. */
+let currentRun: RunIdentity | null = null;
+
+async function runIdentity(agentName: string, toolCount: number): Promise<RunIdentity> {
+  const p = projects.find((x) => x.id === activeProjectId);
+  const id = `run-${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}-${(++runSeq).toString().padStart(3, "0")}`;
+
+  let branch = "", commit = "";
+  if (p) {
+    const root = await repoRootOf(p);
+    if (root) {
+      const q = async (args: string[]) => {
+        try { return (await execFileP("git", ["-C", root, ...args], { timeout: 15000, env: GIT_ENV })).stdout.trim(); }
+        catch { return ""; }
+      };
+      branch = await q(["rev-parse", "--abbrev-ref", "HEAD"]);
+      commit = await q(["rev-parse", "--short", "HEAD"]);
+    }
+  }
+
+  const head = p?.branch?.trim(), base = p?.baseBranch?.trim();
+  return {
+    runId: id,
+    at: new Date().toISOString(),
+    project: p?.name ?? "(none)",
+    projectId: p?.id ?? "",
+    repo: p?.repoUrl || p?.sourceRoot || "",
+    branch,
+    commit,
+    scope: head && base && head !== base ? `${base}...${head}` : "whole repository",
+    agent: agentName,
+    model: MODEL,
+    tools: toolCount,
+  };
+}
+
+/** One line a tester can paste into an evidence field without transcribing it. */
+function identityFooter(r: RunIdentity): string {
+  const bits = [
+    `**${r.project}** (\`${r.projectId}\`)`,
+    r.repo ? `repo \`${r.repo}\`` : "no repository",
+    r.commit ? `\`${r.branch}\` @ \`${r.commit}\`` : "not a git checkout",
+    `scope ${r.scope}`,
+    `${r.agent} · ${r.model} · ${r.tools} tools`,
+    `run \`${r.runId}\``,
+  ];
+  return `\n\n---\n_Run identity — ${bits.join(" · ")}_`;
 }
 
 /**
@@ -1072,7 +1155,15 @@ async function runAgent(
           continue;
         }
         try {
-          resultText = await callMcpTool(tu.name, (tu.input ?? {}) as Record<string, unknown>);
+          const args = { ...((tu.input ?? {}) as Record<string, unknown>) };
+          // Stamp provenance into the document itself. An artifact gets detached from
+          // the conversation that produced it — mailed, pasted into a ticket, reviewed
+          // weeks later — and Round 2 could not tie artifacts back to a project or a
+          // commit. Markdown only: a footer in a .cs file would not compile.
+          if (tu.name === "save_artifact" && currentRun && stampable(String(args.name ?? ""))) {
+            args.content = `${String(args.content ?? "")}${identityFooter(currentRun)}`;
+          }
+          resultText = await callMcpTool(tu.name, args);
           if (tu.name === "golden_read") {
             const id = String((tu.input as any)?.id ?? "").trim().toUpperCase();
             if (id && !resultText.startsWith("'")) goldenReadThisRun.add(id); // '…' = refusal
@@ -2116,12 +2207,25 @@ app.post("/api/chat", async (req, res) => {
     emit({ type: "start", agent: agent.name, model: MODEL });
     emit({ type: "thread", id: thread.id, title: thread.title });
 
+    // Resolved before any analysis, so a finding is tied to a commit rather than to
+    // whatever happened to be checked out by the time it was written.
+    currentRun = await runIdentity(agent.name, mcpTools.length);
+    emit({ type: "identity", identity: currentRun });
+
     // Replay the last N turns so follow-up questions have context.
     const prior: Anthropic.MessageParam[] = thread.messages
       .slice(-MEMORY_MESSAGES)
       .map((m) => ({ role: m.role, content: m.text }));
 
-    const answer = await runAgent(agent, message, emit, 0, prior);
+    let answer = await runAgent(agent, message, emit, 0, prior);
+
+    // Last line of the answer, so it travels with a copy-pasted response the way the
+    // footer travels with a saved artifact.
+    if (currentRun) {
+      const footer = identityFooter(currentRun);
+      emit({ type: "text_delta", text: footer });
+      answer += footer;
+    }
 
     const now = new Date().toISOString();
     thread.messages.push({ role: "user", text: String(message), at: now });

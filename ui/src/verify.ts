@@ -143,6 +143,18 @@ export function unsavedArtifactClaims(text: string, saved: Set<string>): string[
 }
 
 /**
+ * Whether a provenance footer can be appended to this artifact without breaking it.
+ *
+ * Prose carries a footer fine. Source, config and data do not: a markdown line at the
+ * end of a .cs file stops it compiling, and at the end of a .json file stops it
+ * parsing. Generated tests are artifacts too, so this has to be a whitelist — anything
+ * unrecognised is left alone.
+ */
+export function stampable(name: string): boolean {
+  return /\.(?:md|markdown)$/i.test(name.trim());
+}
+
+/**
  * Refuse to write a deliverable that has no retrieved source behind it.
  *
  * Round 2's three worst cases were one move: ADR continued after the required BRD could

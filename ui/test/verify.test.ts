@@ -13,6 +13,7 @@ import {
   unsavedArtifactClaims,
   unqualifiedCompatibility,
   missingInputGate,
+  stampable,
 } from "../src/verify.js";
 
 let failures = 0;
@@ -140,6 +141,28 @@ for (const [label, tool, failed, ok, shouldBlock] of GATE) {
   }
 }
 
+// --- where a provenance footer may be appended ----------------------------
+// A markdown footer in a source or data file breaks it, and generated tests are
+// artifacts too — so anything not clearly prose must be left alone.
+const STAMP: Array<[string, boolean]> = [
+  ["brd-checkout.md", true],
+  ["reviews/api-review.markdown", true],
+  ["ADR-001.MD", true],
+  ["TaxServiceTests.cs", false],
+  ["utils_test.go", false],
+  ["ci.yml", false],
+  ["package.json", false],
+  ["schema.sql", false],
+  ["report", false],
+  ["notes.md.v1", false],   // a version snapshot is history, not a fresh save
+];
+
+for (const [name, expected] of STAMP) {
+  if (stampable(name) !== expected) {
+    fail(`STAMP    | ${name}: expected ${expected ? "stamp" : "leave alone"}`);
+  }
+}
+
 // The block text has to tell the agent how to get out of it, or it just retries.
 const msg = missingInputGate("save_artifact", new Set(["brd.md"]), 0) ?? "";
 if (!msg.includes("BLOCKED")) fail("GATE     | block message does not say BLOCKED");
@@ -149,6 +172,6 @@ if (!msg.includes("brd.md")) fail("GATE     | block message does not name the mi
 console.log(
   `${FLAG.length} must-flag, ${QUIET.length} must-stay-quiet, ` +
   `${COMPAT_FLAG.length + COMPAT_QUIET.length} compatibility, ` +
-  `${SAVED.length} save-claim, ${GATE.length} gate cases — ${failures} failure(s)`
+  `${SAVED.length} save-claim, ${GATE.length} gate, ${STAMP.length} stamp cases — ${failures} failure(s)`
 );
 process.exit(failures ? 1 : 0);
