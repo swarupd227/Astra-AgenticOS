@@ -12,7 +12,8 @@ import {
   unprovenClaims,
   unsavedArtifactClaims,
   unqualifiedCompatibility,
-  missingInputGate,
+  prerequisiteGate,
+  requiredInputs,
   stampable,
 } from "../src/verify.js";
 
@@ -119,23 +120,64 @@ for (const s of COMPAT_QUIET) if (unqualifiedCompatibility(s).length > 0) fail(`
 
 // --- the prerequisite gate ------------------------------------------------
 
-/** [label, tool, names that failed to read, successful reads, should it block] */
-const GATE: Array<[string, string, string[], number, boolean]> = [
-  ["required input missing, nothing else read", "save_artifact", ["brd-payments.md"], 0, true],
-  ["several inputs missing", "save_artifact", ["brd.md", "adr-001.md"], 0, true],
-  // Guessed a name, missed, then found the real one — the correct recovery.
-  ["missed then recovered via list_artifacts", "save_artifact", ["brd-checkout.md"], 1, false],
-  ["nothing was ever missing", "save_artifact", [], 0, false],
-  ["nothing missing, plenty read", "save_artifact", [], 3, false],
-  // Only artifact creation is gated; reading and searching stay open so the agent
-  // can still investigate and explain what is missing.
-  ["reading is never gated", "read_file", ["brd.md"], 0, false],
-  ["searching is never gated", "search_code", ["brd.md"], 0, false],
-  ["golden reads are never gated", "golden_read", ["brd.md"], 0, false],
+/**
+ * Which filenames in a request are inputs it expects you to have read, and which is
+ * the one it is telling you to write.
+ */
+const INPUTS: Array<[string, string[]]> = [
+  ["Trace from brd-basket-approved.md through to the code.", ["brd-basket-approved.md"]],
+  // The save target is an output, not a prerequisite.
+  ["Write a changelog and save it as changelog-recent.md", []],
+  ["Generate tests and store them as BasketTests.cs", []],
+  ["Name the output adr-004.md", []],
+  // Both in one sentence — the shape that exposed the original bug.
+  ["Read brd-basket-approved.md, then save the matrix as traceability.md",
+    ["brd-basket-approved.md"]],
+  ["Implement adr-004-basket-redesign.md and save the result as impl-notes.md",
+    ["adr-004-basket-redesign.md"]],
+  // Several inputs.
+  ["Assess regression risk from candidate.md and cg-output.cs", ["candidate.md", "cg-output.cs"]],
+  // No filenames at all is the common case and must stay empty.
+  ["Review the data access layer for security problems.", []],
 ];
 
-for (const [label, tool, failed, ok, shouldBlock] of GATE) {
-  const blocked = missingInputGate(tool, new Set(failed), ok) !== null;
+for (const [msg, expected] of INPUTS) {
+  const got = requiredInputs(msg);
+  if (JSON.stringify(got.sort()) !== JSON.stringify([...expected].sort())) {
+    fail(`INPUTS   | ${msg}\n           expected ${JSON.stringify(expected)}, got ${JSON.stringify(got)}`);
+  }
+}
+
+/**
+ * [label, tool, required inputs, opened OK, failed reads, should it block]
+ *
+ * Blocks when a named input was never opened — whether the agent tried and failed or
+ * never tried at all. Tested against the live deployment, Traceability called
+ * `list_artifacts`, saw its approved brief was absent, never attempted to read it, and
+ * wrote the matrix from whatever else was lying around. No read failed, so a
+ * failure-only gate stayed silent: the agent well-behaved enough to list before reading
+ * was the one that slipped through.
+ */
+const GATE: Array<[string, string, string[], string[], string[], boolean]> = [
+  ["named input never opened", "save_artifact", ["brd.md"], [], [], true],
+  ["named input read successfully", "save_artifact", ["brd.md"], ["brd.md"], [], false],
+  // The live TRC failure: read three other artifacts, never the one named.
+  ["read everything except the one named", "save_artifact", ["brd.md"],
+    ["changelog.md", "dead-code.md", "threat-model.md"], [], true],
+  // A path from the tool and a bare name in the request are the same file.
+  ["opened by full path", "save_artifact", ["Basket.cs"], ["src/Basket.API/Basket.cs"], [], false],
+  ["tried and failed", "save_artifact", [], [], ["brd.md"], true],
+  ["nothing named, nothing failed", "save_artifact", [], [], [], false],
+  ["no filenames in the request at all", "save_artifact", [], ["whatever.md"], [], false],
+  // Only artifact creation is gated; investigating stays open so the agent can still
+  // find out what is missing and say so.
+  ["reading is never gated", "read_file", ["brd.md"], [], [], false],
+  ["searching is never gated", "search_code", ["brd.md"], [], [], false],
+  ["golden reads are never gated", "golden_read", ["brd.md"], [], [], false],
+];
+
+for (const [label, tool, req, ok, failed, shouldBlock] of GATE) {
+  const blocked = prerequisiteGate(tool, req, new Set(ok), new Set(failed)) !== null;
   if (blocked !== shouldBlock) {
     fail(`GATE     | ${label}: expected ${shouldBlock ? "block" : "allow"}, got ${blocked ? "block" : "allow"}`);
   }
@@ -164,7 +206,7 @@ for (const [name, expected] of STAMP) {
 }
 
 // The block text has to tell the agent how to get out of it, or it just retries.
-const msg = missingInputGate("save_artifact", new Set(["brd.md"]), 0) ?? "";
+const msg = prerequisiteGate("save_artifact", ["brd.md"], new Set(), new Set()) ?? "";
 if (!msg.includes("BLOCKED")) fail("GATE     | block message does not say BLOCKED");
 if (!msg.includes("list_artifacts")) fail("GATE     | block message does not name the way out");
 if (!msg.includes("brd.md")) fail("GATE     | block message does not name the missing input");
@@ -172,6 +214,6 @@ if (!msg.includes("brd.md")) fail("GATE     | block message does not name the mi
 console.log(
   `${FLAG.length} must-flag, ${QUIET.length} must-stay-quiet, ` +
   `${COMPAT_FLAG.length + COMPAT_QUIET.length} compatibility, ` +
-  `${SAVED.length} save-claim, ${GATE.length} gate, ${STAMP.length} stamp cases — ${failures} failure(s)`
+  `${SAVED.length} save-claim, ${INPUTS.length} input-parse, ${GATE.length} gate, ${STAMP.length} stamp cases — ${failures} failure(s)`
 );
 process.exit(failures ? 1 : 0);

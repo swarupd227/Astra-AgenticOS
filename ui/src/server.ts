@@ -12,7 +12,8 @@ import {
   unprovenClaims,
   unsavedArtifactClaims,
   unqualifiedCompatibility,
-  missingInputGate,
+  prerequisiteGate,
+  requiredInputs,
   stampable,
 } from "./verify.js";
 import { convertDocument } from "./doc-convert.js";
@@ -982,10 +983,13 @@ async function runAgent(
   let outText = ""; // this agent's own streamed answer (returned so it can be persisted)
   // Golden items this run has actually read — the evidence the template gate checks.
   const goldenReadThisRun = new Set<string>();
-  // Inputs this run named and could not retrieve, what it did retrieve, and what it
-  // actually wrote — the evidence behind the prerequisite gate and the saved-claim check.
+  // Inputs this run named and could not retrieve, and what it actually wrote — the
+  // evidence behind the prerequisite gate and the saved-claim check.
   const failedArtifactReads = new Set<string>();
-  let successfulArtifactReads = 0;
+  // Files this task names as inputs, and the ones actually opened — by either tool,
+  // since a named prerequisite may be a source file rather than a prior deliverable.
+  const required = requiredInputs(userMessage);
+  const readOk = new Set<string>();
   const savedThisRun = new Set<string>();
   // Orchestrator (top level only) gets read-only grounding tools + `delegate`.
   // Everyone else: intersect declared tools with what the MCP server provides.
@@ -1147,7 +1151,7 @@ async function runAgent(
         // than asked for in the prompt, so it can't be skipped.
         const gate =
           templateGate(agent.id, tu.name, goldenReadThisRun) ??
-          missingInputGate(tu.name, failedArtifactReads, successfulArtifactReads);
+          prerequisiteGate(tu.name, required, readOk, failedArtifactReads);
         if (gate) {
           resultText = gate;
           emit({ type: "tool_result", id: tu.id, name: tu.name, result: resultText });
@@ -1172,9 +1176,15 @@ async function runAgent(
             const asked = String((tu.input as any)?.name ?? "").trim();
             if (resultText.startsWith("Artifact not found:")) {
               if (asked) failedArtifactReads.add(asked);
-            } else if (!resultText.startsWith("Refused:")) {
-              successfulArtifactReads++;
+            } else if (asked && !resultText.startsWith("Refused:")) {
+              // Only this name clears itself. Reading something else is not a recovery.
+              failedArtifactReads.delete(asked);
+              readOk.add(asked);
             }
+          }
+          if (tu.name === "read_file" && !/^(?:ERROR|Refused:|Could not|No such)/.test(resultText)) {
+            const p = String((tu.input as any)?.path ?? "").trim();
+            if (p) readOk.add(p);   // a named prerequisite is often source, not an artifact
           }
           if (tu.name === "save_artifact") {
             // "Saved artifact to `path`", "Updated existing artifact `path`",

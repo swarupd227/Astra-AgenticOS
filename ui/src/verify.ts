@@ -165,28 +165,94 @@ export function stampable(name: string): boolean {
  * `list_artifacts` discovers what exists; `read_artifact` names something you expect.
  * Naming it and getting nothing back means a prerequisite is missing.
  *
- * Only fires when *nothing* was read successfully. An agent that guesses a name, misses,
- * then finds the right one through `list_artifacts` has done the right thing and must
- * not be punished for it. That leniency costs the case where one input of several is
- * missing; blocking correct recoveries would cost more.
+ * A failure is cleared only by later reading *that same name* — never by reading
+ * something else. The first version stood down as soon as any read succeeded, on the
+ * theory that an agent which guessed a name and then found the right one had recovered.
+ * Tested against the live deployment, Traceability failed to read the approved brief,
+ * successfully read two unrelated artifacts while exploring, and wrote its matrix
+ * anyway: "the BRD is absent from the repository entirely. However, I have a rich
+ * enough codebase to derive the functional requirements from the code." Reading
+ * something else is not a recovery, and the leniency reproduced the exact defect.
+ *
+ * The cost is the genuine misspelling, which now blocks. That is the cheaper error:
+ * the message says how to clear it, and `read_artifact` is documented as "use after
+ * list_artifacts" precisely so names do not have to be guessed.
  */
-export function missingInputGate(
-  toolName: string,
-  failedReads: Set<string>,
-  successfulReads: number
-): string | null {
-  if (toolName !== "save_artifact" || failedReads.size === 0 || successfulReads > 0) return null;
+export function missingInputGate(toolName: string, failedReads: Set<string>): string | null {
+  if (toolName !== "save_artifact" || failedReads.size === 0) return null;
+  return blockedMessage([...failedReads]);
+}
 
-  const one = failedReads.size === 1;
-  const list = [...failedReads].map((n) => `\`${n}\``).join(", ");
+/** A file the request names, e.g. `brd-basket-approved.md` or `Basket.cs`. */
+const FILENAME = /`?\b([\w.-]+\.[A-Za-z0-9]{1,5})\b`?/g;
+
+/** Words that mark the *next* filename as the thing to write, not a thing to read. */
+const OUTPUT_POSITION = /\b(?:save|saved|saving|write|written|store|persist|output|as|named|call it|produce)\b[^.]{0,30}$/i;
+
+/**
+ * Files the request names as inputs — what it expects you to have read.
+ *
+ * The failed-read gate turned out to catch only the clumsy path. Tested against the
+ * live deployment, Traceability called `list_artifacts`, saw the approved brief was
+ * absent, never attempted to read it, and wrote the matrix from whatever else was
+ * lying around. No read failed, so nothing fired. The agent that behaves well enough
+ * to list before reading was the one that slipped through.
+ *
+ * What the request names is the firmer signal: "trace from brd-basket-approved.md"
+ * declares a prerequisite whether or not the agent ever tries to open it. The filename
+ * it is told to save under is excluded — that is the output, not an input.
+ */
+export function requiredInputs(message: string): string[] {
+  const found = new Set<string>();
+  for (const m of message.matchAll(FILENAME)) {
+    const before = message.slice(Math.max(0, m.index! - 40), m.index!);
+    if (OUTPUT_POSITION.test(before)) continue;
+    found.add(m[1]);
+  }
+  return [...found];
+}
+
+/**
+ * Inputs the request named that this run never actually opened.
+ *
+ * Compares basenames: the request says `Basket.cs`, the tool was given
+ * `src/Basket.API/Basket.cs`, and those are the same file.
+ */
+export function unreadRequiredInputs(required: string[], readOk: Set<string>): string[] {
+  const base = (p: string) => p.replace(/\\/g, "/").split("/").pop()!.toLowerCase();
+  const opened = new Set([...readOk].map(base));
+  return required.filter((r) => !opened.has(base(r)));
+}
+
+/** The refusal, shared by both routes into the gate. */
+function blockedMessage(missing: string[]): string {
+  const one = missing.length === 1;
+  const list = missing.map((n) => `\`${n}\``).join(", ");
   return (
     `BLOCKED — the artifact was NOT saved.\n\n` +
-    `This run asked for ${one ? "an input" : "inputs"} it could not retrieve: ${list}. ` +
-    `Nothing else was read successfully either, so there is no retrieved source behind this deliverable.\n\n` +
+    `This task names ${one ? "an input" : "inputs"} that this run never opened: ${list}. ` +
+    `There is no retrieved source behind the deliverable you are trying to write.\n\n` +
     `Return a **BLOCKED** result naming what is missing and how to supply it. Do not reconstruct it from ` +
     `derivative evidence, do not infer its contents, and do not produce the deliverable without it — an ` +
     `artifact built on a source nobody can retrieve cannot be reviewed, approved, or trusted downstream.\n\n` +
-    `If you guessed the name, call \`list_artifacts\` and read the real one; that clears this. ` +
+    `Reading ${one ? "that file" : "those files"} is what clears this. Reading something else does not: ` +
+    `deriving the requirements from whatever happens to be available is the exact failure this prevents. ` +
+    `If the name is wrong, \`list_artifacts\` will show the real one.\n\n` +
     `If it genuinely does not exist yet, BLOCKED is the correct and complete answer — not a reason to invent it.`
   );
+}
+
+/**
+ * The gate as the run actually uses it: block a save when the task named inputs this
+ * run never opened, whether the agent tried and failed or never tried at all.
+ */
+export function prerequisiteGate(
+  toolName: string,
+  required: string[],
+  readOk: Set<string>,
+  failedReads: Set<string>
+): string | null {
+  if (toolName !== "save_artifact") return null;
+  const missing = [...new Set([...unreadRequiredInputs(required, readOk), ...failedReads])];
+  return missing.length ? blockedMessage(missing) : null;
 }
