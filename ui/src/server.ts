@@ -8,6 +8,7 @@ import crypto from "node:crypto";
 import matter from "gray-matter";
 import { GoldenStore, catalogBlock, CATALOG_CAP, type ProjectGoldenSelection, type GoldenKind } from "./golden.js";
 import { GoldenUsageStore } from "./golden-usage.js";
+import { NEVER_INDEXED, unzipExcludeArgs, pruneUnindexed, countFiles } from "./workspace.js";
 import {
   unprovenClaims,
   unsavedArtifactClaims,
@@ -1938,14 +1939,34 @@ app.post("/api/projects/upload", async (req, res) => {
 
     fs.mkdirSync(dir, { recursive: true });
     extracted = dir;
+    let unzipError: any = null;
     try {
-      // -qq quiet, -o overwrite; unzip refuses absolute paths itself.
-      await execFileP("unzip", ["-qq", "-o", zipFile, "-d", dir], { timeout: 300000, maxBuffer: 8 * 1024 * 1024 });
+      // -qq quiet, -o overwrite; unzip refuses absolute paths itself. The -x patterns
+      // keep build output off the disk in the first place; pruneUnindexed below is what
+      // guarantees it, so a pattern that misses costs space rather than correctness.
+      await execFileP("unzip", ["-qq", "-o", zipFile, "-d", dir, ...unzipExcludeArgs()],
+        { timeout: 300000, maxBuffer: 8 * 1024 * 1024 });
     } catch (e: any) {
-      if (e?.code === "ENOENT") throw new Error("unzip is not available on the server.");
-      throw new Error(`Could not extract the zip: ${String(e?.stderr || e?.message || e).slice(0, 200)}`);
+      if (e?.code === "ENOENT")
+        throw new Error(
+          "unzip is not available on this server, so .zip projects cannot be extracted here. " +
+          "Add the project from its git URL instead, or — running locally — use the Local folder option."
+        );
+      // Every exclusion that matches nothing is a "caution", and unzip exits non-zero
+      // for it. No real zip contains all thirteen ignored folders, so treating that as
+      // failure would reject virtually every upload. Judge by what landed on disk.
+      unzipError = e;
     }
     hardenExtracted(dir);
+    const pruned = pruneUnindexed(dir);
+
+    if (!countFiles(dir)) {
+      throw new Error(
+        unzipError
+          ? `Could not extract the zip: ${String(unzipError?.stderr || unzipError?.message || unzipError).slice(0, 200)}`
+          : "That zip contained no source — only build output (bin, obj, packages, node_modules…)."
+      );
+    }
 
     const id = newId(name);
     const finalDir = path.join(WORKSPACE_DIR, id);
@@ -1968,7 +1989,14 @@ app.post("/api/projects/upload", async (req, res) => {
     saveProjects();
     await activateProject(id);
     extracted = null; // committed
-    alive.send(200, { ok: true, project: publicProject(project), sizeBytes: bytes });
+    // Report what was dropped. The next zip is smaller only if someone learns that
+    // most of the last one never needed to be sent.
+    alive.send(200, {
+      ok: true, project: publicProject(project), sizeBytes: bytes,
+      excluded: pruned.removed
+        ? { folders: pruned.removed, bytes: pruned.bytes, kinds: NEVER_INDEXED.slice(0, 6) }
+        : undefined,
+    });
   } catch (e) {
     try { fs.rmSync(zipFile, { force: true }); } catch {}
     if (extracted) { try { fs.rmSync(extracted, { recursive: true, force: true }); } catch {} }
