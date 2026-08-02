@@ -300,7 +300,8 @@ interface Project {
   baseBranch?: string;
 }
 let projects: Project[] = [];
-let activeProjectId: string | null = null;
+/** Where a brand-new session starts. Persisted, so a restart is not a surprise. */
+let defaultProjectId: string | null = null;
 
 const DEMO_ID = "nopcommerce";
 function slug(s: string) {
@@ -310,7 +311,7 @@ function newId(name: string) {
   return `${slug(name)}-${crypto.randomBytes(3).toString("hex")}`;
 }
 function activeProject(): Project | undefined {
-  return projects.find((p) => p.id === activeProjectId);
+  return projects.find((p) => p.id === defaultProjectId);
 }
 function demoProject(): Project {
   return {
@@ -328,7 +329,7 @@ function loadProjects() {
   try {
     const raw = JSON.parse(fs.readFileSync(PROJECTS_FILE, "utf8"));
     projects = Array.isArray(raw.projects) ? raw.projects : [];
-    activeProjectId = raw.activeProjectId ?? null;
+    defaultProjectId = raw.activeProjectId ?? null;
   } catch {
     projects = [];
   }
@@ -365,23 +366,23 @@ function loadProjects() {
         createdAt: new Date().toISOString(),
       });
     }
-    if (!activeProjectId || activeProjectId === DEMO_ID) activeProjectId = "workspace";
+    if (!defaultProjectId || defaultProjectId === DEMO_ID) defaultProjectId = "workspace";
   }
 
-  if (!activeProjectId || !projects.some((p) => p.id === activeProjectId)) activeProjectId = DEMO_ID;
+  if (!defaultProjectId || !projects.some((p) => p.id === defaultProjectId)) defaultProjectId = DEMO_ID;
 
   // If the chosen project's source isn't on disk (e.g. the bundled demo in a cloud image,
   // where nothing is mounted), don't activate it — that would surface a scary "MCP error".
   // Leave no active project so the UI shows the "add a project" onboarding instead.
-  const act = projects.find((p) => p.id === activeProjectId);
+  const act = projects.find((p) => p.id === defaultProjectId);
   if (act && !fs.existsSync(act.sourceRoot)) {
     console.error(`[projects] source root missing for "${act.name}" (${act.sourceRoot}) — starting with no active project.`);
-    activeProjectId = null;
+    defaultProjectId = null;
   }
 }
 function saveProjects() {
   try {
-    fs.writeFileSync(PROJECTS_FILE, JSON.stringify({ activeProjectId, projects }, null, 2));
+    fs.writeFileSync(PROJECTS_FILE, JSON.stringify({ activeProjectId: defaultProjectId, projects }, null, 2));
   } catch (e) {
     console.error("[projects] save failed:", (e as Error).message);
   }
@@ -424,29 +425,70 @@ function threadSummary(t: Thread) {
 }
 
 // ---------------------------------------------------------------------------
-// MCP client — launches the SAME C# server VS Code uses, over stdio, pointed at
-// the active project's source root. Switching projects re-spawns it.
+// MCP workspaces — one C# server per project, pooled.
+//
+// These used to be four module globals: one client, one tool list, one active
+// project id, shared by every request. With more than one person using ASTRA that
+// silently produced wrong answers rather than errors — whoever switched project
+// last won, and everyone else's next run analysed a codebase they had not chosen.
+// Switching also closed the running server out from under anyone mid-answer.
+//
+// It is a plausible reading of Round 2's reproducibility finding, where four
+// different project names turned up across evidence fields for runs that were
+// supposed to be about one codebase.
+//
+// So: a workspace per project, kept warm and reused, and each browser session
+// choosing which one it is looking at.
 // ---------------------------------------------------------------------------
-let mcp: Client | undefined;
-let mcpTools: Anthropic.Tool[] = [];
-let mcpReady = false;
-let mcpError: string | null = null;
+/** Everything a run needs to know about which codebase it is working on. */
+type RunContext = { project: Project | null; ws: Workspace };
 
-async function connectMcp(project: Project) {
+type Workspace = {
+  projectId: string;
+  client?: Client;
+  tools: Anthropic.Tool[];
+  ready: boolean;
+  error: string | null;
+  lastUsed: number;
+  /** In-flight startup, so ten simultaneous requests spawn one server, not ten. */
+  opening?: Promise<void>;
+};
+
+const workspaces = new Map<string, Workspace>();
+
+/**
+ * Each server holds a parsed index of a whole repository in memory, so this is a
+ * memory ceiling, not a tuning knob. Least-recently-used is evicted; reopening
+ * costs an index rebuild, which is why idle ones are kept rather than closed.
+ */
+const MAX_WORKSPACES = Number(process.env.MAX_WORKSPACES ?? 3);
+
+async function closeWorkspace(ws: Workspace) {
+  workspaces.delete(ws.projectId);
+  if (ws.client) { try { await ws.client.close(); } catch { /* already gone */ } }
+  console.error(`[mcp] closed workspace "${ws.projectId}"`);
+}
+
+async function evictIfNeeded(keep: string) {
+  while (workspaces.size > MAX_WORKSPACES) {
+    const victim = [...workspaces.values()]
+      .filter((w) => w.projectId !== keep && !w.opening)
+      .sort((a, b) => a.lastUsed - b.lastUsed)[0];
+    if (!victim) return;                     // everything else is busy starting
+    await closeWorkspace(victim);
+  }
+}
+
+async function connectMcp(project: Project, ws: Workspace) {
   if (!fs.existsSync(DLL)) {
     throw new Error(`MCP server DLL not found at ${DLL}. Run ./scripts/setup.ps1 (builds Release) first.`);
   }
   if (!fs.existsSync(project.sourceRoot)) {
     throw new Error(`Source root not found: ${project.sourceRoot}`);
   }
-  // Tear down any previous server (kills its child dotnet process).
-  if (mcp) {
-    try { await mcp.close(); } catch {}
-    mcp = undefined;
-  }
-  mcpReady = false;
-  mcpError = null;
-  mcpTools = [];
+  ws.ready = false;
+  ws.error = null;
+  ws.tools = [];
   fs.mkdirSync(project.artifactsDir, { recursive: true });
 
   const transport = new StdioClientTransport({
@@ -465,23 +507,29 @@ async function connectMcp(project: Project) {
   });
   const client = new Client({ name: "astra-agenticos-ui", version: "2.0.0" });
   await client.connect(transport);
-  mcp = client;
+  ws.client = client;
 
   const listed = await client.listTools();
-  mcpTools = listed.tools.map((t) => ({
+  ws.tools = listed.tools.map((t) => ({
     name: t.name,
     description: t.description ?? "",
     input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
   }));
-  console.error(`[mcp] connected to "${project.name}" (${project.sourceRoot}) — ${mcpTools.length} tools`);
-  mcpReady = true;
+  console.error(`[mcp] connected to "${project.name}" (${project.sourceRoot}) — ${ws.tools.length} tools`);
+  ws.ready = true;
 
-  // Warm the index so the first real prompt is snappy. This is also where a large
-  // repo pays its one-off parse cost — if it times out here the agent inherits the
-  // problem, so use the same generous budget as a real tool call and say so loudly.
+}
+
+/**
+ * Warm the index so the first real prompt is snappy. This is also where a large repo
+ * pays its one-off parse cost — if it times out here the agent inherits the problem,
+ * so use the same generous budget as a real tool call and say so loudly.
+ */
+async function warmIndex(project: Project, ws: Workspace) {
+  if (!ws.client) return;
   try {
     const t0 = Date.now();
-    await client.callTool({ name: "solution_overview", arguments: {} }, undefined, { timeout: MCP_TIMEOUT_MS });
+    await ws.client.callTool({ name: "solution_overview", arguments: {} }, undefined, { timeout: MCP_TIMEOUT_MS });
     console.error(`[mcp] index warmed in ${Math.round((Date.now() - t0) / 1000)}s.`);
   } catch (e) {
     console.error(
@@ -492,12 +540,118 @@ async function connectMcp(project: Project) {
   }
 }
 
+/**
+ * The workspace for a project, opening it if necessary.
+ *
+ * Never throws for a failed open — the error is recorded on the workspace so the
+ * caller can report "this project could not be loaded" without taking down a
+ * request that was only asking about a different one.
+ */
+async function workspaceFor(projectId: string): Promise<Workspace> {
+  let ws = workspaces.get(projectId);
+  if (ws) {
+    ws.lastUsed = Date.now();
+    if (ws.opening) await ws.opening;
+    return ws;
+  }
+
+  const project = projects.find((p) => p.id === projectId);
+  ws = { projectId, tools: [], ready: false, error: null, lastUsed: Date.now() };
+  workspaces.set(projectId, ws);
+
+  if (!project) {
+    ws.error = `Unknown project: ${projectId}`;
+    return ws;
+  }
+
+  ws.opening = (async () => {
+    try {
+      await connectMcp(project, ws!);
+      await warmIndex(project, ws!);
+    } catch (e) {
+      ws!.error = (e as Error).message;
+      console.error(`[mcp] could not open "${project.name}": ${ws!.error}`);
+    } finally {
+      ws!.opening = undefined;
+    }
+  })();
+
+  await ws.opening;
+  await evictIfNeeded(projectId);
+  return ws;
+}
+
+/** Re-open a project's workspace in place — used after its source or scope changes. */
+async function reopenWorkspace(projectId: string) {
+  const existing = workspaces.get(projectId);
+  if (existing) await closeWorkspace(existing);
+  await workspaceFor(projectId);
+}
+
 async function activateProject(id: string) {
   const p = projects.find((x) => x.id === id);
   if (!p) throw new Error(`Unknown project: ${id}`);
-  activeProjectId = id;
+  defaultProjectId = id;          // what a brand-new session lands on
   saveProjects();
-  await connectMcp(p);
+  const ws = await workspaceFor(id);
+  if (ws.error) throw new Error(ws.error);
+}
+
+// ---------------------------------------------------------------------------
+// Sessions — which project this browser is looking at.
+//
+// Not authentication and not a security boundary: an opaque id in a cookie, so two
+// people on the same deployment can hold different projects open. Without it the
+// second person silently inherits the first person's choice.
+// ---------------------------------------------------------------------------
+const SESSION_COOKIE = "astra_sid";
+const sessions = new Map<string, { projectId: string; lastSeen: number }>();
+
+function readCookie(req: express.Request, name: string): string | null {
+  const raw = req.headers.cookie;
+  if (!raw) return null;
+  for (const part of raw.split(";")) {
+    const [k, ...v] = part.trim().split("=");
+    if (k === name) return decodeURIComponent(v.join("="));
+  }
+  return null;
+}
+
+/**
+ * The session for this request, minting one if the browser has not got a cookie yet.
+ * A new session starts on whatever project was last activated, so a single user sees
+ * exactly the behaviour they had before sessions existed.
+ */
+function sessionOf(req: express.Request, res: express.Response) {
+  let id = readCookie(req, SESSION_COOKIE);
+  if (!id || !sessions.has(id)) {
+    if (!id) {
+      id = crypto.randomUUID();
+      // No Secure flag: the app is also served over plain http in local development,
+      // and a Secure cookie would simply never be stored there.
+      res.setHeader("Set-Cookie", `${SESSION_COOKIE}=${id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`);
+    }
+    sessions.set(id, { projectId: defaultProjectId ?? DEMO_ID, lastSeen: Date.now() });
+  }
+  const s = sessions.get(id)!;
+  s.lastSeen = Date.now();
+  // A project deleted by someone else must not strand this session on it.
+  if (!projects.some((p) => p.id === s.projectId)) s.projectId = defaultProjectId ?? DEMO_ID;
+  return { id, state: s };
+}
+
+/** As contextOf, but shaped for a run — callers check ws.ready before using it. */
+async function runContextOf(req: express.Request, res: express.Response): Promise<RunContext> {
+  const { project, ws } = await contextOf(req, res);
+  return { project, ws: ws ?? { projectId: "", tools: [], ready: false, error: "No project loaded.", lastUsed: Date.now() } };
+}
+
+/** The project this request is about, and its workspace. */
+async function contextOf(req: express.Request, res: express.Response) {
+  const { state } = sessionOf(req, res);
+  const project = projects.find((p) => p.id === state.projectId) ?? null;
+  const ws = project ? await workspaceFor(project.id) : null;
+  return { project, ws };
 }
 
 const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" };
@@ -564,8 +718,8 @@ let runSeq = 0;
 /** Identity of the run in flight, shared with any sub-agents it delegates to. */
 let currentRun: RunIdentity | null = null;
 
-async function runIdentity(agentName: string, toolCount: number): Promise<RunIdentity> {
-  const p = projects.find((x) => x.id === activeProjectId);
+async function runIdentity(project: Project | null, agentName: string, toolCount: number): Promise<RunIdentity> {
+  const p = project;
   const id = `run-${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}-${(++runSeq).toString().padStart(3, "0")}`;
 
   let branch = "", commit = "";
@@ -642,8 +796,8 @@ async function ensureMergeBase(root: string, base: string, head: string): Promis
  * branch diverged, so unrelated commits landing on main afterwards don't show up
  * as the developer's work. Two dots would blame them for everyone else's changes.
  */
-function reviewScopeBlock(): string {
-  const p = projects.find((x) => x.id === activeProjectId);
+function reviewScopeBlock(project: Project | null): string {
+  const p = project;
   const head = p?.branch?.trim();
   const base = p?.baseBranch?.trim();
   if (!p || !head || !base || head === base) return "";
@@ -662,9 +816,9 @@ function reviewScopeBlock(): string {
 // "MCP error -32001: Request timed out" as its opening move.
 const MCP_TIMEOUT_MS = Number(process.env.MCP_TIMEOUT_MS ?? 10 * 60 * 1000);
 
-async function callMcpTool(name: string, args: Record<string, unknown>) {
-  if (!mcp) throw new Error("No active project / MCP server not connected.");
-  const res: any = await mcp.callTool({ name, arguments: args }, undefined, { timeout: MCP_TIMEOUT_MS });
+async function callMcpTool(ws: Workspace, name: string, args: Record<string, unknown>) {
+  if (!ws.client) throw new Error(ws.error ?? "No project loaded / MCP server not connected.");
+  const res: any = await ws.client.callTool({ name, arguments: args }, undefined, { timeout: MCP_TIMEOUT_MS });
   const text = (res.content ?? [])
     .map((c: any) => (c.type === "text" ? c.text : JSON.stringify(c)))
     .join("\n");
@@ -879,13 +1033,13 @@ function isRetryable(e: any): boolean {
  * project's selection, narrowed by each item's `appliesTo`. Returns "" when nothing
  * applies, so agents and projects without golden content are completely unaffected.
  */
-function goldenCatalogFor(agentId: string): string {
+function goldenCatalogFor(agentId: string, project: Project | null): string {
   try {
-    const selected = golden.selectedFor(activeProject()?.golden);
+    const selected = golden.selectedFor(project?.golden);
     return catalogBlock(
       GoldenStore.relevantTo(selected, agentId),
       CATALOG_CAP,
-      boundTemplates(agentId).map((t) => t.id)
+      boundTemplates(agentId, project).map((t) => t.id)
     );
   } catch (e) {
     console.error("[golden] catalog build failed:", (e as Error).message);
@@ -928,9 +1082,9 @@ const ARTIFACT_READ_TOOLS = ["list_artifacts", "read_artifact"];
  * names THIS agent explicitly. "all" is deliberately excluded — a template that
  * applies to everything is guidance, not a binding contract for one deliverable.
  */
-function boundTemplates(agentId: string) {
+function boundTemplates(agentId: string, project: Project | null) {
   return golden
-    .selectedFor(activeProject()?.golden)
+    .selectedFor(project?.golden)
     .filter((i) => i.kind === "template" && i.status === "published" && i.appliesTo.includes(agentId));
 }
 
@@ -940,9 +1094,9 @@ function boundTemplates(agentId: string) {
  * thinking — the agent may explore freely, but it cannot produce the deliverable
  * until it has actually read the template that governs it.
  */
-function templateGate(agentId: string, toolName: string, readSoFar: Set<string>): string | null {
+function templateGate(agentId: string, toolName: string, readSoFar: Set<string>, project: Project | null): string | null {
   if (toolName !== "save_artifact") return null;
-  const missing = boundTemplates(agentId).filter((t) => !readSoFar.has(t.id.toUpperCase()));
+  const missing = boundTemplates(agentId, project).filter((t) => !readSoFar.has(t.id.toUpperCase()));
   if (missing.length === 0) return null;
 
   const list = missing.map((t) => `\`${t.id}\` (${t.title})`).join(", ");
@@ -975,12 +1129,15 @@ function delegateTool(): Anthropic.Tool {
 }
 
 async function runAgent(
+  run: RunContext,
   agent: Agent,
   userMessage: string,
   emit: (e: any) => void,
   depth = 0,
   prior: Anthropic.MessageParam[] = []
 ): Promise<string> {
+  const { project, ws } = run;
+  const mcpTools = ws.tools;
   let outText = ""; // this agent's own streamed answer (returned so it can be persisted)
   // Golden items this run has actually read — the evidence the template gate checks.
   const goldenReadThisRun = new Set<string>();
@@ -1013,7 +1170,7 @@ async function runAgent(
   // A scoped run is an instruction to diff a range, so grant the tools that do it
   // whatever the agent declared. Telling an agent to call git_diff and then not
   // handing it over turns the review into a refusal — observed, not theorised.
-  const scoped = reviewScopeBlock() !== "";
+  const scoped = reviewScopeBlock(project) !== "";
   if (scoped) {
     const missingGit = mcpTools.filter(
       (t) => SCOPE_TOOLS.includes(t.name) && !tools.some((x) => x.name === t.name)
@@ -1054,7 +1211,7 @@ async function runAgent(
               type: "text",
               // The scope block goes last: it changes only when the user switches
               // branches, so the expensive prefix above it stays cacheable.
-              text: `${agent.systemPrompt}\n\n---\n**Today's date is ${new Date().toISOString().slice(0, 10)}.** Use it for any date you write (document dates, changelogs, gate records). Never invent or guess a date.\n${STACK_AWARENESS}\n${goldenCatalogFor(agent.id)}\n${OPERATING_CONTRACT}${reviewScopeBlock()}`,
+              text: `${agent.systemPrompt}\n\n---\n**Today's date is ${new Date().toISOString().slice(0, 10)}.** Use it for any date you write (document dates, changelogs, gate records). Never invent or guess a date.\n${STACK_AWARENESS}\n${goldenCatalogFor(agent.id, project)}\n${OPERATING_CONTRACT}${reviewScopeBlock(project)}`,
               cache_control: { type: "ephemeral" },
             },
           ],
@@ -1137,7 +1294,7 @@ async function runAgent(
             emit({ ...e, delegateId: tu.id }); // nest under the delegation card in the UI
           };
           try {
-            await runAgent(sub, task, subEmit, depth + 1);
+            await runAgent(run, sub, task, subEmit, depth + 1);
           } catch (e) {
             subEmit({ type: "error", message: (e as Error).message });
           }
@@ -1151,7 +1308,7 @@ async function runAgent(
         // read before the agent is allowed to save a deliverable. Enforced here rather
         // than asked for in the prompt, so it can't be skipped.
         const gate =
-          templateGate(agent.id, tu.name, goldenReadThisRun) ??
+          templateGate(agent.id, tu.name, goldenReadThisRun, project) ??
           prerequisiteGate(tu.name, required, readOk, failedArtifactReads);
         if (gate) {
           resultText = gate;
@@ -1168,7 +1325,7 @@ async function runAgent(
           if (tu.name === "save_artifact" && currentRun && stampable(String(args.name ?? ""))) {
             args.content = `${String(args.content ?? "")}${identityFooter(currentRun)}`;
           }
-          resultText = await callMcpTool(tu.name, args);
+          resultText = await callMcpTool(ws, tu.name, args);
           if (tu.name === "golden_read") {
             const id = String((tu.input as any)?.id ?? "").trim().toUpperCase();
             if (id && !resultText.startsWith("'")) goldenReadThisRun.add(id); // '…' = refusal
@@ -1286,7 +1443,7 @@ async function runAgent(
   void goldenUsage.record({
     at: new Date().toISOString(),
     agent: agent.id,
-    project: activeProjectId ?? "",
+    project: project?.id ?? "",
     read: [...goldenReadThisRun],
     cited,
     unverified: unread,
@@ -1304,11 +1461,12 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 
 let agents: Agent[] = [];
 
-app.get("/api/agents", (_req, res) => {
+app.get("/api/agents", async (req, res) => {
+  const { project, ws } = await contextOf(req, res);
+  const mcpTools = ws?.tools ?? [];
   // Curated demo prompts apply to the bundled demo *or* any project that is nopCommerce
   // (e.g. mounted at /workspace in Docker/Azure, where the project id is "workspace").
-  const ap = activeProject();
-  const demo = activeProjectId === DEMO_ID || /nopcommerce/i.test(ap?.sourceRoot ?? "");
+  const demo = project?.id === DEMO_ID || /nopcommerce/i.test(project?.sourceRoot ?? "");
   res.json(
     agents.map((a) => ({
       id: a.id,
@@ -1322,12 +1480,13 @@ app.get("/api/agents", (_req, res) => {
   );
 });
 
-app.get("/api/health", (_req, res) => {
-  const p = activeProject();
+app.get("/api/health", async (req, res) => {
+  const { project: p, ws } = await contextOf(req, res);
   res.json({
-    mcpReady,
-    mcpError,
-    mcpTools: mcpTools.map((t) => t.name),
+    mcpReady: ws?.ready ?? false,
+    mcpError: ws?.error ?? null,
+    mcpTools: (ws?.tools ?? []).map((t) => t.name),
+    workspacesOpen: workspaces.size,
     model: MODEL,
     hasApiKey: Boolean(process.env.ANTHROPIC_API_KEY),
     activeProject: p ? publicProject(p) : null,
@@ -1618,7 +1777,8 @@ app.post("/api/golden/:id/archive", async (req, res) => {
 app.post("/api/golden/:id/test", async (req, res) => {
   const item = golden.get(req.params.id);
   if (!item) { res.status(404).json({ ok: false, error: "Not found" }); return; }
-  if (!mcpReady) { res.status(409).json({ ok: false, error: mcpError ?? "Load a project first — a test run needs a codebase." }); return; }
+  const run = await runContextOf(req, res);
+  if (!run.ws.ready) { res.status(409).json({ ok: false, error: run.ws.error ?? "Load a project first — a test run needs a codebase." }); return; }
   if (!process.env.ANTHROPIC_API_KEY) { res.status(409).json({ ok: false, error: "Set an API key in Settings to run a test." }); return; }
 
   const agentId = String(req.body?.agentId ?? "");
@@ -1630,7 +1790,7 @@ app.post("/api/golden/:id/test", async (req, res) => {
   const alive = keepJsonAlive(res);
   const used: string[] = [];
   try {
-    const answer = await runAgent(agent, task, (e: any) => {
+    const answer = await runAgent(run, agent, task, (e: any) => {
       if (e.type === "tool_call" && e.name === "golden_read") {
         const id = String(e.input?.id ?? "").trim().toUpperCase();
         if (id) used.push(id);
@@ -1653,8 +1813,9 @@ app.post("/api/golden/:id/test", async (req, res) => {
 });
 
 /** What the ACTIVE project's agents would currently see (admin preview / debugging). */
-app.get("/api/golden-selection", (_req, res) => {
-  const p = activeProject();
+app.get("/api/golden-selection", (req, res) => {
+  const { state } = sessionOf(req, res);
+  const p = projects.find((x) => x.id === state.projectId);
   const selected = golden.selectedFor(p?.golden);
   res.json({
     projectId: p?.id ?? null,
@@ -1729,9 +1890,9 @@ app.post("/api/projects/:id/scope", async (req, res) => {
   saveProjects();
 
   // Re-index: the files on disk just changed underneath the agents.
-  if (activeProjectId === p.id) {
-    try { await activateProject(p.id); }
-    catch (e) { console.error("[scope] re-activate failed:", (e as Error).message); }
+  if (workspaces.has(p.id)) {
+    try { await reopenWorkspace(p.id); }
+    catch (e) { console.error("[scope] reopen failed:", (e as Error).message); }
   }
   res.json({ ok: true, branch: p.branch ?? "", baseBranch: p.baseBranch ?? "" });
 });
@@ -1749,9 +1910,9 @@ app.post("/api/projects/:id/golden", async (req, res) => {
   p.golden = sel;
   saveProjects();
   // The MCP server receives the resolved id list at spawn time, so re-activate to apply.
-  if (activeProjectId === p.id) {
-    try { await activateProject(p.id); }
-    catch (e) { console.error("[golden] re-activate failed:", (e as Error).message); }
+  if (workspaces.has(p.id)) {
+    try { await reopenWorkspace(p.id); }
+    catch (e) { console.error("[golden] reopen failed:", (e as Error).message); }
   }
   const selected = golden.selectedFor(sel);
   res.json({ ok: true, selection: sel, selectedCount: selected.length });
@@ -1773,19 +1934,20 @@ function parseGoldenSelection(raw: any): ProjectGoldenSelection {
 
 let goldenRefreshTimer: NodeJS.Timeout | null = null;
 function refreshGoldenForActiveProject() {
-  if (!activeProjectId || !mcpReady) return;
+  if (!workspaces.size) return;
   if (goldenRefreshTimer) clearTimeout(goldenRefreshTimer);
   // debounce: bulk admin edits shouldn't respawn the server per item
   goldenRefreshTimer = setTimeout(() => {
-    activateProject(activeProjectId!).catch((e) =>
+    Promise.all([...workspaces.keys()].map((id) => reopenWorkspace(id))).catch((e) =>
       console.error("[golden] refresh failed:", (e as Error).message));
   }, 1500);
   goldenRefreshTimer.unref?.();
 }
 
 // ---- Projects API --------------------------------------------------------
-app.get("/api/projects", (_req, res) => {
-  res.json({ activeProjectId, projects: projects.map(publicProject) });
+app.get("/api/projects", (req, res) => {
+  const { state } = sessionOf(req, res);
+  res.json({ activeProjectId: state.projectId, projects: projects.map(publicProject) });
 });
 
 // A "local folder" is a folder on the machine running ASTRA. When ASTRA is hosted,
@@ -2091,9 +2253,10 @@ app.post("/api/projects/:id/activate", async (req, res) => {
   const alive = keepJsonAlive(res); // re-indexing a large codebase runs long and silent
   try {
     await activateProject(req.params.id);
-    alive.send(200, { ok: true, project: activeProject() ? publicProject(activeProject()!) : null });
+    sessionOf(req, res).state.projectId = req.params.id;   // this browser follows the switch
+    const p = projects.find((x) => x.id === req.params.id);
+    alive.send(200, { ok: true, project: p ? publicProject(p) : null });
   } catch (e) {
-    mcpError = (e as Error).message;
     alive.send(400, { ok: false, error: (e as Error).message });
   }
 });
@@ -2114,10 +2277,12 @@ app.delete("/api/projects/:id", async (req, res) => {
   if (p.type === "git") {
     try { fs.rmSync(path.join(WORKSPACE_DIR, id), { recursive: true, force: true }); } catch {}
   }
+  { const ws = workspaces.get(id); if (ws) await closeWorkspace(ws); }
+  for (const st of sessions.values()) if (st.projectId === id) st.projectId = defaultProjectId ?? DEMO_ID;
   try {
-    if (activeProjectId === id) await activateProject(DEMO_ID);
+    if (defaultProjectId === id) await activateProject(DEMO_ID);
   } catch (e) {
-    mcpError = (e as Error).message;
+    console.error("[mcp] could not fall back to the demo project:", (e as Error).message);
   }
   res.json({ ok: true });
 });
@@ -2137,24 +2302,26 @@ function walkFiles(dir: string, base = dir): { path: string; size: number; mtime
   }
   return out;
 }
-function safeArtifactPath(rel: string): string {
-  const dir = activeProject()?.artifactsDir;
-  if (!dir) throw new Error("No active project");
+function safeArtifactPath(rel: string, project: Project | null): string {
+  const dir = project?.artifactsDir;
+  if (!dir) throw new Error("No project loaded.");
   const root = path.resolve(dir);
   const abs = path.resolve(root, rel);
   if (abs !== root && !abs.startsWith(root + path.sep)) throw new Error("Invalid path");
   return abs;
 }
 
-app.get("/api/artifacts", (_req, res) => {
-  const p = activeProject();
+app.get("/api/artifacts", (req, res) => {
+  const { state } = sessionOf(req, res);
+  const p = projects.find((x) => x.id === state.projectId);
   const files = p ? walkFiles(p.artifactsDir).sort((a, b) => b.mtime - a.mtime) : [];
   res.json({ projectId: p?.id, files });
 });
 
 app.get("/api/artifacts/content", (req, res) => {
   try {
-    const abs = safeArtifactPath(String(req.query.path || ""));
+    const { state } = sessionOf(req, res);
+    const abs = safeArtifactPath(String(req.query.path || ""), projects.find((x) => x.id === state.projectId) ?? null);
     if (!fs.existsSync(abs)) return res.status(404).json({ ok: false, error: "Not found" });
     res.json({ ok: true, path: req.query.path, content: fs.readFileSync(abs, "utf8") });
   } catch (e) {
@@ -2164,7 +2331,8 @@ app.get("/api/artifacts/content", (req, res) => {
 
 app.get("/api/artifacts/download", (req, res) => {
   try {
-    const abs = safeArtifactPath(String(req.query.path || ""));
+    const { state } = sessionOf(req, res);
+    const abs = safeArtifactPath(String(req.query.path || ""), projects.find((x) => x.id === state.projectId) ?? null);
     if (!fs.existsSync(abs)) return res.status(404).send("Not found");
     res.download(abs, path.basename(abs));
   } catch (e) {
@@ -2174,13 +2342,14 @@ app.get("/api/artifacts/download", (req, res) => {
 
 // Diagnostics / offline-friendly: run a single MCP tool directly (no LLM).
 app.post("/api/tool", async (req, res) => {
-  if (!mcpReady) {
-    res.status(503).json({ ok: false, error: mcpError ?? "MCP server still starting…" });
+  const { ws } = await runContextOf(req, res);
+  if (!ws.ready) {
+    res.status(503).json({ ok: false, error: ws.error ?? "MCP server still starting…" });
     return;
   }
   const { name, arguments: args } = req.body ?? {};
   try {
-    const text = await callMcpTool(name, args ?? {});
+    const text = await callMcpTool(ws, name, args ?? {});
     res.json({ ok: true, result: text });
   } catch (e) {
     res.status(500).json({ ok: false, error: (e as Error).message });
@@ -2211,8 +2380,9 @@ app.post("/api/chat", async (req, res) => {
   heartbeat.unref?.();
   res.on("close", () => clearInterval(heartbeat));
 
-  if (!mcpReady) {
-    emit({ type: "error", message: mcpError ?? "MCP server is still starting — try again in a moment." });
+  const run = await runContextOf(req, res);
+  if (!run.ws.ready) {
+    emit({ type: "error", message: run.ws.error ?? "MCP server is still starting — try again in a moment." });
     res.end();
     return;
   }
@@ -2228,7 +2398,7 @@ app.post("/api/chat", async (req, res) => {
   }
 
   // Resume an existing thread (memory) or start a new one.
-  const projectId = activeProjectId ?? "none";
+  const projectId = run.project?.id ?? "none";
   let thread = threads.find((t) => t.id === req.body?.threadId && t.projectId === projectId);
   if (!thread) {
     thread = {
@@ -2247,7 +2417,7 @@ app.post("/api/chat", async (req, res) => {
 
     // Resolved before any analysis, so a finding is tied to a commit rather than to
     // whatever happened to be checked out by the time it was written.
-    currentRun = await runIdentity(agent.name, mcpTools.length);
+    currentRun = await runIdentity(run.project, agent.name, run.ws.tools.length);
     emit({ type: "identity", identity: currentRun });
 
     // Replay the last N turns so follow-up questions have context.
@@ -2255,7 +2425,7 @@ app.post("/api/chat", async (req, res) => {
       .slice(-MEMORY_MESSAGES)
       .map((m) => ({ role: m.role, content: m.text }));
 
-    let answer = await runAgent(agent, message, emit, 0, prior);
+    let answer = await runAgent(run, agent, message, emit, 0, prior);
 
     // Last line of the answer, so it travels with a copy-pasted response the way the
     // footer travels with a saved artifact.
@@ -2281,7 +2451,7 @@ app.post("/api/chat", async (req, res) => {
 
 // ---- Threads API (conversation history) ----------------------------------
 app.get("/api/threads", (req, res) => {
-  const projectId = activeProjectId ?? "none";
+  const projectId = sessionOf(req, res).state.projectId;
   const agentId = req.query.agentId ? String(req.query.agentId) : null;
   const list = threads
     .filter((t) => t.projectId === projectId && (!agentId || t.agentId === agentId))
@@ -2312,7 +2482,7 @@ function main() {
   loadProjects();
   loadThreads();
   console.error(
-    `[ui] ${agents.length} agents, ${projects.length} projects; active=${activeProjectId}`
+    `[ui] ${agents.length} agents, ${projects.length} projects; active=${defaultProjectId}`
   );
 
   // Listen immediately so the page loads instantly; connect MCP in the background.
@@ -2328,16 +2498,14 @@ function main() {
   server.headersTimeout = server.requestTimeout + 5000;
   server.timeout = 0; // no socket-inactivity cap; the heartbeats keep proxies happy
 
-  if (activeProjectId) {
-    activateProject(activeProjectId).catch((e) => {
-      mcpError = (e as Error).message;
-      console.error("[mcp] connect failed:", mcpError);
-    });
+  if (defaultProjectId) {
+    workspaceFor(defaultProjectId).catch((e) =>
+      console.error("[mcp] connect failed:", (e as Error).message)
+    );
   } else {
-    mcpError = IS_CLOUD
+    console.error("[mcp] " + (IS_CLOUD
       ? "No project loaded yet — add one to begin: upload a .zip of your code, or point ASTRA at a git repository."
-      : "No project loaded yet — add a project (local folder, git repo or .zip upload) to begin.";
-    console.error("[mcp] " + mcpError);
+      : "No project loaded yet — add a project (local folder, git repo or .zip upload) to begin."));
   }
 }
 
