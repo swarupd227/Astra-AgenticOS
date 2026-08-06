@@ -30,6 +30,10 @@ artifacts/*
 .env
 *.env
 !*.env.example
+# Written by the in-app Settings panel; holds the API key. Lives in STATE_DIR,
+# which is ui/ locally and the persistent share in a deployment.
+ui/settings.json
+settings.json
 
 # Demo codebase (cloned via scripts/setup.ps1)
 demo/nopCommerce/

@@ -830,28 +830,85 @@ async function callMcpTool(ws: Workspace, name: string, args: Record<string, unk
 // ---------------------------------------------------------------------------
 let anthropic = new Anthropic({ maxRetries: 4 }); // reads ANTHROPIC_API_KEY
 
+/** The deploy-time key, remembered so clearing the in-app override can fall back to it. */
+const envApiKey = process.env.ANTHROPIC_API_KEY ?? "";
+
 // Update the key/model at runtime (from the in-app Settings panel) and best-effort
 // persist to ui/.env so it survives a restart.
+/**
+ * Settings changed in the app, kept where they survive.
+ *
+ * These used to be written to `ui/.env`. On a developer's machine that persists; in
+ * the container it is `/app/ui/.env`, which is part of the image and gone on the next
+ * restart — so a key changed through the Settings panel worked until Azure recycled
+ * the container and then silently reverted to the older App Service setting. The panel
+ * looked identical in both places and only told the truth in one.
+ *
+ * STATE_DIR is the directory that is already mapped to durable storage, which is why
+ * projects, threads and the Golden Repository live there.
+ */
+const SETTINGS_FILE = path.join(STATE_DIR, "settings.json");
+
+/** Where the key in force actually came from — surfaced so it is never a guess. */
+let keySource: "in-app" | "environment" | "none" =
+  process.env.ANTHROPIC_API_KEY ? "environment" : "none";
+
 function applySettings({ apiKey, model }: { apiKey?: string; model?: string }) {
-  if (typeof apiKey === "string" && apiKey.trim()) {
-    process.env.ANTHROPIC_API_KEY = apiKey.trim();
-    anthropic = new Anthropic({ apiKey: apiKey.trim(), maxRetries: 4 });
+  if (typeof apiKey === "string") {
+    const k = apiKey.trim();
+    if (k) {
+      process.env.ANTHROPIC_API_KEY = k;
+      anthropic = new Anthropic({ apiKey: k, maxRetries: 4 });
+      keySource = "in-app";
+    } else {
+      // Cleared on purpose: drop the stored override and fall back to whatever the
+      // environment supplies, so rotating the App Service setting can take effect.
+      delete process.env.ANTHROPIC_API_KEY;
+      if (envApiKey) process.env.ANTHROPIC_API_KEY = envApiKey;
+      anthropic = new Anthropic({ maxRetries: 4 });
+      keySource = envApiKey ? "environment" : "none";
+    }
   }
   if (typeof model === "string" && model.trim()) {
     MODEL = model.trim();
     process.env.MODEL = MODEL;
   }
   try {
-    const envPath = path.join(__dirname, "..", ".env");
-    const lines = [
-      process.env.ANTHROPIC_API_KEY ? `ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY}` : "",
-      `MODEL=${MODEL}`,
-      `PORT=${PORT}`,
-    ].filter(Boolean);
-    fs.writeFileSync(envPath, lines.join("\n") + "\n");
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    const stored: Record<string, string> = { model: MODEL };
+    if (keySource === "in-app" && process.env.ANTHROPIC_API_KEY) {
+      stored.apiKey = process.env.ANTHROPIC_API_KEY;
+    }
+    const tmp = `${SETTINGS_FILE}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(stored, null, 2), { mode: 0o600 });
+    fs.renameSync(tmp, SETTINGS_FILE);
   } catch (e) {
-    console.error("[settings] could not persist ui/.env:", (e as Error).message);
+    console.error("[settings] could not persist settings.json:", (e as Error).message);
   }
+}
+
+/**
+ * Restore settings saved in the app.
+ *
+ * An in-app key wins over the environment, because someone typing it into the panel
+ * is making a deliberate, later choice than whatever was configured at deploy time —
+ * and if it did not win, the panel would not really do anything in the cloud. Clearing
+ * the field removes the override, which is the way back to the environment value.
+ */
+function loadSettings() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
+    if (typeof raw.model === "string" && raw.model.trim()) {
+      MODEL = raw.model.trim();
+      process.env.MODEL = MODEL;
+    }
+    if (typeof raw.apiKey === "string" && raw.apiKey.trim()) {
+      process.env.ANTHROPIC_API_KEY = raw.apiKey.trim();
+      anthropic = new Anthropic({ apiKey: raw.apiKey.trim(), maxRetries: 4 });
+      keySource = "in-app";
+      console.error("[settings] using the API key set in the app (clear it in Settings to fall back to the environment)");
+    }
+  } catch { /* no saved settings — the environment stands */ }
 }
 
 // Deep agents (threat model, code-gen, orchestrator) need many tool-call turns
@@ -1506,7 +1563,16 @@ app.get("/api/health", async (req, res) => {
 // ---- Settings API (in-app key / model) -----------------------------------
 function settingsView() {
   const k = process.env.ANTHROPIC_API_KEY || "";
-  return { hasApiKey: Boolean(k), keyHint: k ? "…" + k.slice(-4) : "", model: MODEL };
+  return {
+    hasApiKey: Boolean(k),
+    keyHint: k ? "…" + k.slice(-4) : "",
+    model: MODEL,
+    // Which of the two possible sources is actually in force. Without this, an admin
+    // rotating the deployment's key has no way to tell that an in-app override is
+    // quietly winning.
+    keySource,
+    canFallBackToEnvironment: Boolean(envApiKey),
+  };
 }
 app.get("/api/settings", (_req, res) => res.json(settingsView()));
 app.post("/api/settings", (req, res) => {
@@ -2479,6 +2545,7 @@ function main() {
     try { fs.mkdirSync(d, { recursive: true }); } catch {}
   }
   agents = loadAgents();
+  loadSettings();   // before anything reads MODEL or makes a call
   loadProjects();
   loadThreads();
   console.error(
