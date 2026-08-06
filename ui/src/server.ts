@@ -592,14 +592,27 @@ function openWorkspace(projectId: string): Workspace {
   }
 
   ws.opening = (async () => {
+    const t0 = Date.now();
+    let connectMs = 0;
     try {
       await connectMcp(project, ws);
+      connectMs = Date.now() - t0;
       await warmIndex(project, ws);
     } catch (e) {
       ws.error = (e as Error).message;
       console.error(`[mcp] could not open "${project.name}": ${ws.error}`);
     } finally {
       ws.opening = undefined;
+      // How long a project takes to become usable is the number behind every
+      // complaint that the app "hangs on startup".
+      recordDiag("workspaces", {
+        project: project.id,
+        connectSec: Number((connectMs / 1000).toFixed(1)),
+        indexSec: Number(((Date.now() - t0 - connectMs) / 1000).toFixed(1)),
+        totalSec: Number(((Date.now() - t0) / 1000).toFixed(1)),
+        tools: ws.tools.length,
+        error: ws.error,
+      });
       evictIfNeeded(projectId).catch(() => { /* eviction is best effort */ });
     }
   })();
@@ -962,6 +975,28 @@ function loadSettings() {
 // Deep agents (threat model, code-gen, orchestrator) need many tool-call turns
 // before they synthesise. Too low a cap truncates them mid-analysis. Configurable.
 const MAX_TURNS = Number(process.env.MAX_TURNS_PER_RUN ?? 44);
+
+// ---------------------------------------------------------------------------
+// Diagnostics — recent operational history, in memory.
+//
+// "Why was that slow?" and "why did that run stop early?" were only answerable by
+// reading the container log, which on App Service means a separate token audience, a
+// Kudu endpoint, or a portal blade. That is too much friction for a question that
+// comes up constantly, so the numbers the log already prints are kept here too.
+//
+// Bounded, and deliberately free of anything sensitive: no prompts, no answers, no
+// keys — timings, counts, and which project.
+// ---------------------------------------------------------------------------
+const DIAG_KEEP = 50;
+const diagnostics: Record<"uploads" | "workspaces" | "runs", any[]> = {
+  uploads: [], workspaces: [], runs: [],
+};
+
+function recordDiag(kind: keyof typeof diagnostics, row: Record<string, unknown>) {
+  const list = diagnostics[kind];
+  list.push({ at: new Date().toISOString(), ...row });
+  if (list.length > DIAG_KEEP) list.splice(0, list.length - DIAG_KEEP);
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -1625,6 +1660,37 @@ function settingsView() {
     canFallBackToEnvironment: Boolean(envApiKey),
   };
 }
+/**
+ * Recent operational history — what was slow, and what stopped early.
+ *
+ * Answers the questions that otherwise need container log access: how long an upload
+ * spent in each phase, how long a project took to become usable, and which runs hit
+ * the step limit. Newest last, capped, and holding no prompts, answers or secrets.
+ */
+app.get("/api/diagnostics", (_req, res) => {
+  const runs = diagnostics.runs;
+  const cutOff = runs.filter((r) => r.cutOff);
+  res.json({
+    now: new Date().toISOString(),
+    uptimeSec: Math.round(process.uptime()),
+    limits: { stepLimit: MAX_TURNS, toolTimeoutMs: MCP_TIMEOUT_MS, maxWorkspaces: MAX_WORKSPACES, maxUploadMb: MAX_UPLOAD_MB },
+    workspacesOpen: [...workspaces.values()].map((w) => ({
+      project: w.projectId, ready: w.ready, opening: Boolean(w.opening), error: w.error,
+    })),
+    summary: {
+      runs: runs.length,
+      runsCutOff: cutOff.length,
+      // Which agent and project pairing runs out of steps is the actionable part.
+      cutOffBy: [...new Set(cutOff.map((r) => `${r.agent} on ${r.project}`))].slice(0, 10),
+      slowestUploadSec: diagnostics.uploads.reduce((m, u) => Math.max(m, u.totalSec ?? 0), 0),
+      slowestOpenSec: diagnostics.workspaces.reduce((m, w) => Math.max(m, w.totalSec ?? 0), 0),
+    },
+    uploads: diagnostics.uploads,
+    workspaces: diagnostics.workspaces,
+    runs,
+  });
+});
+
 app.get("/api/settings", (_req, res) => res.json(settingsView()));
 app.post("/api/settings", (req, res) => {
   try {
@@ -2290,6 +2356,15 @@ app.post("/api/projects/upload", async (req, res) => {
       `${pruned.removed} folders pruned — ` +
       Object.entries(t).map(([k, ms]) => `${k} ${(ms / 1000).toFixed(1)}s`).join(", ")
     );
+    recordDiag("uploads", {
+      project: id,
+      megabytes: Number((bytes / 1048576).toFixed(1)),
+      filesKept: kept,
+      foldersPruned: pruned.removed,
+      prunedMb: Number((pruned.bytes / 1048576).toFixed(1)),
+      totalSec: Number((Object.values(t).reduce((a, b) => a + b, 0) / 1000).toFixed(1)),
+      phasesSec: Object.fromEntries(Object.entries(t).map(([k, ms]) => [k, Number((ms / 1000).toFixed(1))])),
+    });
     // Report what was dropped. The next zip is smaller only if someone learns that
     // most of the last one never needed to be sent.
     alive.send(200, {
@@ -2569,7 +2644,18 @@ app.post("/api/chat", async (req, res) => {
       .slice(-MEMORY_MESSAGES)
       .map((m) => ({ role: m.role, content: m.text }));
 
+    const runStarted = Date.now();
     let answer = await runAgent(run, agent, message, emit, 0, prior);
+    // Cut-off is the thing worth counting: an agent that runs out of steps returns a
+    // partial answer that reads like a whole one unless you notice the warning.
+    recordDiag("runs", {
+      agent: agent.id,
+      project: run.project?.id ?? "",
+      seconds: Number(((Date.now() - runStarted) / 1000).toFixed(1)),
+      cutOff: answer.includes("Analysis was cut off at the"),
+      stepLimit: MAX_TURNS,
+      chars: answer.length,
+    });
 
     // Last line of the answer, so it travels with a copy-pasted response the way the
     // footer travels with a saved artifact.
