@@ -313,6 +313,34 @@ function newId(name: string) {
 function activeProject(): Project | undefined {
   return projects.find((p) => p.id === defaultProjectId);
 }
+
+/**
+ * A project that can actually be loaded.
+ *
+ * Falling back to the demo looked safe until the cloud, where the demo codebase is not
+ * in the image at all. Deleting a project therefore left every new session pointed at
+ * `/app/demo/nopCommerce/src`, which does not exist, and the app opened on
+ * "Source root not found" — a broken deployment as far as anyone arriving could tell.
+ * Prefer the most recent project whose source root is really on disk.
+ */
+function fallbackProjectId(exclude: string): string | null {
+  const usable = projects.filter((p) => p.id !== exclude && fs.existsSync(p.sourceRoot));
+  return usable.length ? usable[usable.length - 1].id : null;
+}
+
+/**
+ * Where a new session starts: the configured default when it is loadable, otherwise
+ * anything that is. Boot already declines to activate a project whose source is
+ * missing, but it left the default null and sessions fell straight back to the demo —
+ * the very project it had just refused. In a cloud image the demo's source is never
+ * present, so every arriving user met an error on a deployment holding twenty
+ * perfectly good projects.
+ */
+function startingProjectId(): string {
+  const preferred = projects.find((p) => p.id === defaultProjectId);
+  if (preferred && fs.existsSync(preferred.sourceRoot)) return preferred.id;
+  return fallbackProjectId(defaultProjectId ?? "") ?? DEMO_ID;
+}
 function demoProject(): Project {
   return {
     id: DEMO_ID,
@@ -644,12 +672,12 @@ function sessionOf(req: express.Request, res: express.Response) {
       // and a Secure cookie would simply never be stored there.
       res.setHeader("Set-Cookie", `${SESSION_COOKIE}=${id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`);
     }
-    sessions.set(id, { projectId: defaultProjectId ?? DEMO_ID, lastSeen: Date.now() });
+    sessions.set(id, { projectId: startingProjectId(), lastSeen: Date.now() });
   }
   const s = sessions.get(id)!;
   s.lastSeen = Date.now();
   // A project deleted by someone else must not strand this session on it.
-  if (!projects.some((p) => p.id === s.projectId)) s.projectId = defaultProjectId ?? DEMO_ID;
+  if (!projects.some((p) => p.id === s.projectId)) s.projectId = startingProjectId();
   return { id, state: s };
 }
 
@@ -2389,11 +2417,16 @@ app.delete("/api/projects/:id", async (req, res) => {
     try { fs.rmSync(path.join(WORKSPACE_DIR, id), { recursive: true, force: true }); } catch {}
   }
   { const ws = workspaces.get(id); if (ws) await closeWorkspace(ws); }
-  for (const st of sessions.values()) if (st.projectId === id) st.projectId = defaultProjectId ?? DEMO_ID;
-  try {
-    if (defaultProjectId === id) await activateProject(DEMO_ID);
-  } catch (e) {
-    console.error("[mcp] could not fall back to the demo project:", (e as Error).message);
+
+  // Move anyone standing on the deleted project, and the default with them.
+  const next = fallbackProjectId(id);
+  for (const st of sessions.values()) if (st.projectId === id) st.projectId = next ?? DEMO_ID;
+  if (defaultProjectId === id) {
+    defaultProjectId = next ?? DEMO_ID;
+    saveProjects();
+    // Started, not awaited: deleting one project should not block on indexing another,
+    // which can take ten minutes on a large repository.
+    if (next) openWorkspace(next);
   }
   res.json({ ok: true });
 });
