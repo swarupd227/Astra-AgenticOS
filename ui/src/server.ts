@@ -2119,15 +2119,15 @@ function hardenExtracted(dir: string) {
   const walk = (d: string) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
       const full = path.join(d, e.name);
+      // Links are the entire attack: a symlink or junction is what points outside the
+      // extraction root. Deleting them before descending means no directory we walk
+      // into can be one, which is what makes the check below unnecessary.
       if (e.isSymbolicLink()) { fs.rmSync(full, { force: true }); removed++; continue; }
       if (e.isDirectory()) walk(full);
-      else {
-        const real = fs.realpathSync(full);
-        if (real !== root && !real.startsWith(root + path.sep)) {
-          fs.rmSync(full, { force: true });
-          removed++;
-        }
-      }
+      // A regular file reached through a chain of real directories resolves to itself,
+      // so its realpath cannot escape the root. This used to call realpathSync on every
+      // one — a syscall per file, on files that were about to be deleted as build
+      // output anyway, for a comparison that could never fail.
     }
   };
   walk(root);
@@ -2161,9 +2161,16 @@ app.post("/api/projects/upload", async (req, res) => {
       );
     fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
+    // Upload is the slowest thing the app does and the least visible, so each phase
+    // reports what it cost. Without this, "the upload is slow" is unanswerable.
+    const t: Record<string, number> = {};
+    let mark = Date.now();
+    const phase = (n: string) => { t[n] = Date.now() - mark; mark = Date.now(); };
+
     const bytes = await receiveUpload(req, zipFile);
     if (!bytes) throw new Error("The upload was empty.");
     assertLooksLikeZip(zipFile);
+    phase("receive");
 
     fs.mkdirSync(dir, { recursive: true });
     extracted = dir;
@@ -2185,10 +2192,17 @@ app.post("/api/projects/upload", async (req, res) => {
       // failure would reject virtually every upload. Judge by what landed on disk.
       unzipError = e;
     }
-    hardenExtracted(dir);
+    phase("unzip");
+    // Prune first: whatever the exclusions missed is deleted here, so hardening walks
+    // only the files being kept rather than the ones on their way to the bin.
     const pruned = pruneUnindexed(dir);
+    phase("prune");
+    hardenExtracted(dir);
+    phase("harden");
 
-    if (!countFiles(dir)) {
+    const kept = countFiles(dir);
+    phase("count");
+    if (!kept) {
       throw new Error(
         unzipError
           ? `Could not extract the zip: ${String(unzipError?.stderr || unzipError?.message || unzipError).slice(0, 200)}`
@@ -2215,8 +2229,16 @@ app.post("/api/projects/upload", async (req, res) => {
     };
     projects.push(project);
     saveProjects();
+    phase("move");
     await activateProject(id);
+    phase("index");
     extracted = null; // committed
+
+    console.error(
+      `[upload] ${name}: ${(bytes / 1048576).toFixed(1)}MB, ${kept} files kept, ` +
+      `${pruned.removed} folders pruned — ` +
+      Object.entries(t).map(([k, ms]) => `${k} ${(ms / 1000).toFixed(1)}s`).join(", ")
+    );
     // Report what was dropped. The next zip is smaller only if someone learns that
     // most of the last one never needed to be sent.
     alive.send(200, {

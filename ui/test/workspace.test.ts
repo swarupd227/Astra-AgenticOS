@@ -71,14 +71,25 @@ for (const [name, expected] of [
   if (isNeverIndexed(name) !== expected) fail(`MATCH          | ${name}: expected ${expected}`);
 }
 
-// Every ignored directory needs a root-level and an any-depth pattern.
+/**
+ * Four patterns per directory, because the two unzip builds disagree about whether a
+ * single star may span a slash. Dropping the double-star forms silently disables
+ * exclusion on Windows — everything still ends up correct because prune runs after,
+ * but the archive is fully extracted first, which is where 30 seconds went.
+ */
 const args = unzipExcludeArgs();
 if (args[0] !== "-x") fail("EXCLUDE        | first arg must be -x");
-if (args.length !== NEVER_INDEXED.length * 2 + 1) fail(`EXCLUDE        | expected ${NEVER_INDEXED.length * 2 + 1} args, got ${args.length}`);
-for (const d of NEVER_INDEXED) {
-  if (!args.includes(`${d}/*`)) fail(`EXCLUDE        | missing root pattern for ${d}`);
-  if (!args.includes(`*/${d}/*`)) fail(`EXCLUDE        | missing nested pattern for ${d}`);
+if (args.length !== NEVER_INDEXED.length * 4 + 1) {
+  fail(`EXCLUDE        | expected ${NEVER_INDEXED.length * 4 + 1} args, got ${args.length}`);
 }
+for (const d of NEVER_INDEXED) {
+  for (const form of [`${d}/*`, `${d}/**`, `**/${d}/*`, `**/${d}/**`]) {
+    if (!args.includes(form)) fail(`EXCLUDE        | missing pattern ${form}`);
+  }
+}
+// A star that stops at a separator cannot reach src/bin, which is where build output
+// actually lives — so the deep form has to be present, not just the shallow one.
+if (!args.includes("**/bin/**")) fail("EXCLUDE        | deep form missing; nested bin/ would extract");
 
 console.log(
   `${SOURCE.length} source kept, ${JUNK.length} junk removed ` +

@@ -19,9 +19,25 @@ export const NEVER_INDEXED = [
   "dist", "build", ".angular", ".next", "target", "out",
 ];
 
-/** Exclusion patterns for `unzip -x`: the directory at the root, and at any depth. */
+/**
+ * Exclusion patterns for `unzip -x`, in every form the two builds disagree about.
+ *
+ * Info-ZIP on Linux lets a single star span a slash, so one star, slash, "bin" matches
+ * at any depth. The Git-for-Windows build does not: there a single star stops at a
+ * separator and only a double star spans one. The patterns shipped first were the
+ * Linux form only, so on Windows they matched nothing at all and every byte of build
+ * output was extracted and then deleted again — 5,800 files written where 800 were
+ * wanted, and 47 seconds where 15 would do.
+ *
+ * Four forms per directory covers both: at the root and at depth, single and double
+ * star. Patterns that match nothing only produce a "caution", which the caller already
+ * ignores because it cannot know which of the thirteen a given archive contains.
+ */
 export function unzipExcludeArgs(): string[] {
-  return ["-x", ...NEVER_INDEXED.flatMap((d) => [`${d}/*`, `*/${d}/*`])];
+  return [
+    "-x",
+    ...NEVER_INDEXED.flatMap((d) => [`${d}/*`, `${d}/**`, `**/${d}/*`, `**/${d}/**`]),
+  ];
 }
 
 /**
