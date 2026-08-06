@@ -547,16 +547,15 @@ async function warmIndex(project: Project, ws: Workspace) {
  * caller can report "this project could not be loaded" without taking down a
  * request that was only asking about a different one.
  */
-async function workspaceFor(projectId: string): Promise<Workspace> {
-  let ws = workspaces.get(projectId);
-  if (ws) {
-    ws.lastUsed = Date.now();
-    if (ws.opening) await ws.opening;
-    return ws;
+function openWorkspace(projectId: string): Workspace {
+  const existing = workspaces.get(projectId);
+  if (existing) {
+    existing.lastUsed = Date.now();
+    return existing;
   }
 
   const project = projects.find((p) => p.id === projectId);
-  ws = { projectId, tools: [], ready: false, error: null, lastUsed: Date.now() };
+  const ws: Workspace = { projectId, tools: [], ready: false, error: null, lastUsed: Date.now() };
   workspaces.set(projectId, ws);
 
   if (!project) {
@@ -566,18 +565,32 @@ async function workspaceFor(projectId: string): Promise<Workspace> {
 
   ws.opening = (async () => {
     try {
-      await connectMcp(project, ws!);
-      await warmIndex(project, ws!);
+      await connectMcp(project, ws);
+      await warmIndex(project, ws);
     } catch (e) {
-      ws!.error = (e as Error).message;
-      console.error(`[mcp] could not open "${project.name}": ${ws!.error}`);
+      ws.error = (e as Error).message;
+      console.error(`[mcp] could not open "${project.name}": ${ws.error}`);
     } finally {
-      ws!.opening = undefined;
+      ws.opening = undefined;
+      evictIfNeeded(projectId).catch(() => { /* eviction is best effort */ });
     }
   })();
 
-  await ws.opening;
-  await evictIfNeeded(projectId);
+  return ws;
+}
+
+/**
+ * Wait for a workspace to finish opening.
+ *
+ * Only for callers that genuinely cannot proceed without it — creating a project,
+ * or explicitly switching to one. Indexing a large repository off the mounted share
+ * can take ten minutes or more, and anything that merely *reports* state must use
+ * openWorkspace instead: /api/health blocked for the full ten minutes on a cold
+ * container while /api/projects answered in nine seconds, which reads as an outage.
+ */
+async function workspaceFor(projectId: string): Promise<Workspace> {
+  const ws = openWorkspace(projectId);
+  if (ws.opening) await ws.opening;
   return ws;
 }
 
@@ -641,16 +654,23 @@ function sessionOf(req: express.Request, res: express.Response) {
 }
 
 /** As contextOf, but shaped for a run — callers check ws.ready before using it. */
-async function runContextOf(req: express.Request, res: express.Response): Promise<RunContext> {
-  const { project, ws } = await contextOf(req, res);
+function runContextOf(req: express.Request, res: express.Response): RunContext {
+  const { project, ws } = contextOf(req, res);
   return { project, ws: ws ?? { projectId: "", tools: [], ready: false, error: "No project loaded.", lastUsed: Date.now() } };
 }
 
-/** The project this request is about, and its workspace. */
-async function contextOf(req: express.Request, res: express.Response) {
+/**
+ * The project this request is about, and its workspace.
+ *
+ * Deliberately does not wait for the workspace to finish opening. Callers report
+ * "still starting" from `ws.ready`, which is what they did before workspaces existed —
+ * blocking here made every endpoint hostage to a cold index, and a health check that
+ * hangs for ten minutes is indistinguishable from a dead server.
+ */
+function contextOf(req: express.Request, res: express.Response) {
   const { state } = sessionOf(req, res);
   const project = projects.find((p) => p.id === state.projectId) ?? null;
-  const ws = project ? await workspaceFor(project.id) : null;
+  const ws = project ? openWorkspace(project.id) : null;
   return { project, ws };
 }
 
@@ -1542,6 +1562,9 @@ app.get("/api/health", async (req, res) => {
   res.json({
     mcpReady: ws?.ready ?? false,
     mcpError: ws?.error ?? null,
+    // Distinguish "still indexing" from "broken" — the UI can say which, and a
+    // monitor can tell a slow start from an outage.
+    indexing: Boolean(ws?.opening),
     mcpTools: (ws?.tools ?? []).map((t) => t.name),
     workspacesOpen: workspaces.size,
     model: MODEL,
