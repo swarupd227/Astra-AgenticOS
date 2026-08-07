@@ -85,18 +85,35 @@ export const COMPAT_KIND =
 export const ATTRIBUTED =
   /\b(?:documents?|documented|claims?|claimed|advertis(?:e|es|ed)|according to|per the|release notes|changelog|upstream says|states that)\b/i;
 
+/** A heading names a section; whatever it introduces is checked on its own terms. */
+const HEADING = /^#{1,6}\s/;
+
+/**
+ * A table row whose value is nothing to act on — "| Unused / safe to remove | 0 |".
+ * The phrase is a row label and the answer is zero, which is the opposite of a verdict.
+ */
+const NOTHING_TO_ACT_ON = /^\|.*\|\s*\**\s*(?:0|none|nil|n\/?a|—|-)\s*\**\s*\|?\s*$/i;
+
 /**
  * Compatibility verdicts that never say which compatibility they mean.
  *
  * Naming a kind is enough to pass — this forces the question to be answered, it does
  * not judge the answer. A hedged verdict passes too: "should be source-compatible" is
  * already an admission that it was not verified.
+ *
+ * Headings and empty-result table rows are skipped. A dead-code review that correctly
+ * found nothing removable was flagged twice — once for the section heading "Safe to
+ * Remove" over an empty list, and once for the row "| Unused / safe to remove | 0 |".
+ * Both are labels rather than claims, and crying wolf on a clean answer is how a check
+ * teaches people to ignore it. Verdicts inside table cells are still caught; it is only
+ * the rows reporting nothing that are let through.
  */
 export function unqualifiedCompatibility(text: string): string[] {
   const found: string[] = [];
   for (const raw of text.split(SENTENCES)) {
     const s = raw.trim();
     if (!s || s.length > 400) continue;
+    if (HEADING.test(s) || NOTHING_TO_ACT_ON.test(s)) continue;
     if (!COMPAT_VERDICT.test(s)) continue;
     if (COMPAT_KIND.test(s) || HEDGED.test(s) || ATTRIBUTED.test(s)) continue;
     found.push(s.replace(/\s+/g, " ").slice(0, 150));

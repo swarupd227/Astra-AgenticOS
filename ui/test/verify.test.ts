@@ -94,6 +94,9 @@ const COMPAT_FLAG = [
   "Renaming the property has no impact on consumers.",
   // SPV-01 missed exactly this: source unchanged, compiled callers broken.
   "Adding the optional parameter is not a breaking change.",
+  // A verdict inside a table is still a verdict — only the rows reporting an absence
+  // are let through, not every row.
+  "| BasketService.Update | Backward compatible |",
 ];
 
 /** Names a kind, or admits it was not verified. Either answers the question. */
@@ -113,6 +116,14 @@ const COMPAT_QUIET = [
   // package can reference an unexported symbol. Observed from a real dead-code run.
   "These are unexported and have no production callers, so they are safe to remove.",
   "`LegacyHelper` is private and safe to delete.",
+  // Both observed flagging a dead-code review that correctly found nothing removable
+  // (cloud, 7 August). A heading names a section and a zero row reports an absence —
+  // neither is a claim about a change.
+  "## High Confidence — Safe to Remove",
+  "### Safe to remove",
+  "| Unused / safe to remove | **0** |",
+  "| Backward compatible | none |",
+  "| Safe to delete | N/A |",
 ];
 
 for (const s of COMPAT_FLAG) if (unqualifiedCompatibility(s).length === 0) fail(`COMPAT ? | ${s}`);

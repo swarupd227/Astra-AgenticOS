@@ -1514,8 +1514,14 @@ async function runAgent(
   // unverifiable by eye — a hollow citation looks exactly like a real one.
   // This is a factual comparison against what the run actually read, so it
   // cannot be prompted away.
+  // The answer as the agent wrote it. Every check below reads this rather than the
+  // running total, because each one appends a warning that quotes the lines it
+  // flagged — and the next check would then scan those quotes and report the same
+  // sentence again under a different heading.
+  const written = outText;
+
   const cited = [...new Set(
-    [...outText.matchAll(/\b(GLD-[A-Z]+-\d+)@\d+/g)].map((m) => m[1].toUpperCase())
+    [...written.matchAll(/\b(GLD-[A-Z]+-\d+)@\d+/g)].map((m) => m[1].toUpperCase())
   )];
   const unread = cited.filter((id) => !goldenReadThisRun.has(id));
 
@@ -1533,7 +1539,7 @@ async function runAgent(
   // Same idea as the citation check, applied to claims about the running world.
   // Static tools cannot see a deployment or a test result, so these sentences are
   // describing something this run did not observe — whatever their wording implies.
-  const overreach = unprovenClaims(outText);
+  const overreach = unprovenClaims(written);
   if (overreach.length) {
     const note =
       `\n\n_⚠ **Unproven claim${overreach.length > 1 ? "s" : ""} about runtime or test state:** ` +
@@ -1548,7 +1554,7 @@ async function runAgent(
 
   // "Backward compatible" is five questions in one coat, and the reader acts on the
   // answer. Naming a kind clears this — it forces the question, it does not grade it.
-  const vague = unqualifiedCompatibility(outText);
+  const vague = unqualifiedCompatibility(written);
   if (vague.length) {
     const one = vague.length === 1;
     const note =
@@ -1564,7 +1570,7 @@ async function runAgent(
 
   // "Saved" has to survive someone going to look for it. This compares the answer's
   // own words against what the tool actually wrote — not a judgement, a lookup.
-  const phantom = unsavedArtifactClaims(outText, savedThisRun);
+  const phantom = unsavedArtifactClaims(written, savedThisRun);
   if (phantom.length) {
     const one = phantom.length === 1;
     const note =
