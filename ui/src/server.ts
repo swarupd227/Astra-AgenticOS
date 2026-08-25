@@ -1679,7 +1679,10 @@ app.get("/api/diagnostics", (_req, res) => {
   res.json({
     now: new Date().toISOString(),
     uptimeSec: Math.round(process.uptime()),
-    limits: { stepLimit: MAX_TURNS, toolTimeoutMs: MCP_TIMEOUT_MS, maxWorkspaces: MAX_WORKSPACES, maxUploadMb: MAX_UPLOAD_MB },
+    // `az webapp config appsettings set` echoes every value back as null on this
+    // deployment's CLI version — its own response cannot confirm a setting took.
+    // What the running process actually read at boot is the only thing that can.
+    limits: { stepLimit: MAX_TURNS, toolTimeoutMs: MCP_TIMEOUT_MS, maxWorkspaces: MAX_WORKSPACES, maxUploadMb: MAX_UPLOAD_MB, maxTokens: MAX_TOKENS },
     workspacesOpen: [...workspaces.values()].map((w) => ({
       project: w.projectId, ready: w.ready, opening: Boolean(w.opening), error: w.error,
     })),
