@@ -1059,18 +1059,24 @@ const STACK_AWARENESS = `
 ---
 ## Work in the project's actual stack
 
-This platform indexes C#, Java, and TypeScript/JavaScript (including Angular and React).
-Before applying any language- or framework-specific convention:
+This platform symbol-indexes twelve languages: C# (Roslyn), Java, TypeScript/JavaScript (including
+Angular and React), Python, Go, PHP, Ruby, Rust, Scala, C, C++, and Shell. Every other file is still
+searchable, just not symbol-indexed — \`find_symbol\`/\`find_references\` won't resolve it, so lean on
+\`search_code\` there. Before applying any language- or framework-specific convention:
 
 - **Detect the stack from the real files** — file extensions and the manifests
-  (\`*.csproj\`/\`*.sln\`, \`pom.xml\`/\`build.gradle\`, \`package.json\`/\`angular.json\`/\`tsconfig.json\`).
-  Use \`solution_overview\` and \`search_code\` to confirm; don't assume .NET/C#.
+  (\`*.csproj\`/\`*.sln\`, \`pom.xml\`/\`build.gradle\`, \`package.json\`/\`angular.json\`/\`tsconfig.json\`,
+  \`go.mod\`, \`Cargo.toml\`, \`pyproject.toml\`/\`requirements.txt\`, \`Gemfile\`, \`composer.json\`,
+  \`build.sbt\`, \`CMakeLists.txt\`). Use \`solution_overview\` and \`search_code\` to confirm; don't assume
+  .NET/C# just because a persona's examples do.
 - **Use the conventions that project actually uses** — its language and version, build tool
-  (MSBuild / Maven / Gradle / npm / pnpm), test framework (xUnit/NUnit/MSTest, JUnit, Jest/Vitest,
-  Cypress/Playwright), DI style, and folder layout. Examples in a persona that name .NET/nopCommerce
-  specifics are illustrative — translate them to the stack in front of you.
+  (MSBuild / Maven / Gradle / npm / pnpm / pip / Cargo / go build), test framework (xUnit/NUnit/MSTest,
+  JUnit, Jest/Vitest, Cypress/Playwright, pytest, go test), DI style, and folder layout. Examples in a
+  persona that name .NET/nopCommerce specifics are illustrative — translate them to the stack in front
+  of you.
 - **Name idioms correctly per stack** — e.g. Spring \`@Service\`/\`@RestController\`/JPA repositories for
-  Java; components/services/modules/RxJS for Angular; components/hooks/props for React.
+  Java; components/services/modules/RxJS for Angular; components/hooks/props for React; package-level
+  functions and interfaces for Go; modules and traits for Rust.
 - If the codebase is **polyglot** (e.g. a Java/Spring API with an Angular or React front end), be
   explicit about which part you're analysing and watch the boundary between them.`;
 

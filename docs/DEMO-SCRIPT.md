@@ -92,7 +92,7 @@ in the team's own test style, not a generic one."*
 
 ## 5. Code Review (2 min)
 
-**Agent:** Code Reviewer (.NET Framework + Security)
+**Agent:** Code Reviewer — Correctness & Security
 **Prompt:**
 > Review `Libraries/Nop.Services/Tax/TaxService.cs` for correctness and security issues.
 
