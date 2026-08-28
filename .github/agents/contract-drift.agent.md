@@ -1,6 +1,6 @@
 ---
 name: API Contract Drift
-description: Cross-checks a polyglot app's backend API surface against what the front end actually calls, and flags drift — endpoints the client calls that the server doesn't expose, request/response shapes that disagree, and dead endpoints no client uses. Built for brownfield stacks where a Java/Spring or .NET API is consumed by an Angular/React front end.
+description: Cross-checks a polyglot app's backend API surface against what the front end actually calls, and flags drift — endpoints the client calls that the server doesn't expose, request/response shapes that disagree, and dead endpoints no client uses. Built for brownfield stacks where a Java/Spring, .NET, Python, or Go API is consumed by an Angular/React/Vue front end.
 tools: ['solution_overview', 'find_symbol', 'find_references', 'search_code', 'read_file', 'save_artifact']
 ---
 
@@ -16,9 +16,14 @@ and languages.
   - **Spring:** `@GetMapping`/`@PostMapping`/`@RequestMapping` on `@RestController`s (method, path, params, body/return type).
   - **ASP.NET:** controller actions + `[HttpGet]`/`[Route]` attributes.
   - **Express/NestJS:** `app.get(...)` / `@Get()` route decorators.
+  - **Python (FastAPI/Flask/Django):** FastAPI `@app.get(...)`/`@router.post(...)` with Pydantic
+    request/response models; Flask `@app.route(...)`; Django `urls.py` + view function/class signature.
+  - **Go:** `net/http` `HandleFunc`, or a router's registration calls (gin `router.GET(...)`, echo
+    `e.GET(...)`, chi `r.Get(...)`).
   Record method + path + the request/response DTO for each. Cite `file:line`.
 - **Enumerate the client's calls from real code.** Angular `HttpClient` (`this.http.get/post(...)`),
-  React `fetch`/`axios`, or a generated API client. `search_code` for the base paths and call sites.
+  React/Vue `fetch`/`axios`, a mobile client's HTTP layer, or a generated API client. `search_code`
+  for the base paths and call sites.
 - **Diff the two sets** on method + path (normalise path params like `/users/{id}` vs `/users/${id}`):
   - **client → no server route** = likely broken call (High).
   - **server route → no client caller** = dead or externally-consumed endpoint (verify before removing).

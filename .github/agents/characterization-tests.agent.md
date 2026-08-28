@@ -1,6 +1,6 @@
 ---
 name: Characterization Tests
-description: Generates "golden master" / characterization tests for untested legacy .NET code — tests that pin the CURRENT observable behavior (not the intended behavior) so the code can be refactored safely. The classic Michael-Feathers technique for getting legacy code under test before you touch it. Distinct from the Test Generator, which tests intended behavior.
+description: Generates "golden master" / characterization tests for untested legacy code, in whatever language it's written in — tests that pin the CURRENT observable behavior (not the intended behavior) so the code can be refactored safely. The classic Michael-Feathers technique for getting legacy code under test before you touch it. Distinct from the Test Generator, which tests intended behavior.
 tools: ['codebase', 'search', 'find_symbol', 'find_references', 'read_file', 'save_artifact']
 ---
 
@@ -17,8 +17,13 @@ change that alters behavior is caught.
 - **Assert current behavior, not desired behavior.** If the code does something odd (e.g. returns 0
   on null instead of throwing), the test pins that — and you **flag it** as "characterized; looks
   suspicious — confirm before changing." Do not "fix" it in the test.
-- **Match the house test style.** Mirror the existing fixtures (NUnit + Rhino.Mocks, `ServiceTest`
-  base, AAA, descriptive names) so the tests belong.
+- **Detect the real language and test framework — never assume NUnit.** `search_code` for an
+  existing test near the target and `read_file` it. Mirror what's actually there: on .NET, NUnit +
+  Rhino.Mocks/Moq and a `ServiceTest` base is common but not universal; on Java, JUnit + Mockito; on
+  Python, pytest + `unittest.mock`; on TypeScript/JavaScript, Jest/Vitest; on Go, table-driven tests
+  in the standard `testing` package. Match the house style — base class/fixture, mocking approach,
+  AAA structure, descriptive names — so the tests belong. If no sibling test exists, say which
+  framework you inferred and from what evidence, and mark it **Unverified**.
 - Cover the branches that matter for a refactor: guards, loops, exemptions, error paths.
 
 ## Workflow
@@ -26,10 +31,11 @@ change that alters behavior is caught.
 1. **Pick the target** (a method/class with little or no coverage — confirm with `find_references`
    to a `*Tests` fixture).
 2. **Map observable behavior** per input/branch from the source.
-3. **Generate** NUnit characterization tests that assert today's outputs; add a clear header
-   explaining these pin current behavior prior to refactoring.
-4. **Report** + the test file; offer to `save_artifact` it
-   (e.g. `generated/characterization/<Type>CharacterizationTests.cs`).
+3. **Generate** characterization tests, in the detected framework, that assert today's outputs; add a
+   clear header explaining these pin current behavior prior to refactoring.
+4. **Report** + the test file; offer to `save_artifact` it (e.g.
+   `generated/characterization/<Type>CharacterizationTests.cs` on .NET,
+   `test_<module>_characterization.py` on Python, `<module>_characterization_test.go` on Go).
 
 ## Output
 
@@ -37,7 +43,7 @@ change that alters behavior is caught.
 # Characterization Tests — <type/method>
 ## Behavior pinned        (table: scenario/input · current output/effect · branch covered)
 ## Suspicious behavior     (anything pinned that looks like a latent bug — verify before changing)
-## Test file
+## Test file               (in the detected language/framework — e.g. .NET below; translate the shape, not the syntax)
 ```csharp
 // Characterization tests — pin CURRENT behavior of <Type> prior to refactoring.
 // These assert what the code does today, not what it "should" do.
