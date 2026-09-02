@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { scanContent } from "./scan.js";
 
 /**
  * Golden Repository — the organisation's own knowledge layer (standards, templates,
@@ -46,6 +47,8 @@ export interface GoldenItem {
   contentChars: number;
   createdAt: string;
   updatedAt: string;
+  flagged?: boolean;           // content scan (injection/secrets) found something
+  flagReasons?: string[];      // why it was flagged (secret values never stored)
 }
 
 export interface ProjectGoldenSelection {
@@ -80,6 +83,7 @@ export class GoldenStore {
       try { fs.mkdirSync(d, { recursive: true }); } catch { /* surfaced on first write */ }
     }
     this.load();
+    this.migrateFlags();
   }
 
   private load() {
@@ -97,6 +101,24 @@ export class GoldenStore {
     const tmp = `${this.indexFile}.tmp-${process.pid}-${Date.now()}`;
     fs.writeFileSync(tmp, JSON.stringify({ items: this.items }, null, 2));
     fs.renameSync(tmp, this.indexFile);
+  }
+
+  /**
+   * One-time backfill: items created before the `flagged` field existed have it
+   * undefined — rescan their content once so existing secrets/injection surface
+   * in the Library too. After this writes, subsequent loads already have the field.
+   */
+  private migrateFlags() {
+    let changed = false;
+    for (const item of this.items) {
+      if (item.flagged !== undefined) continue;
+      const content = this.readContent(item.id);
+      const reasons = content ? scanContent(content) : [];
+      item.flagged = reasons.length > 0;
+      item.flagReasons = reasons;
+      changed = true;
+    }
+    if (changed) { try { this.writeIndex(); } catch { /* best-effort */ } }
   }
 
   /** Run a mutation with exclusive access to the index. */
@@ -172,6 +194,7 @@ export class GoldenStore {
 
       const id = this.nextId(kind);
       const now = new Date().toISOString();
+      const flagReasons = scanContent(content);
       const item: GoldenItem = {
         id, title,
         description: (input.description || "").trim() || title,
@@ -184,6 +207,7 @@ export class GoldenStore {
         version: 1, status,
         sourceName: input.sourceName,
         contentChars: content.length,
+        flagged: flagReasons.length > 0, flagReasons,
         createdAt: now, updatedAt: now,
       };
       this.writeContent(id, content, 1);
@@ -208,6 +232,11 @@ export class GoldenStore {
         item.version += 1;                       // content change = new citable version
         this.writeContent(id, patch.content!, item.version);
         item.contentChars = patch.content!.length;
+        // Re-scan on every content change: adding a secret / injection flags it,
+        // removing the offending text clears the flag.
+        const reasons = scanContent(patch.content!);
+        item.flagged = reasons.length > 0;
+        item.flagReasons = reasons;
       }
       for (const k of ["title", "description", "kind", "appliesTo", "tags", "aliases", "owner"] as const) {
         if (patch[k] !== undefined) (item as any)[k] = patch[k];
@@ -231,6 +260,24 @@ export class GoldenStore {
       item.status = "archived";
       item.updatedAt = new Date().toISOString();
       return item;
+    });
+  }
+
+  /**
+   * Permanently remove an item and its content + version snapshots. Unlike
+   * archive() this is irreversible and cannot be recovered — callers must warn.
+   */
+  remove(id: string): Promise<boolean> {
+    return this.mutate(() => {
+      const idx = this.items.findIndex((i) => i.id === id);
+      if (idx === -1) return false;
+      this.items.splice(idx, 1);
+      try { fs.rmSync(path.join(this.itemsDir, `${id}.md`), { force: true }); } catch { /* best-effort */ }
+      try {
+        for (const f of fs.readdirSync(this.versionsDir))
+          if (f.startsWith(`${id}.v`)) fs.rmSync(path.join(this.versionsDir, f), { force: true });
+      } catch { /* best-effort */ }
+      return true;
     });
   }
 

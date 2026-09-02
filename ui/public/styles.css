@@ -493,6 +493,25 @@ kbd {
 .gt-btn:hover { color: var(--text); }
 .gt-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
 
+/* Library toolbar: search + "show archived", sits under the tabs, above the list */
+.golden-controls {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 18px; border-bottom: 1px solid var(--border-soft);
+}
+.golden-controls #golden-search {
+  flex: 1; min-width: 0;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 9px;
+  color: var(--text); font-family: inherit; font-size: 13px; padding: 8px 12px;
+  outline: none; transition: border-color .13s;
+}
+.golden-controls #golden-search:focus { border-color: var(--accent); }
+.golden-controls #golden-search::placeholder { color: var(--text-3); }
+.gc-archived {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; color: var(--text-3); white-space: nowrap; cursor: pointer; user-select: none;
+}
+.gc-archived input { accent-color: var(--accent); cursor: pointer; margin: 0; }
+
 .gold-row {
   display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: start;
   background: var(--surface); border: 1px solid var(--border); border-radius: 11px; padding: 11px 13px;
@@ -500,6 +519,8 @@ kbd {
 .gold-row .gr-ico { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center;
   background: var(--accent-bg); color: var(--accent); flex: 0 0 auto; }
 .gr-name { font-size: 13.5px; font-weight: 600; color: var(--text); display: block; }
+.gr-name[data-view] { cursor: pointer; }
+.gr-name[data-view]:hover { color: var(--accent); text-decoration: underline; }
 .gr-desc { font-size: 12px; color: var(--text-3); margin-top: 3px; line-height: 1.45; }
 .gr-meta { font-size: 11px; color: var(--text-3); margin-top: 5px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .gr-id { font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--text-2); }
@@ -546,6 +567,7 @@ kbd {
 .chip.draft { background: var(--surface-2); }
 .chip.archived { opacity: .6; }
 .chip.kind { background: var(--accent-bg); border-color: transparent; color: var(--accent); }
+.chip.flagged { background: color-mix(in srgb, var(--red) 14%, transparent); border-color: color-mix(in srgb, var(--red) 42%, transparent); color: var(--red); font-weight: 600; }
 
 /* selection list */
 .gold-pick { display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow-y: auto;
@@ -601,6 +623,9 @@ kbd {
 .modal.viewer { max-width: 760px; width: 100%; max-height: 86vh; display: flex; flex-direction: column; }
 .viewer-body { overflow-y: auto; }
 .btn.sm { padding: 6px 12px; font-size: 12.5px; text-decoration: none; }
+/* Compact icon-only action buttons (Edit pencil, Delete trash) */
+.btn.sm.icon-btn-sm { padding: 6px; line-height: 0; display: inline-flex; align-items: center; }
+.btn.sm.icon-btn-sm.danger:hover { color: var(--red); border-color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); }
 .viewer-body > pre { margin: 0; background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 10px; overflow: auto; }
 .viewer-body > pre code { display: block; padding: 14px 15px; font-family: "JetBrains Mono", monospace; font-size: 12.5px; line-height: 1.6; }
 
