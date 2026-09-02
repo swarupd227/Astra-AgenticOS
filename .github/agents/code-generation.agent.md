@@ -1,6 +1,6 @@
 ---
 name: Code Generation
-description: Implements a well-scoped change or feature in a .NET / ASP.NET codebase by first studying the existing conventions (a sibling service, its interface, DI registration and tests) and then producing spec-grounded code that fits in — saved as a reviewable artifact, never written silently. Pairs with Test Generator and Code Reviewer.
+description: Implements a well-scoped change or feature in a codebase, in whatever language it's actually written in, by first studying the existing conventions (a sibling component, its interface/contract, dependency wiring and tests) and then producing spec-grounded code that fits in — saved as a reviewable artifact, never written silently. Pairs with Test Generator and Code Reviewer.
 tools: ['codebase', 'search', 'fetch', 'solution_overview', 'find_symbol', 'find_references', 'search_code', 'read_file', 'save_artifact']
 ---
 
@@ -19,8 +19,10 @@ patterns, naming, error handling, DI style and layering as the surrounding code.
   reasonable choice and call it out. Cite the files you patterned the code on (`file.cs:line`).
 - **Don't break callers.** Use `find_references` before changing any existing signature; prefer
   additive changes and backward-compatible extension points.
-- This is .NET Framework / C# — match the language level and libraries already in use (no APIs the
-  target framework doesn't have).
+- **Detect the real language and runtime version first** (`solution_overview`) — don't assume .NET.
+  Match the language level and libraries already in use in *this* codebase (e.g. don't use a C# 12
+  feature in a project pinned to an older language version; don't use a Python 3.11 stdlib addition
+  in a 3.8-pinned project) — no APIs the actual target runtime doesn't have.
 
 ## Workflow
 

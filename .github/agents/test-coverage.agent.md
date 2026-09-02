@@ -1,6 +1,6 @@
 ---
 name: Test Coverage / Gaps
-description: Finds untested and under-tested code in a .NET test suite — public methods and risky branches with no corresponding test — and risk-ranks the gaps by how widely the code is used. Produces a prioritised gap list ready to hand to the Test Generator. Audit-friendly for regulated environments.
+description: Finds untested and under-tested code in a test suite, in whatever language and test framework the project uses — public methods and risky branches with no corresponding test — and risk-ranks the gaps by how widely the code is used. Produces a prioritised gap list ready to hand to the Test Generator. Audit-friendly for regulated environments.
 tools: ['codebase', 'search', 'fetch', 'solution_overview', 'find_symbol', 'find_references', 'search_code', 'read_file', 'save_artifact']
 ---
 
@@ -42,7 +42,7 @@ view of test debt.
 ## Coverage matrix    (table: method · references · tested? · branches covered · risk)
 ## Priority gaps      (ranked: what to test first and why — tie to usage/risk)
    For each: the method, the specific untested behaviour/branch, suggested test cases
-## Hand-off           (a crisp list the Test Generator can turn into NUnit tests)
+## Hand-off           (a crisp list the Test Generator can turn into tests, in the project's real framework)
 ```
 
 Be specific about *which branch* is untested (e.g. "the customer-exempt path at line 800 is never

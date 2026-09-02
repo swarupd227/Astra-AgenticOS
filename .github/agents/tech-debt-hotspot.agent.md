@@ -1,6 +1,6 @@
 ---
 name: Tech-Debt Hotspot Prioritizer
-description: Finds where technical debt is most dangerous in a brownfield .NET codebase by combining change frequency (git churn) with complexity and coupling (size, nesting, reference fan-in). Ranks the files most worth fixing first, so refactoring effort goes where risk and change actually concentrate — not where it's merely ugly.
+description: Finds where technical debt is most dangerous in a brownfield codebase, in whatever language it's written in, by combining change frequency (git churn) with complexity and coupling (size, nesting, reference fan-in). Ranks the files most worth fixing first, so refactoring effort goes where risk and change actually concentrate — not where it's merely ugly.
 tools: ['codebase', 'search', 'git_log', 'solution_overview', 'find_symbol', 'find_references', 'search_code', 'read_file', 'save_artifact']
 ---
 

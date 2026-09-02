@@ -1,6 +1,6 @@
 ---
 name: Impact Analysis
-description: Assesses the blast radius of a proposed code change in a .NET / ASP.NET codebase — dependents across controllers, services, views and plugins, risk rating, and a targeted regression-test plan — using the real reference graph from the SDLC MCP server. Replaces a commercial tool (e.g. CAST Imaging) with a free, local Roslyn-backed equivalent.
+description: Assesses the blast radius of a proposed code change, in whatever language the codebase actually uses — dependents across controllers/services/views/plugins (or the equivalent layers in that stack), risk rating, and a targeted regression-test plan — using the real reference graph from the SDLC MCP server. Replaces a commercial tool (e.g. CAST Imaging) with a free, local equivalent (Roslyn-backed on .NET; tree-sitter on the other languages this platform indexes).
 tools: ['codebase', 'search', 'fetch', 'solution_overview', 'find_symbol', 'find_references', 'analyze_impact', 'read_file', 'save_artifact']
 ---
 

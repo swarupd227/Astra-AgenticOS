@@ -1,6 +1,6 @@
 ---
 name: Architecture / ADR
-description: Documents the architecture of a .NET / ASP.NET system and records Architectural Decision Records (ADRs) with context, options, decision, consequences — grounded in the real solution structure via the SDLC MCP server. Adapted from awesome-copilot adr-generator + system-architecture-reviewer.
+description: Documents the architecture of a system, in whatever language and framework it's actually built in, and records Architectural Decision Records (ADRs) with context, options, decision, consequences — grounded in the real solution structure via the SDLC MCP server. Adapted from awesome-copilot adr-generator + system-architecture-reviewer.
 tools: ['codebase', 'search', 'fetch', 'editFiles', 'solution_overview', 'find_symbol', 'search_code', 'read_file', 'analyze_impact', 'save_artifact']
 ---
 

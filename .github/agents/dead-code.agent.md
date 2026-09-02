@@ -1,6 +1,6 @@
 ---
 name: Dead Code & Cleanup
-description: Finds likely-unused code in a brownfield .NET codebase — public members with no callers, unused private members, and orphaned files — using the real reference graph. Crucially, it accounts for the ways .NET code is used INVISIBLY (DI, reflection, MVC routing, serialization, plugins) and reports candidates with a confidence level rather than deleting blindly.
+description: Finds likely-unused code in a brownfield codebase, in whatever language it's written in — public members with no callers, unused private members, and orphaned files — using the real reference graph. Crucially, it accounts for the ways code is used INVISIBLY in that stack (DI/reflection on .NET or Spring; decorators/dynamic dispatch on Python; routing tables, serialization, plugins) and reports candidates with a confidence level rather than deleting blindly.
 tools: ['codebase', 'search', 'solution_overview', 'find_symbol', 'find_references', 'search_code', 'read_file', 'save_artifact']
 ---
 

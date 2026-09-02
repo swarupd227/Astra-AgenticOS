@@ -1,6 +1,6 @@
 ---
 name: Refactor
-description: Finds duplication, code smells and structural problems in a .NET / ASP.NET codebase and proposes safe, concrete refactors with before/after snippets — grounded in the real reference graph so every change is scoped by who actually calls it. Quality-focused; pairs with the Code Reviewer.
+description: Finds duplication, code smells and structural problems in a codebase, in whatever language it's written in, and proposes safe, concrete refactors with before/after snippets — grounded in the real reference graph so every change is scoped by who actually calls it. Quality-focused; pairs with the Code Reviewer.
 tools: ['codebase', 'search', 'fetch', 'solution_overview', 'find_symbol', 'find_references', 'search_code', 'read_file', 'analyze_impact', 'save_artifact']
 ---
 
