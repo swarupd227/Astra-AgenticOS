@@ -262,6 +262,12 @@ function blockedMessage(missing: string[]): string {
 /**
  * The gate as the run actually uses it: block a save when the task named inputs this
  * run never opened, whether the agent tried and failed or never tried at all.
+ *
+ * propose_file_change goes through the same gate as save_artifact: it is a second way
+ * to write a deliverable, and the failure this prevents (a document produced with no
+ * retrieved source behind it) is exactly as possible via a diff as via prose. For a
+ * "modify" proposal, the caller adds the change's own targetPath to `required` — the
+ * file being changed has to have been read this run, same as any other named input.
  */
 export function prerequisiteGate(
   toolName: string,
@@ -269,7 +275,7 @@ export function prerequisiteGate(
   readOk: Set<string>,
   failedReads: Set<string>
 ): string | null {
-  if (toolName !== "save_artifact") return null;
+  if (toolName !== "save_artifact" && toolName !== "propose_file_change") return null;
   const missing = [...new Set([...unreadRequiredInputs(required, readOk), ...failedReads])];
   return missing.length ? blockedMessage(missing) : null;
 }

@@ -20,42 +20,25 @@ public static class ArtifactTools
         [Description("File name including extension, e.g. 'brd-checkout.md' or 'TaxServiceTests.cs'. Subfolders allowed, e.g. 'tests/TaxServiceTests.cs'.")] string name,
         [Description("Full file content to write.")] string content)
     {
-        var safe = SanitizeRelative(name);
+        var safe = ArtifactStore.SanitizeRelative(name);
         if (safe is null)
             return $"Refused: '{name}' resolves outside the artifacts directory.";
 
-        var full = Path.Combine(index.ArtifactsDir, safe);
-        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
-
-        // Approval integrity: a prior artifact must never be silently mutated. If a file
-        // with this name already exists, snapshot it to an immutable <name>.vN backup
-        // before writing, so nothing a reviewer has seen is destroyed — and make the
-        // change explicit in the return value rather than pretending it was a fresh save.
-        if (File.Exists(full))
+        // Approval integrity: a prior artifact must never be silently mutated. ArtifactStore
+        // snapshots it to an immutable <name>.vN backup before writing, so nothing a reviewer
+        // has seen is destroyed — the wording below is unchanged from before this was
+        // extracted into a shared helper (server.ts pattern-matches these three prefixes).
+        var result = ArtifactStore.Write(index.ArtifactsDir, safe, content);
+        return result.Outcome switch
         {
-            if (File.ReadAllText(full) == content)
-                return $"Artifact `{full}` already contains this exact content — nothing changed ({content.Length} chars).";
-
-            var backup = NextVersionPath(full);
-            File.Copy(full, backup, overwrite: false);
-            File.WriteAllText(full, content);
-            var backupRel = Path.GetRelativePath(index.ArtifactsDir, backup).Replace('\\', '/');
-            return $"Updated existing artifact `{full}` ({content.Length} chars). The previous version was preserved as `{backupRel}`. " +
-                   $"⚠ This is a MATERIAL change to an existing artifact: any prior approval of it is now void and it must be re-reviewed before use downstream.";
-        }
-
-        File.WriteAllText(full, content);
-        return $"Saved artifact to `{full}` ({content.Length} chars).";
-    }
-
-    /// <summary>Finds the next free immutable snapshot path: foo.md → foo.md.v1, foo.md.v2, …</summary>
-    private static string NextVersionPath(string full)
-    {
-        for (var n = 1; ; n++)
-        {
-            var candidate = $"{full}.v{n}";
-            if (!File.Exists(candidate)) return candidate;
-        }
+            WriteOutcome.Unchanged =>
+                $"Artifact `{result.FullPath}` already contains this exact content — nothing changed ({content.Length} chars).",
+            WriteOutcome.Updated =>
+                $"Updated existing artifact `{result.FullPath}` ({content.Length} chars). The previous version was preserved as `{result.BackupRelativePath}`. " +
+                $"⚠ This is a MATERIAL change to an existing artifact: any prior approval of it is now void and it must be re-reviewed before use downstream.",
+            _ =>
+                $"Saved artifact to `{result.FullPath}` ({content.Length} chars).",
+        };
     }
 
     [McpServerTool(Name = "list_artifacts")]
@@ -83,7 +66,7 @@ public static class ArtifactTools
         [Description("Artifact path as shown by list_artifacts, e.g. 'brd-checkout.md' or 'tests/TaxServiceTests.cs'.")] string name,
         [Description("Max characters to return (default 20000).")] int maxChars = 20000)
     {
-        var safe = SanitizeRelative(name);
+        var safe = ArtifactStore.SanitizeRelative(name);
         if (safe is null)
             return $"Refused: '{name}' resolves outside the artifacts directory.";
 
@@ -95,14 +78,5 @@ public static class ArtifactTools
         var truncated = maxChars > 0 && text.Length > maxChars;
         if (truncated) text = text[..maxChars] + "\n… (truncated)";
         return $"# `{safe}` ({new FileInfo(full).Length} bytes)\n\n{text}";
-    }
-
-    /// <summary>Returns a safe relative path under the artifacts dir, or null if it escapes.</summary>
-    private static string? SanitizeRelative(string name)
-    {
-        var cleaned = name.Replace('\\', '/').TrimStart('/');
-        if (cleaned.Length == 0) return null;
-        if (cleaned.Split('/').Any(seg => seg == "..")) return null;
-        return cleaned;
     }
 }

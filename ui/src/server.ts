@@ -1453,9 +1453,17 @@ async function runAgent(
         // Phase 3 — hard template binding. A template that names THIS agent must be
         // read before the agent is allowed to save a deliverable. Enforced here rather
         // than asked for in the prompt, so it can't be skipped.
+        //
+        // propose_file_change modifying a real file adds its own targetPath to what
+        // must have been read this run — the same rule save_artifact already applies
+        // to named inputs, extended to the file the change is against.
+        const effectiveRequired =
+          tu.name === "propose_file_change" && (tu.input as any)?.kind === "modify"
+            ? [...required, String((tu.input as any)?.targetPath ?? "")]
+            : required;
         const gate =
           templateGate(agent.id, tu.name, goldenReadThisRun, project) ??
-          prerequisiteGate(tu.name, required, readOk, failedArtifactReads);
+          prerequisiteGate(tu.name, effectiveRequired, readOk, failedArtifactReads);
         if (gate) {
           resultText = gate;
           emit({ type: "tool_result", id: tu.id, name: tu.name, result: resultText });
@@ -1494,6 +1502,12 @@ async function runAgent(
             // "Saved artifact to `path`", "Updated existing artifact `path`",
             // "Artifact `path` already contains…" — "Refused:" deliberately matches none.
             const m = resultText.match(/^(?:Saved artifact to|Updated existing artifact|Artifact) `([^`]+)`/);
+            if (m) savedThisRun.add(m[1]);
+          }
+          if (tu.name === "propose_file_change") {
+            // "Proposed change to `path` (kind) — …" — a proposal is a written
+            // deliverable too, so the saved-claim check has to recognise it as one.
+            const m = resultText.match(/^Proposed change to `([^`]+)`/);
             if (m) savedThisRun.add(m[1]);
           }
         } catch (e) {

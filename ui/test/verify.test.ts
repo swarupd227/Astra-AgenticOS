@@ -185,6 +185,12 @@ const GATE: Array<[string, string, string[], string[], string[], boolean]> = [
   ["reading is never gated", "read_file", ["brd.md"], [], [], false],
   ["searching is never gated", "search_code", ["brd.md"], [], [], false],
   ["golden reads are never gated", "golden_read", ["brd.md"], [], [], false],
+  // propose_file_change is a second way to write a deliverable — same gate applies.
+  // (server.ts folds the change's own targetPath into `required` for a "modify"
+  // proposal before calling this; here the required list is passed pre-computed.)
+  ["proposed change's own target never opened", "propose_file_change", ["TaxService.cs"], [], [], true],
+  ["proposed change's target read first", "propose_file_change", ["TaxService.cs"], ["TaxService.cs"], [], false],
+  ["proposal also names an unread BRD", "propose_file_change", ["TaxService.cs", "brd.md"], ["TaxService.cs"], [], true],
 ];
 
 for (const [label, tool, req, ok, failed, shouldBlock] of GATE) {

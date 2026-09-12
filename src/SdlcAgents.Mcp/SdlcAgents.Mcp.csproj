@@ -19,6 +19,11 @@
          win-x64 + linux-x64, so no apt/gcc build). Falls back to the regex indexers if the
          native library can't load. -->
     <PackageReference Include="TreeSitter.DotNet" Version="1.3.0" />
+    <!-- Pure-C# line diff (Myers algorithm), no native dependency. propose_file_change
+         computes an exact diff from this rather than trusting the model to hand-author
+         one — a diff is a case where a wrong first attempt from an LLM (bad line numbers,
+         wrong context) is far more plausible than from tested library code. -->
+    <PackageReference Include="DiffPlex" Version="1.7.2" />
   </ItemGroup>
 
 </Project>
