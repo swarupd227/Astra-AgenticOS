@@ -770,12 +770,25 @@ function renderArtifactsList() {
 let goldenItems = [];        // the library
 let goldenSel = null;        // active project's selection + counts
 let editingId = null;        // null = creating
+let goldenSearch = "";       // Library search/filter text
+let goldenShowArchived = false; // Library: include archived items
 
 function initGoldenUI() {
   $("#golden-btn").onclick = openGolden;
   $("#golden-close").onclick = () => ($("#golden-backdrop").hidden = true);
   $("#golden-backdrop").onclick = (e) => { if (e.target === $("#golden-backdrop")) $("#golden-backdrop").hidden = true; };
   $("#golden-add").onclick = () => openGoldenEditor(null);
+
+  // These close (X) buttons had no glyph set, so they rendered as empty boxes.
+  $("#golden-close").innerHTML = icon("x", 16);
+  $("#gold-edit-close").innerHTML = icon("x", 16);
+  $("#scope-close").innerHTML = icon("x", 16);
+
+  // Library search + "show archived" filter (live, client-side).
+  const searchEl = $("#golden-search");
+  if (searchEl) searchEl.oninput = () => { goldenSearch = searchEl.value; renderGoldenLibrary(); };
+  const archEl = $("#golden-show-archived");
+  if (archEl) archEl.onchange = () => { goldenShowArchived = archEl.checked; renderGoldenLibrary(); };
 
   // Bulk import — a standards pack is dozens or hundreds of files, and adding
   // them one at a time is what stops a team ever getting started.
@@ -803,6 +816,8 @@ function initGoldenUI() {
       const bits = [`Imported ${r.imported} document${r.imported === 1 ? "" : "s"} as drafts.`];
       if (r.flagged) bits.push(`⚠ ${r.flagged} contain text written as instructions to an AI — review before publishing.`);
       if (r.skipped) bits.push(`${r.skipped} skipped (empty or unreadable).`);
+      if (r.duplicates) bits.push(`${r.duplicates} skipped (duplicate of an item already in the library).`);
+      if (r.unsupported) bits.push(`${r.unsupported} skipped (unsupported file type).`);
       if (r.overCap) bits.push(`${r.overCap} beyond the ${300} file cap were NOT imported.`);
       alert(bits.join("\n"));
     } catch (e) {
@@ -814,6 +829,7 @@ function initGoldenUI() {
     document.querySelectorAll(".gt-btn").forEach((x) => x.classList.toggle("active", x === b));
     const tab = b.dataset.tab;
     $("#golden-list").hidden = tab !== "library";
+    $("#golden-controls").hidden = tab !== "library";
     $("#golden-selection").hidden = tab !== "selection";
     $("#golden-health").hidden = tab !== "health";
     if (tab === "selection") renderGoldenSelection();
@@ -899,7 +915,7 @@ function initGoldenUI() {
 
 async function loadGolden() {
   try {
-    const d = await (await fetch("/api/golden")).json();
+    const d = await (await fetch("/api/golden?includeArchived=true")).json();
     goldenItems = d.items || [];
   } catch { goldenItems = []; }
   try { goldenSel = await (await fetch("/api/golden-selection")).json(); } catch { goldenSel = null; }
@@ -915,22 +931,30 @@ async function openGolden() {
 function goldenChips(i) {
   const chips = [`<span class="chip kind">${esc(i.kind)}</span>`];
   if (i.enforcement === "mandatory") chips.push(`<span class="chip mandatory">mandatory</span>`);
+  if (i.flagged) chips.push(`<span class="chip flagged" title="${esc((i.flagReasons || []).join(" · "))}">⚠ flagged</span>`);
   if (i.status !== "published") chips.push(`<span class="chip ${esc(i.status)}">${esc(i.status)}</span>`);
   return chips.join(" ");
 }
 
 function renderGoldenLibrary() {
   const list = $("#golden-list");
-  if (!goldenItems.length) {
-    list.innerHTML = `<div class="drawer-empty">The library is empty.<br/>Add your coding standards, BRD/ADR templates, functional specs or team playbooks —
-      agents will cite them instead of guessing.</div>`;
+  const q = goldenSearch.trim().toLowerCase();
+  const items = goldenItems.filter((i) => {
+    if (!goldenShowArchived && i.status === "archived") return false;
+    if (!q) return true;
+    return `${i.title} ${i.id} ${i.kind} ${(i.tags || []).join(" ")}`.toLowerCase().includes(q);
+  });
+  if (!items.length) {
+    list.innerHTML = `<div class="drawer-empty">${goldenItems.length
+      ? "No items match your search/filter."
+      : "The library is empty.<br/>Add your coding standards, BRD/ADR templates, functional specs or team playbooks — agents will cite them instead of guessing."}</div>`;
     return;
   }
-  list.innerHTML = goldenItems.map((i) => `
+  list.innerHTML = items.map((i) => `
     <div class="gold-row">
       <span class="gr-ico">${icon(i.kind === "template" ? "file-text" : i.kind === "skill" ? "workflow" : "book", 15)}</span>
       <div>
-        <span class="gr-name">${esc(i.title)}</span>
+        <span class="gr-name" data-view="${esc(i.id)}" title="Click to view">${esc(i.title)}</span>
         <div class="gr-desc">${esc(i.description)}</div>
         <div class="gr-meta">
           <span class="gr-id">${esc(i.id)}@${i.version}</span> ${goldenChips(i)}
@@ -941,8 +965,11 @@ function renderGoldenLibrary() {
       <div class="gr-actions">
         ${i.status === "published" ? `<button class="btn ghost sm" data-test="${esc(i.id)}">Try it</button>` : ""}
         ${i.status === "draft" ? `<button class="btn ghost sm publish" data-pub="${esc(i.id)}">Publish</button>` : ""}
-        <button class="btn ghost sm" data-edit="${esc(i.id)}">Edit</button>
-        ${i.status !== "archived" ? `<button class="btn ghost sm" data-arch="${esc(i.id)}">Archive</button>` : ""}
+        ${i.status === "archived"
+          ? `<button class="btn ghost sm" data-restore="${esc(i.id)}">Restore</button>`
+          : `<button class="btn ghost sm" data-arch="${esc(i.id)}">Archive</button>`}
+        <button class="btn ghost sm icon-btn-sm" data-edit="${esc(i.id)}" title="Edit">${icon("pencil", 15)}</button>
+        <button class="btn ghost sm icon-btn-sm danger" data-del="${esc(i.id)}" title="Delete permanently">${icon("trash", 15)}</button>
       </div>
       <div class="gr-test" id="gt-${esc(i.id)}" hidden></div>
     </div>`).join("");
@@ -950,6 +977,9 @@ function renderGoldenLibrary() {
   list.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => openGoldenEditor(b.dataset.edit)));
   list.querySelectorAll("[data-arch]").forEach((b) => (b.onclick = () => archiveGoldenItem(b.dataset.arch)));
   list.querySelectorAll("[data-test]").forEach((b) => (b.onclick = () => toggleGoldenTest(b.dataset.test)));
+  list.querySelectorAll("[data-view]").forEach((b) => (b.onclick = () => openGoldenView(b.dataset.view)));
+  list.querySelectorAll("[data-restore]").forEach((b) => (b.onclick = () => restoreGoldenItem(b.dataset.restore)));
+  list.querySelectorAll("[data-del]").forEach((b) => (b.onclick = () => deleteGoldenItem(b.dataset.del)));
 }
 
 /**
@@ -1290,12 +1320,60 @@ async function publishGoldenItem(id, btn) {
 }
 
 async function archiveGoldenItem(id) {
+  if (!confirm("Archive this item? It will be hidden from the library — you can bring it back later with 'Show archived' → Restore.")) return;
   try {
     await fetch(`/api/golden/${encodeURIComponent(id)}/archive`, { method: "POST" });
     await loadGolden();
     renderGoldenLibrary();
     renderGoldenSelection();
   } catch {}
+}
+
+// Bring an archived item back as a draft (reuses the existing update endpoint).
+async function restoreGoldenItem(id) {
+  try {
+    const r = await (await fetch(`/api/golden/${encodeURIComponent(id)}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "draft" }),
+    })).json();
+    if (!r.ok) throw new Error(r.error || "Restore failed");
+    await loadGolden();
+    renderGoldenLibrary();
+    renderGoldenSelection();
+  } catch (e) { alert("Could not restore: " + e.message); }
+}
+
+// Permanently delete an item (irreversible) — strongly confirmed first.
+async function deleteGoldenItem(id) {
+  if (!confirm(
+    "Permanently delete this item?\n\nThis cannot be undone, and any artifact that cited it will lose its source. " +
+    "If you might need it later, use Archive instead."
+  )) return;
+  try {
+    const r = await (await fetch(`/api/golden/${encodeURIComponent(id)}`, { method: "DELETE" })).json();
+    if (!r.ok) throw new Error(r.error || "Delete failed");
+    await loadGolden();
+    renderGoldenLibrary();
+    renderGoldenSelection();
+  } catch (e) { alert("Could not delete: " + e.message); }
+}
+
+// Read-only view of a Golden item's content (reuses the artifact viewer modal).
+async function openGoldenView(id) {
+  const it = goldenItems.find((x) => x.id === id);
+  $("#viewer-title").textContent = it ? `${it.title} — ${it.id}@${it.version}` : id;
+  $("#viewer-download").style.display = "none";
+  const body = $("#viewer-body");
+  body.innerHTML = `<div class="thinking"><span class="spin"></span> Loading…</div>`;
+  $("#viewer-backdrop").hidden = false;
+  try {
+    const d = await (await fetch(`/api/golden/${encodeURIComponent(id)}`)).json();
+    if (!d.ok) throw new Error(d.error || "Could not load");
+    body.innerHTML = `<div class="md">${renderMarkdown(d.content || "")}</div>`;
+    highlightIn(body);
+  } catch (e) {
+    body.innerHTML = `<div class="error-box">${esc(e.message)}</div>`;
+  }
 }
 
 // --- knowledge picker inside the New project modal ---
@@ -1330,6 +1408,7 @@ function npGoldenSelection() {
 const VLANGS = { cs: "csharp", json: "json", xml: "xml", ts: "typescript", js: "javascript", sql: "sql", yml: "yaml", yaml: "yaml", sh: "bash" };
 async function openViewer(p) {
   $("#viewer-title").textContent = p;
+  $("#viewer-download").style.display = "";
   $("#viewer-download").href = "/api/artifacts/download?path=" + encodeURIComponent(p);
   const body = $("#viewer-body");
   body.innerHTML = `<div class="thinking"><span class="spin"></span> Loading…</div>`;

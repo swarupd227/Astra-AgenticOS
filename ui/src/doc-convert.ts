@@ -18,6 +18,7 @@
 import mammoth from "mammoth";
 import TurndownService from "turndown";
 import { extractText, getDocumentProxy } from "unpdf";
+import { scanContent } from "./scan.js";
 
 export type DocKind = "docx" | "pdf";
 
@@ -38,32 +39,8 @@ export function sniffKind(buf: Buffer): DocKind | null {
   return null;
 }
 
-/**
- * Phrases that mean "this document is trying to steer an agent", not "this
- * document states a rule". Deliberately narrow — a false positive here costs an
- * admin ten seconds of reading, a false negative puts instructions in an agent's
- * context wearing the authority of a bank standard.
- */
-const INJECTION_PATTERNS: Array<[RegExp, string]> = [
-  [/\bignore\s+(all\s+)?(previous|prior|above)\s+(instructions|rules|prompts)\b/i, "tells the reader to ignore previous instructions"],
-  [/\byou\s+are\s+(now\s+)?(an?\s+)?(AI|assistant|language model|chatbot)\b/i, "addresses the reader as an AI assistant"],
-  [/\b(system|developer)\s+prompt\b/i, "refers to a system or developer prompt"],
-  [/\bdisregard\s+(the\s+)?(rules|guardrails|policy|restrictions)\b/i, "tells the reader to disregard rules"],
-  [/\b(jailbreak|prompt\s+injection|DAN\s+mode)\b/i, "mentions jailbreaking or prompt injection"],
-  [/\bdo\s+not\s+(tell|inform|mention\s+to)\s+the\s+user\b/i, "asks the reader to withhold information from the user"],
-];
-
-function scanForInjection(text: string): string[] {
-  const hits: string[] = [];
-  for (const [re, why] of INJECTION_PATTERNS) {
-    const m = re.exec(text);
-    if (m) {
-      const at = Math.max(0, m.index - 40);
-      hits.push(`${why} — near: "${text.slice(at, m.index + m[0].length + 40).replace(/\s+/g, " ").trim()}"`);
-    }
-  }
-  return hits;
-}
+// Prompt-injection and secret detection now live in ./scan.ts (dependency-free,
+// shared with the Golden store so items are flagged on both import and edit).
 
 function turndown(): TurndownService {
   const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-" });
@@ -180,11 +157,11 @@ export async function convertDocument(buf: Buffer, filename: string): Promise<Co
 
   const result = kind === "docx" ? await convertDocx(buf) : await convertPdf(buf);
 
-  const injection = scanForInjection(result.markdown);
-  for (const hit of injection)
+  const issues = scanContent(result.markdown);
+  for (const hit of issues)
     result.warnings.push(
-      `SECURITY — this document contains text that reads as an instruction to an AI, not as policy: ${hit}. ` +
-        "Golden content is data agents read, never commands they obey, but you should confirm this text belongs here before publishing."
+      `SECURITY — this document ${hit}. Golden content is data agents read, never commands they obey — ` +
+        "confirm it belongs here before publishing."
     );
 
   return result;

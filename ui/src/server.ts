@@ -1895,17 +1895,33 @@ app.post("/api/golden/import", async (req, res) => {
     // there is no zip-slip surface and no dependency on an `unzip` binary being
     // present (it is not, on Windows).
     const zip = await JSZip.loadAsync(buf);
-    const found = Object.values(zip.files)
+    // Real content files in the archive (ignore folders, macOS metadata, dotfiles).
+    const candidates = Object.values(zip.files)
       .filter((f: any) => !f.dir)
       .filter((f: any) => {
         const n = f.name;
-        if (n.includes("__MACOSX/") || n.split("/").some((s: string) => s.startsWith("."))) return false;
-        return IMPORT_EXT.has(path.extname(n).toLowerCase());
-      })
+        return !(n.includes("__MACOSX/") || n.split("/").some((s: string) => s.startsWith(".")));
+      });
+    const found = candidates
+      .filter((f: any) => IMPORT_EXT.has(path.extname(f.name).toLowerCase()))
       .sort((a: any, b: any) => a.name.localeCompare(b.name));
+    // Files that were in the zip but aren't a supported type — reported back so the
+    // user isn't left wondering why an .xlsx/.json/etc. silently didn't import.
+    const unsupported = candidates
+      .filter((f: any) => !IMPORT_EXT.has(path.extname(f.name).toLowerCase()))
+      .map((f: any) => f.name);
 
     const imported: any[] = [];
     const skipped: any[] = [];
+    const duplicates: any[] = [];
+    // Content hashes already in the library, so a re-imported document is caught
+    // instead of silently creating another copy. Also dedupes within this same zip.
+    const seenHashes = new Set(
+      golden.list({ includeArchived: true })
+        .map((it) => golden.readContent(it.id))
+        .filter((c): c is string => typeof c === "string")
+        .map((c) => crypto.createHash("sha256").update(c).digest("hex"))
+    );
     for (const entry of found.slice(0, MAX_IMPORT_FILES) as any[]) {
       // Strip a single wrapping folder so "Pack/09_Security/x.md" tags as "security".
       const parts = entry.name.split("/").filter(Boolean);
@@ -1915,14 +1931,21 @@ app.post("/api/golden/import", async (req, res) => {
       try {
         const ext = path.extname(rel).toLowerCase();
         let content: string;
-        let warnings: string[] = [];
         if (ext === ".docx" || ext === ".pdf") {
           const out = await convertDocument(await entry.async("nodebuffer"), path.basename(rel));
-          content = out.markdown; warnings = out.warnings;
+          content = out.markdown;
         } else {
           content = await entry.async("string");
         }
+        // Flagging (prompt-injection + secrets) is computed and persisted by
+        // golden.create() below, so every imported item carries a stored `flagged`.
         if (!content.trim()) { skipped.push({ file: rel, reason: "empty" }); continue; }
+
+        // Skip a document whose content already exists in the library (or earlier
+        // in this same zip) instead of creating a duplicate item.
+        const hash = crypto.createHash("sha256").update(content).digest("hex");
+        if (seenHashes.has(hash)) { duplicates.push({ file: rel }); continue; }
+        seenHashes.add(hash);
 
         // Top-level folder makes a sensible starting tag — it is how these packs
         // are already organised (10_Coding_Standards, 09_Security, …).
@@ -1942,8 +1965,7 @@ app.post("/api/golden/import", async (req, res) => {
           content,
         });
         imported.push({
-          file: rel, id: item.id, chars: item.contentChars,
-          warnings: warnings.filter((w) => w.startsWith("SECURITY")),
+          file: rel, id: item.id, chars: item.contentChars, flagged: item.flagged,
         });
       } catch (e) {
         skipped.push({ file: rel, reason: (e as Error).message.slice(0, 160) });
@@ -1956,8 +1978,11 @@ app.post("/api/golden/import", async (req, res) => {
       imported: imported.length,
       skipped: skipped.length,
       overCap: found.length > MAX_IMPORT_FILES ? found.length - MAX_IMPORT_FILES : 0,
-      flagged: imported.filter((i) => i.warnings.length).length,
+      flagged: imported.filter((i) => i.flagged).length,
+      duplicates: duplicates.length,
+      unsupported: unsupported.length,
       items: imported, skippedItems: skipped,
+      duplicateItems: duplicates, unsupportedItems: unsupported.slice(0, 50),
     });
   } catch (e) {
     alive.send(400, { ok: false, error: (e as Error).message });
@@ -1977,6 +2002,16 @@ app.post("/api/golden/:id/archive", async (req, res) => {
     const item = await golden.archive(req.params.id);
     refreshGoldenForActiveProject();
     res.json({ ok: true, item });
+  } catch (e) { res.status(400).json({ ok: false, error: (e as Error).message }); }
+});
+
+// Permanent delete — irreversible; the UI confirms before calling this.
+app.delete("/api/golden/:id", async (req, res) => {
+  try {
+    const ok = await golden.remove(req.params.id);
+    refreshGoldenForActiveProject();
+    if (!ok) { res.status(404).json({ ok: false, error: "Not found" }); return; }
+    res.json({ ok: true });
   } catch (e) { res.status(400).json({ ok: false, error: (e as Error).message }); }
 });
 
