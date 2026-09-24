@@ -10,6 +10,146 @@ let agents = [], activeAgent = null, busy = false, hasMessages = false;
 let projects = [], activeProjectId = null;
 let threadId = null; // current conversation (server-persisted, gives follow-ups memory)
 
+// Microsoft SSO (in-app). /api/me is public; everything else is gated when SSO is on.
+let ssoEnabled = false;
+let ssoLoginScreen = false;
+let ssoRedirecting = false;
+let ssoLoggingOut = false;
+
+function apiPathOf(input) {
+  try {
+    const raw = typeof input === "string" ? input : (input && input.url) || "";
+    return new URL(raw, window.location.origin).pathname;
+  } catch { return ""; }
+}
+
+function sendToMicrosoftLogin() {
+  if (ssoRedirecting || ssoLoginScreen || ssoLoggingOut) return;
+  ssoRedirecting = true;
+  window.location.assign("/auth/login");
+}
+
+// Logout leaves the tab for Microsoft, so the authenticated UI must be covered
+// before we navigate — otherwise it stays on screen for the whole round trip.
+function startLogout() {
+  if (ssoLoggingOut) return;
+  ssoLoggingOut = true;
+  closeAccountMenu();
+  const btn = $("#logout-btn");
+  if (btn) {
+    btn.setAttribute("aria-disabled", "true");
+    btn.classList.add("is-disabled");
+  }
+  const screen = $("#logout-screen");
+  if (screen) {
+    screen.hidden = false;
+    const mark = $("#logout-mark");
+    if (mark) mark.innerHTML = icon("logo", 22);
+  }
+  // Two frames guarantees the overlay is painted before the navigation starts.
+  requestAnimationFrame(() => requestAnimationFrame(() => window.location.assign("/auth/logout")));
+}
+
+// A bfcache restore would otherwise resurrect the signed-in shell after logout;
+// reloading puts /api/me back in charge of what renders.
+window.addEventListener("pageshow", (e) => { if (e.persisted) window.location.reload(); });
+
+const _fetch = window.fetch.bind(window);
+window.fetch = async function (input, init) {
+  const res = await _fetch(input, init);
+  if (res.status === 401 && ssoEnabled && !ssoLoginScreen && !ssoLoggingOut) {
+    const path = apiPathOf(input);
+    if (path.startsWith("/api/") && path !== "/api/me" && path !== "/api/health") sendToMicrosoftLogin();
+  }
+  return res;
+};
+
+async function loadMe() {
+  try {
+    const d = await (await fetch("/api/me")).json();
+    ssoEnabled = Boolean(d.ssoEnabled);
+    return d;
+  } catch {
+    return { ssoEnabled: false, authenticated: false, user: null };
+  }
+}
+
+function showSsoLogin() {
+  ssoLoginScreen = true;
+  const el = $("#sso-login");
+  if (!el) return;
+  el.hidden = false;
+  const mark = $("#sso-login-mark");
+  if (mark) mark.innerHTML = icon("logo", 22);
+}
+
+function showSignedInUser(user) {
+  const menu = $("#account-menu");
+  if (!menu || !user) return;
+  const name = user.name || user.email || "Signed in";
+  const email = user.email || "";
+  menu.hidden = false;
+  $("#account-avatar").textContent = initialsFor(name, email);
+  $("#account-btn").title = email && email !== name ? `${name} (${email})` : name;
+  $("#account-name").textContent = name;
+  $("#account-email").textContent = email;
+  $("#account-profile").hidden = false;
+  $("#account-profile-divider").hidden = false;
+  $("#account-logout-section").hidden = false;
+}
+
+function showLocalAccountControls() {
+  const menu = $("#account-menu");
+  if (!menu) return;
+  menu.hidden = false;
+  $("#account-avatar").textContent = "A";
+  $("#account-btn").title = "Application menu";
+}
+
+function initialsFor(name, email) {
+  // Entra display names may append a role, e.g. "Ramya R (Research Engineer)".
+  // Initials come from the actual name portion only; the displayed name is unchanged.
+  const personName = String(name || "").replace(/\s*\([^)]*\)\s*$/, "").trim();
+  const parts = personName.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  if (parts.length === 1 && parts[0].toLowerCase() !== "signed in")
+    return parts[0].slice(0, 2).toUpperCase();
+  const local = String(email || "").split("@")[0];
+  const emailParts = local.split(/[._-]+/).filter(Boolean);
+  if (emailParts.length >= 2) return (emailParts[0][0] + emailParts[1][0]).toUpperCase();
+  return (local.slice(0, 2) || "A").toUpperCase();
+}
+
+function setAccountMenuOpen(open) {
+  const dropdown = $("#account-dropdown");
+  const button = $("#account-btn");
+  if (!dropdown || !button) return;
+  dropdown.hidden = !open;
+  button.setAttribute("aria-expanded", String(open));
+  $("#account-menu").classList.toggle("open", open);
+}
+
+function closeAccountMenu() { setAccountMenuOpen(false); }
+
+function initAccountUI() {
+  const button = $("#account-btn");
+  const menu = $("#account-menu");
+  if (!button || !menu) return;
+  button.onclick = (e) => {
+    e.stopPropagation();
+    setAccountMenuOpen($("#account-dropdown").hidden);
+  };
+  document.addEventListener("click", (e) => {
+    if (!menu.contains(e.target)) closeAccountMenu();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("#account-dropdown").hidden) {
+      closeAccountMenu();
+      button.focus();
+    }
+  });
+}
+
 // ---------- markdown + highlight ----------
 if (window.marked) {
   marked.setOptions({ breaks: false, gfm: true });
@@ -31,14 +171,16 @@ function highlightIn(node) {
 function setTheme(t) {
   document.documentElement.setAttribute("data-theme", t);
   $("#hljs-theme").href = t === "light" ? "vendor/hljs-light.css" : "vendor/hljs-dark.css";
-  $("#theme-toggle").innerHTML = icon(t === "light" ? "moon" : "sun", 18);
+  $("#theme-toggle-icon").innerHTML = icon(t === "light" ? "moon" : "sun", 17);
   try { localStorage.setItem("sdlc-theme", t); } catch {}
   // re-highlight existing blocks against new theme
   document.querySelectorAll("pre code[data-hl]").forEach((b) => b.removeAttribute("data-hl"));
   document.querySelectorAll(".md, .step-out").forEach(highlightIn);
 }
-$("#theme-toggle").onclick = () =>
+$("#theme-toggle").onclick = () => {
   setTheme(document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light");
+  closeAccountMenu();
+};
 
 // ---------- boot ----------
 function applyStatus(text, cls) {
@@ -100,7 +242,7 @@ async function boot() {
   $("#pj-chev").innerHTML = icon("chevron", 15);
   $("#modal-close").innerHTML = icon("x", 16);
   $("#artifacts-btn").insertAdjacentHTML("afterbegin", icon("inbox", 18));
-  $("#settings-btn").innerHTML = icon("settings", 18);
+  $("#settings-icon").innerHTML = icon("settings", 17);
   $("#settings-close").innerHTML = icon("x", 16);
   $("#drawer-close").innerHTML = icon("x", 16);
   $("#viewer-close").innerHTML = icon("x", 16);
@@ -120,8 +262,19 @@ async function boot() {
   initGoldenUI();
   initArtifactsUI();
   initSettingsUI();
+  initAccountUI();
   $("#new-chat").onclick = newConversation;
   $("#nav-backdrop").onclick = () => document.body.classList.remove("nav-open");
+  const logoutBtn = $("#logout-btn");
+  if (logoutBtn) logoutBtn.onclick = (e) => { e.preventDefault(); startLogout(); };
+
+  const me = await loadMe();
+  if (me.ssoEnabled && !me.authenticated) {
+    showSsoLogin();
+    return;
+  }
+  if (me.ssoEnabled && me.user) showSignedInUser(me.user);
+  else if (!me.ssoEnabled) showLocalAccountControls();
 
   applyStatus("connecting…", "warn");
   agents = await (await fetch("/api/agents")).json();
@@ -213,6 +366,7 @@ function uploadZip(file, name, subPath, onProgress) {
     xhr.onload = () => {
       let r = {};
       try { r = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status === 401 && ssoEnabled) { sendToMicrosoftLogin(); reject(new Error("Authentication required")); return; }
       if (xhr.status === 200 && r.ok) resolve(r);
       else reject(new Error(r.error || `Upload failed (HTTP ${xhr.status})`));
     };
@@ -446,7 +600,7 @@ function hideUploadProgress() { document.getElementById("up-bar")?.remove(); }
 
 // ---------- settings (API key / model) ----------
 function initSettingsUI() {
-  $("#settings-btn").onclick = openSettings;
+  $("#settings-btn").onclick = () => { closeAccountMenu(); openSettings(); };
   $("#settings-close").onclick = closeSettings;
   $("#set-cancel").onclick = closeSettings;
   $("#settings-backdrop").onclick = (e) => { if (e.target === $("#settings-backdrop")) closeSettings(); };

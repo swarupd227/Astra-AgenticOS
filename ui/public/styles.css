@@ -454,6 +454,8 @@ kbd {
 .btn.primary { background: linear-gradient(140deg, var(--accent), var(--accent-2)); color: #fff; box-shadow: 0 3px 10px var(--accent-ring); }
 .btn.primary:hover { filter: brightness(1.08); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
+/* Anchors can't be :disabled — used to freeze the logout link once it is clicked. */
+.btn.is-disabled { opacity: .5; pointer-events: none; }
 
 /* ---------- Artifacts: header badge, drawer, viewer ---------- */
 #artifacts-btn { position: relative; }
@@ -601,6 +603,124 @@ kbd {
 .modal.viewer { max-width: 760px; width: 100%; max-height: 86vh; display: flex; flex-direction: column; }
 .viewer-body { overflow-y: auto; }
 .btn.sm { padding: 6px 12px; font-size: 12.5px; text-decoration: none; }
+
+/* ---------- SSO login (shown only when SSO_ENABLED=true and not signed in) ---------- */
+.account-menu { position: relative; flex: 0 0 auto; }
+.account-btn {
+  width: 38px; height: 38px; border-radius: 50%;
+  display: grid; place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: linear-gradient(140deg, var(--accent), var(--accent-2));
+  color: #fff; font: 650 12.5px/1 "Inter", sans-serif;
+  letter-spacing: .02em; cursor: pointer;
+  box-shadow: 0 3px 10px var(--accent-ring), inset 0 1px 0 rgba(255,255,255,.25);
+  transition: transform .15s, box-shadow .15s, filter .15s;
+}
+.account-btn:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.account-btn:focus-visible { outline: 3px solid var(--accent-ring); outline-offset: 2px; }
+.account-menu.open .account-btn { box-shadow: 0 0 0 3px var(--accent-ring); }
+.account-dropdown {
+  position: absolute; top: calc(100% + 10px); right: 0;
+  width: min(280px, calc(100vw - 24px));
+  padding: 8px;
+  background: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  box-shadow: var(--shadow-lg);
+  z-index: 80;
+}
+.account-profile { padding: 10px 11px 9px; min-width: 0; }
+.account-name {
+  color: var(--text); font-size: 13.5px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.account-email {
+  color: var(--text-3); font-size: 12px; margin-top: 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.account-divider { height: 1px; background: var(--border-soft); margin: 5px 3px; }
+.account-item {
+  width: 100%; min-height: 38px; padding: 8px 10px;
+  display: flex; align-items: center; gap: 10px;
+  border: 0; border-radius: 8px; background: transparent;
+  color: var(--text-2); font: 500 13px/1.2 "Inter", sans-serif;
+  text-align: left; text-decoration: none; cursor: pointer;
+}
+.account-item:hover, .account-item:focus-visible {
+  background: var(--surface-2); color: var(--text); outline: none;
+}
+.account-item-icon {
+  width: 18px; height: 18px; flex: 0 0 18px;
+  display: grid; place-items: center; color: var(--text-3);
+}
+.account-item:hover .account-item-icon { color: currentColor; }
+.account-logout { color: var(--red); }
+.account-logout:hover, .account-logout:focus-visible {
+  color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+.sso-login,
+.auth-transition {
+  position: fixed; inset: 0; z-index: 100;
+  display: grid; place-items: center;
+  padding: 24px;
+  background:
+    /* Barely-there blue haze so the card reads as placed, not stranded. */
+    radial-gradient(760px 520px at 50% 44%, var(--accent-bg), transparent 68%),
+    radial-gradient(1200px 600px at 80% -10%, var(--bg-grad-1), transparent),
+    radial-gradient(900px 500px at -10% 110%, var(--bg-grad-2), transparent),
+    var(--bg);
+}
+.sso-card {
+  width: min(528px, 100%);
+  min-height: 376px;
+  display: flex; flex-direction: column; justify-content: center;
+  /* Faint accent wash off the top edge keeps the large surface from reading flat. */
+  background:
+    radial-gradient(130% 90% at 50% -10%, var(--accent-bg), transparent 62%),
+    linear-gradient(180deg, var(--surface-2), var(--surface) 58%);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 44px 48px;
+  box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  text-align: center;
+}
+.sso-brand {
+  flex-direction: column; justify-content: center; gap: 16px;
+  margin-bottom: 40px; cursor: default;
+}
+.sso-brand .brand-mark { width: 52px; height: 52px; border-radius: 15px; }
+.sso-brand .brand-title { font-size: 19px; }
+.sso-brand .brand-sub { font-size: 12.5px; margin-top: 6px; }
+.sso-sub {
+  font-size: 13.5px; line-height: 1.55;
+  color: var(--text-3);
+  margin: 0 0 24px;
+}
+.sso-ms-btn {
+  width: 100%; display: inline-flex; align-items: center; justify-content: center;
+  min-height: 54px; gap: 12px; padding: 14px 20px;
+  font-size: 14px; text-decoration: none;
+}
+.sso-ms-btn:hover { filter: brightness(1.06); box-shadow: 0 6px 18px var(--accent-ring); }
+.sso-ms-logo { flex: 0 0 auto; filter: drop-shadow(0 1px 1px rgba(0,0,0,.18)); }
+
+/* Covers the authenticated UI for the whole Microsoft logout round trip. */
+.auth-transition { z-index: 200; }
+.auth-transition-inner {
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+}
+.auth-transition-inner .brand-mark { width: 44px; height: 44px; border-radius: 13px; }
+.auth-transition-brand { font-size: 13px; font-weight: 600; color: var(--text-2); margin-top: 14px; }
+.auth-transition-inner .spin { margin-top: 34px; }
+.auth-transition-title { font-size: 15.5px; font-weight: 600; margin-top: 20px; }
+.auth-transition-sub { font-size: 12.5px; color: var(--text-3); margin-top: 8px; max-width: 320px; }
+.spin.accent { border-color: var(--accent-bg); border-top-color: var(--accent); }
+@media (max-width: 560px) {
+  .sso-login { padding: 18px; }
+  .sso-card { padding: 36px 24px; min-height: 340px; border-radius: 16px; }
+  .sso-brand { margin-bottom: 32px; }
+  .sso-ms-btn { min-height: 52px; }
+}
 .viewer-body > pre { margin: 0; background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 10px; overflow: auto; }
 .viewer-body > pre code { display: block; padding: 14px 15px; font-family: "JetBrains Mono", monospace; font-size: 12.5px; line-height: 1.6; }
 

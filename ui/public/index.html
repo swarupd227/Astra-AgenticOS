@@ -33,8 +33,41 @@
       <button class="icon-btn" id="artifacts-btn" aria-label="Artifacts" title="Artifacts">
         <span class="badge" id="artifacts-count" hidden>0</span>
       </button>
-      <button class="icon-btn" id="settings-btn" aria-label="Settings" title="Settings"></button>
-      <button class="icon-btn" id="theme-toggle" aria-label="Toggle light / dark"></button>
+      <div class="account-menu" id="account-menu" hidden>
+        <button class="account-btn" id="account-btn" type="button"
+                aria-label="Open account menu" aria-haspopup="menu" aria-expanded="false">
+          <span id="account-avatar">A</span>
+        </button>
+        <div class="account-dropdown" id="account-dropdown" role="menu" hidden>
+          <div class="account-profile" id="account-profile" hidden>
+            <div class="account-name" id="account-name"></div>
+            <div class="account-email" id="account-email"></div>
+          </div>
+          <div class="account-divider" id="account-profile-divider" hidden></div>
+          <button class="account-item" id="theme-toggle" type="button" role="menuitem">
+            <span class="account-item-icon" id="theme-toggle-icon"></span>
+            <span>Change theme</span>
+          </button>
+          <button class="account-item" id="settings-btn" type="button" role="menuitem">
+            <span class="account-item-icon" id="settings-icon"></span>
+            <span>Settings</span>
+          </button>
+          <div id="account-logout-section" hidden>
+            <div class="account-divider"></div>
+            <a class="account-item account-logout" id="logout-btn" href="/auth/logout" role="menuitem">
+              <span class="account-item-icon">
+                <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                  <polyline points="16 17 21 12 16 7"/>
+                  <line x1="21" x2="9" y1="12" y2="12"/>
+                </svg>
+              </span>
+              <span>Logout</span>
+            </a>
+          </div>
+        </div>
+      </div>
     </div>
   </header>
 
@@ -353,6 +386,38 @@
       <span class="spin big"></span>
       <div class="busy-title" id="busy-title">Working…</div>
       <div class="busy-sub" id="busy-sub">This can take a moment on a large codebase.</div>
+    </div>
+  </div>
+
+  <div class="sso-login" id="sso-login" hidden>
+    <div class="sso-card">
+      <div class="brand sso-brand">
+        <div class="brand-mark" id="sso-login-mark"></div>
+        <div class="brand-text">
+          <div class="brand-title">ASTRA AgenticOS</div>
+          <div class="brand-sub">Agentic SDLC, in your stack</div>
+        </div>
+      </div>
+      <p class="sso-sub">Use your Microsoft work account to continue.</p>
+      <a class="btn primary sso-ms-btn" id="sso-ms-btn" href="/auth/login">
+        <svg class="sso-ms-logo" width="20" height="20" viewBox="0 0 16 16" aria-hidden="true">
+          <rect fill="#f25022" x="1" y="1" width="6.5" height="6.5"/>
+          <rect fill="#7fba00" x="8.5" y="1" width="6.5" height="6.5"/>
+          <rect fill="#00a4ef" x="1" y="8.5" width="6.5" height="6.5"/>
+          <rect fill="#ffb900" x="8.5" y="8.5" width="6.5" height="6.5"/>
+        </svg>
+        Sign in with Microsoft
+      </a>
+    </div>
+  </div>
+
+  <div class="auth-transition" id="logout-screen" role="status" aria-live="polite" hidden>
+    <div class="auth-transition-inner">
+      <div class="brand-mark" id="logout-mark"></div>
+      <div class="auth-transition-brand">ASTRA AgenticOS</div>
+      <span class="spin big accent" aria-hidden="true"></span>
+      <div class="auth-transition-title">Signing you out…</div>
+      <div class="auth-transition-sub">Please wait while we securely sign you out.</div>
     </div>
   </div>
 
