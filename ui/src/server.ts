@@ -22,6 +22,11 @@ import JSZip from "jszip";
 import Anthropic from "@anthropic-ai/sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import {
+  ConfidentialClientApplication,
+  CryptoProvider,
+  type IdTokenClaims,
+} from "@azure/msal-node";
 
 const execFileP = promisify(execFile);
 
@@ -118,6 +123,68 @@ const IS_CLOUD =
   !!process.env.WEBSITE_SITE_NAME ||          // Azure App Service
   !!process.env.CONTAINER_APP_NAME ||         // Azure Container Apps
   fs.existsSync("/.dockerenv");
+
+// Microsoft Entra SSO is opt-in. Default off so local `npm start` is unchanged.
+// Azure Easy Auth is not used — login is handled in this process via MSAL.
+function envTruthy(name: string): boolean {
+  const v = (process.env[name] ?? "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
+const SSO_ENABLED = envTruthy("SSO_ENABLED");
+const SSO_SCOPES = ["openid", "profile", "email", "User.Read"];
+const msalCrypto = new CryptoProvider();
+
+function positiveMinutes(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+// Authentication sessions expire after 8 hours without activity and after 24
+// hours regardless of activity by default. These limits apply only when SSO is
+// enabled, preserving the original local-development project sessions.
+const SSO_SESSION_IDLE_MS = positiveMinutes("SSO_SESSION_IDLE_MINUTES", 8 * 60) * 60_000;
+const SSO_SESSION_ABSOLUTE_MS = positiveMinutes("SSO_SESSION_ABSOLUTE_MINUTES", 24 * 60) * 60_000;
+const SSO_SESSION_CLEANUP_MS = 5 * 60_000;
+const SSO_AUTH_REQUEST_MAX_AGE_MS = 10 * 60_000;
+
+function ssoAzureConfig() {
+  return {
+    tenantId: (process.env.AZURE_TENANT_ID ?? "").trim(),
+    clientId: (process.env.AZURE_CLIENT_ID ?? "").trim(),
+    clientSecret: (process.env.AZURE_CLIENT_SECRET ?? "").trim(),
+    redirectUri: (process.env.AZURE_REDIRECT_URI ?? "").trim(),
+  };
+}
+
+function ssoConfigured(): boolean {
+  const c = ssoAzureConfig();
+  return Boolean(c.tenantId && c.clientId && c.clientSecret && c.redirectUri);
+}
+
+/** True when the astra_sid cookie must be marked Secure (HTTPS / Azure). Local HTTP stays unset. */
+function sessionCookieSecure(): boolean {
+  if (!SSO_ENABLED) return false;
+  const redirect = ssoAzureConfig().redirectUri;
+  return (
+    redirect.startsWith("https://") ||
+    !!process.env.WEBSITE_SITE_NAME ||
+    !!process.env.CONTAINER_APP_NAME
+  );
+}
+
+let msalApp: ConfidentialClientApplication | null = null;
+function getMsalApp(): ConfidentialClientApplication {
+  if (msalApp) return msalApp;
+  const c = ssoAzureConfig();
+  msalApp = new ConfidentialClientApplication({
+    auth: {
+      clientId: c.clientId,
+      authority: `https://login.microsoftonline.com/${c.tenantId}`,
+      clientSecret: c.clientSecret,
+    },
+  });
+  return msalApp;
+}
 
 // Suggested prompts per agent (id -> prompts), drawn from docs/DEMO-SCRIPT.md
 const SUGGESTED: Record<string, string[]> = {
@@ -652,14 +719,64 @@ async function activateProject(id: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Sessions — which project this browser is looking at.
+// Sessions — which project this browser is looking at, and (when SSO is on)
+// which Microsoft user completed /auth/login on this cookie.
 //
-// Not authentication and not a security boundary: an opaque id in a cookie, so two
-// people on the same deployment can hold different projects open. Without it the
-// second person silently inherits the first person's choice.
+// astra_sid is still an opaque id, not a bearer token. Two people on the same
+// deployment can hold different projects open. When SSO_ENABLED=true, a successful
+// Entra callback also stores `user` on this same in-memory row; logout clears it.
+// Protected /api routes then require that `user`; GET /api/health and GET /api/me
+// stay public. SSO_ENABLED=false skips the gate so local demos are unchanged.
 // ---------------------------------------------------------------------------
 const SESSION_COOKIE = "astra_sid";
-const sessions = new Map<string, { projectId: string; lastSeen: number }>();
+const SESSION_MAX_AGE = 2592000; // 30 days
+
+/** Minimum Entra identity kept on the session. Tokens are never stored here. */
+interface SessionUser {
+  oid: string;
+  name: string;
+  email: string;
+}
+
+/** One-shot PKCE/state for the in-flight authorization-code exchange. Server-only. */
+interface PendingOAuth {
+  state: string;
+  verifier: string;
+  nonce: string;
+  createdAt: number;
+}
+
+interface SessionState {
+  projectId: string;
+  createdAt: number;
+  lastSeen: number;
+  user?: SessionUser;
+  oauth?: PendingOAuth;
+}
+
+const sessions = new Map<string, SessionState>();
+
+function sessionExpired(session: SessionState, now = Date.now()): boolean {
+  if (!SSO_ENABLED) return false;
+  return (
+    now - session.lastSeen >= SSO_SESSION_IDLE_MS ||
+    now - session.createdAt >= SSO_SESSION_ABSOLUTE_MS
+  );
+}
+
+function newSessionState(now = Date.now(), projectId = startingProjectId()): SessionState {
+  return { projectId, createdAt: now, lastSeen: now };
+}
+
+if (SSO_ENABLED) {
+  const cleanup = setInterval(() => {
+    const now = Date.now();
+    for (const [id, session] of sessions) {
+      if (sessionExpired(session, now)) sessions.delete(id);
+    }
+  }, SSO_SESSION_CLEANUP_MS);
+  cleanup.unref?.();
+}
 
 function readCookie(req: express.Request, name: string): string | null {
   const raw = req.headers.cookie;
@@ -671,27 +788,88 @@ function readCookie(req: express.Request, name: string): string | null {
   return null;
 }
 
+function setSessionCookie(res: express.Response, id: string) {
+  // HttpOnly + SameSite=Lax always, matching the original cookie. Secure is added
+  // only when SSO is on and we are behind HTTPS/Azure — a Secure cookie would
+  // never be stored on plain http://localhost.
+  const parts = [
+    `${SESSION_COOKIE}=${id}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${SSO_ENABLED ? Math.ceil(SSO_SESSION_ABSOLUTE_MS / 1000) : SESSION_MAX_AGE}`,
+  ];
+  if (sessionCookieSecure()) parts.push("Secure");
+  res.setHeader("Set-Cookie", parts.join("; "));
+}
+
+function clearSessionCookie(res: express.Response) {
+  const parts = [
+    `${SESSION_COOKIE}=`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    "Max-Age=0",
+  ];
+  if (sessionCookieSecure()) parts.push("Secure");
+  res.setHeader("Set-Cookie", parts.join("; "));
+}
+
+function nonceMatches(claims: IdTokenClaims | undefined, expected: string): boolean {
+  const actual = claims && typeof claims.nonce === "string" ? claims.nonce : "";
+  const actualBytes = Buffer.from(actual);
+  const expectedBytes = Buffer.from(expected);
+  return (
+    actualBytes.length === expectedBytes.length &&
+    crypto.timingSafeEqual(actualBytes, expectedBytes)
+  );
+}
+
+function userFromIdTokenClaims(claims: IdTokenClaims | undefined): SessionUser | null {
+  if (!claims) return null;
+  const oid = typeof claims.oid === "string" ? claims.oid : "";
+  if (!oid) return null;
+  const preferred = typeof claims.preferred_username === "string" ? claims.preferred_username : "";
+  const extra = claims as IdTokenClaims & { email?: unknown };
+  const mail = typeof extra.email === "string" ? extra.email : "";
+  const emails0 = Array.isArray(claims.emails) && typeof claims.emails[0] === "string" ? claims.emails[0] : "";
+  const email = preferred || mail || emails0;
+  const name = typeof claims.name === "string" && claims.name ? claims.name : email || oid;
+  return { oid, name, email };
+}
+
 /**
  * The session for this request, minting one if the browser has not got a cookie yet.
  * A new session starts on whatever project was last activated, so a single user sees
- * exactly the behaviour they had before sessions existed.
+ * exactly the behaviour they had before sessions existed. `user` is unset until
+ * Microsoft SSO completes, and is ignored while SSO_ENABLED=false.
  */
 function sessionOf(req: express.Request, res: express.Response) {
   let id = readCookie(req, SESSION_COOKIE);
-  if (!id || !sessions.has(id)) {
-    if (!id) {
-      id = crypto.randomUUID();
-      // No Secure flag: the app is also served over plain http in local development,
-      // and a Secure cookie would simply never be stored there.
-      res.setHeader("Set-Cookie", `${SESSION_COOKIE}=${id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`);
-    }
-    sessions.set(id, { projectId: startingProjectId(), lastSeen: Date.now() });
+  const now = Date.now();
+  let session = id ? sessions.get(id) : undefined;
+
+  if (session && sessionExpired(session, now)) {
+    sessions.delete(id!);
+    session = undefined;
   }
-  const s = sessions.get(id)!;
-  s.lastSeen = Date.now();
+
+  if (!session) {
+    // Under SSO, never adopt an unknown client-supplied id: minting a fresh id
+    // prevents fixation after expiry, restart, or a forged cookie. With SSO off,
+    // retain the original project-session behavior exactly.
+    if (!id || SSO_ENABLED) {
+      id = crypto.randomUUID();
+      setSessionCookie(res, id);
+    }
+    session = newSessionState(now);
+    sessions.set(id, session);
+  }
+  session.lastSeen = now;
   // A project deleted by someone else must not strand this session on it.
-  if (!projects.some((p) => p.id === s.projectId)) s.projectId = startingProjectId();
-  return { id, state: s };
+  if (!projects.some((p) => p.id === session.projectId)) session.projectId = startingProjectId();
+  if (!id) throw new Error("Session id was not created.");
+  return { id, state: session };
 }
 
 /** As contextOf, but shaped for a run — callers check ws.ready before using it. */
@@ -1622,7 +1800,202 @@ async function runAgent(
 // HTTP server
 // ---------------------------------------------------------------------------
 const app = express();
+// Azure terminates TLS in front of the container. Secure cookies and redirects
+// need Express to trust the proxy's X-Forwarded-* headers. Not Easy Auth.
+if (SSO_ENABLED && (process.env.WEBSITE_SITE_NAME || process.env.CONTAINER_APP_NAME)) {
+  app.set("trust proxy", 1);
+}
 app.use(express.json({ limit: "1mb" }));
+app.use("/auth", (_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
+
+/**
+ * Gate for /api/* when SSO is on. Uses the existing astra_sid session (`state.user`)
+ * — no second cookie, token, or Easy Auth. Unauthenticated API calls get 401 JSON,
+ * never a Microsoft redirect (the UI will send the browser to /auth/login later).
+ *
+ * Public exceptions (GET/HEAD only): /api/health, /api/me.
+ * /auth/* is a different path prefix, so this middleware never sees those requests.
+ * Static files are also outside /api.
+ */
+const PUBLIC_API_GET = new Set(["/api/health", "/api/me"]);
+
+function requireAuthenticatedApi(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  if (!SSO_ENABLED) {
+    next();
+    return;
+  }
+  // Use originalUrl so this stays correct whether Express strips the /api mount
+  // from req.path or not. Only GET /api/health and GET /api/me are public;
+  // /api/golden/health is a different path and stays protected.
+  const pathname = (req.originalUrl ?? req.url ?? "").split("?")[0];
+  if ((req.method === "GET" || req.method === "HEAD") && PUBLIC_API_GET.has(pathname)) {
+    next();
+    return;
+  }
+  const { state } = sessionOf(req, res);
+  if (!state.user) {
+    res.status(401).json({ ok: false, error: "Authentication required" });
+    return;
+  }
+  next();
+}
+
+app.use("/api", requireAuthenticatedApi);
+
+function ssoInactiveResponse(res: express.Response) {
+  res.status(400).json({ ok: false, error: "SSO is not enabled" });
+}
+
+function ssoUnconfiguredResponse(res: express.Response) {
+  res.status(503).json({
+    ok: false,
+    error: "SSO is enabled but Azure Entra configuration is incomplete.",
+  });
+}
+
+// Microsoft Entra authorization-code flow. Tokens stay on the server; the
+// browser only ever holds astra_sid. /auth/* stays public so this flow can run.
+app.get("/auth/login", async (req, res) => {
+  if (!SSO_ENABLED) { ssoInactiveResponse(res); return; }
+  if (!ssoConfigured()) { ssoUnconfiguredResponse(res); return; }
+  try {
+    const { state } = sessionOf(req, res);
+    const pkce = await msalCrypto.generatePkceCodes();
+    const csrf = crypto.randomUUID();
+    const nonce = crypto.randomBytes(32).toString("base64url");
+    state.oauth = {
+      state: csrf,
+      verifier: pkce.verifier,
+      nonce,
+      createdAt: Date.now(),
+    };
+    const { redirectUri } = ssoAzureConfig();
+    const url = await getMsalApp().getAuthCodeUrl({
+      scopes: SSO_SCOPES,
+      redirectUri,
+      codeChallenge: pkce.challenge,
+      codeChallengeMethod: "S256",
+      state: csrf,
+      nonce,
+      responseMode: "query",
+    });
+    res.redirect(url);
+  } catch (e) {
+    console.error("[sso] login failed:", (e as Error).message);
+    res.status(500).json({ ok: false, error: "Could not start Microsoft sign-in." });
+  }
+});
+
+app.get("/auth/callback", async (req, res) => {
+  if (!SSO_ENABLED) { ssoInactiveResponse(res); return; }
+  if (!ssoConfigured()) { ssoUnconfiguredResponse(res); return; }
+
+  const { id: oldSessionId, state } = sessionOf(req, res);
+  const pending = state.oauth;
+  delete state.oauth;
+
+  if (typeof req.query.error === "string") {
+    console.error("[sso] Microsoft returned error:", req.query.error);
+    res.status(400).json({ ok: false, error: "Microsoft sign-in was cancelled or failed." });
+    return;
+  }
+
+  const code = typeof req.query.code === "string" ? req.query.code : "";
+  const returnedState = typeof req.query.state === "string" ? req.query.state : "";
+  const pendingExpired = pending
+    ? Date.now() - pending.createdAt >= SSO_AUTH_REQUEST_MAX_AGE_MS
+    : true;
+  if (!code || !pending || pendingExpired || returnedState !== pending.state) {
+    res.status(400).json({ ok: false, error: "Invalid or expired Microsoft sign-in response." });
+    return;
+  }
+
+  try {
+    const { redirectUri } = ssoAzureConfig();
+    const result = await getMsalApp().acquireTokenByCode({
+      code,
+      scopes: SSO_SCOPES,
+      redirectUri,
+      codeVerifier: pending.verifier,
+      state: returnedState,
+      nonce: pending.nonce,
+    });
+    if (!nonceMatches(result.idTokenClaims, pending.nonce)) {
+      res.status(401).json({ ok: false, error: "Microsoft sign-in identity validation failed." });
+      return;
+    }
+    const user = userFromIdTokenClaims(result.idTokenClaims);
+    if (!user) {
+      res.status(401).json({ ok: false, error: "Microsoft sign-in did not return a user identity." });
+      return;
+    }
+    // Rotate the id at the authentication boundary. Copy only the project choice
+    // and validated identity; pending OAuth data and all other old state are dropped.
+    const now = Date.now();
+    const newSessionId = crypto.randomUUID();
+    sessions.set(newSessionId, {
+      projectId: state.projectId,
+      createdAt: now,
+      lastSeen: now,
+      user,
+    });
+    sessions.delete(oldSessionId);
+    setSessionCookie(res, newSessionId);
+    res.redirect("/");
+  } catch (e) {
+    console.error("[sso] callback token exchange failed:", (e as Error).message);
+    res.status(401).json({ ok: false, error: "Microsoft sign-in could not be completed." });
+  }
+});
+
+app.get("/auth/logout", (req, res) => {
+  if (!SSO_ENABLED) {
+    res.redirect("/");
+    return;
+  }
+  const { id } = sessionOf(req, res);
+  sessions.delete(id);
+  clearSessionCookie(res);
+  if (!ssoConfigured()) {
+    res.redirect("/");
+    return;
+  }
+  const { tenantId, redirectUri } = ssoAzureConfig();
+  let postLogout = "/";
+  try { postLogout = `${new URL(redirectUri).origin}/`; } catch { /* keep "/" */ }
+  const logoutUrl =
+    `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/logout` +
+    `?post_logout_redirect_uri=${encodeURIComponent(postLogout)}`;
+  res.redirect(logoutUrl);
+});
+
+app.get("/api/me", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  if (!SSO_ENABLED) {
+    res.json({
+      ssoEnabled: false,
+      authenticated: false,
+      user: null,
+      reason: "authentication_disabled",
+    });
+    return;
+  }
+  const { state } = sessionOf(req, res);
+  const user = state.user ?? null;
+  res.json({
+    ssoEnabled: true,
+    authenticated: Boolean(user),
+    user,
+  });
+});
+
 app.use(express.static(path.join(__dirname, "..", "public")));
 
 let agents: Agent[] = [];
