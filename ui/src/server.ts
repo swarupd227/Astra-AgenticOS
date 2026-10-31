@@ -8,6 +8,10 @@ import crypto from "node:crypto";
 import matter from "gray-matter";
 import { GoldenStore, catalogBlock, CATALOG_CAP, type ProjectGoldenSelection, type GoldenKind } from "./golden.js";
 import { GoldenUsageStore } from "./golden-usage.js";
+import {
+  EvidenceStore, claimStatus, evidenceFilesFor, freshnessOf, isErrorResult, isEvidenceTool,
+  sha256, snapshotFiles, summarizeArgs, unknownEvidenceCitations, type Freshness, type Risk,
+} from "./evidence.js";
 import { NEVER_INDEXED, unzipExcludeArgs, pruneUnindexed, countFiles } from "./workspace.js";
 import {
   unprovenClaims,
@@ -111,6 +115,9 @@ const GOLDEN_DIR = process.env.GOLDEN_DIR
   : path.join(STATE_DIR, "golden");
 const golden = new GoldenStore(GOLDEN_DIR);
 const goldenUsage = new GoldenUsageStore(GOLDEN_DIR);
+// Observations tools returned, and the claims that cite them. Written only by this
+// server; on STATE_DIR so it survives a redeploy like everything else durable.
+const evidence = new EvidenceStore(path.join(STATE_DIR, "evidence"));
 
 // Running as a hosted container (Azure App Service / Docker)? Then "local folder"
 // means a folder on the SERVER, not on the user's PC — the UI needs to say so.
@@ -1162,7 +1169,16 @@ const OPERATING_CONTRACT = `
 
    For a removal, "safe" also means unreachable by the routes that have no visible call site:
    reflection, DI registration, configuration binding, serialization, and entry points. If you
-   did not check those, say which you did not.`;
+   did not check those, say which you did not.
+
+9. **Evidence comes from the server, not from you.** A tool result that ends with
+   \`[evidence EV-XXXXXXXX]\` has been recorded in a ledger you cannot write to. When you reach a
+   conclusion a reviewer should be able to check, call \`record_claim\` with the statement, what
+   observation would prove it false, and the evidence IDs it rests on. A claim with no evidence
+   is recorded as **unsupported**, and evidence goes **stale** when the files it was taken
+   against change. Cite IDs exactly as given — an ID that does not exist in this project's
+   ledger is flagged beneath your answer. Evidence here means "a static tool returned this",
+   never "this was run".`;
 
 
 // Transient API failures worth retrying (connection drops, overload, 5xx).
@@ -1274,6 +1290,64 @@ function delegateTool(): Anthropic.Tool {
   };
 }
 
+// Synthetic tool: lets an agent put a conclusion on the record, tied to the evidence
+// it rests on. Handled here rather than in the MCP server because the ledger lives
+// here — and because the agent must not be able to write the evidence side of it.
+function recordClaimTool(): Anthropic.Tool {
+  return {
+    name: "record_claim",
+    description:
+      "Record a conclusion a reviewer should be able to check. Give the statement, what observation would prove it false, and the evidence IDs (EV-XXXXXXXX, shown at the end of tool results) it rests on. A claim with no evidence is recorded as unsupported; evidence goes stale when the files it was taken against change. You cannot create evidence — only cite what tools returned.",
+    input_schema: {
+      type: "object",
+      properties: {
+        statement: { type: "string", description: "The claim, one checkable sentence." },
+        disproof: { type: "string", description: "What observation would show the statement is false." },
+        risk: { type: "string", enum: ["low", "medium", "high"], description: "Cost of being wrong." },
+        evidence: { type: "array", items: { type: "string" }, description: "Evidence IDs this rests on." },
+      },
+      required: ["statement", "disproof"],
+    } as Anthropic.Tool.InputSchema,
+  };
+}
+
+function handleRecordClaim(
+  project: Project | null, agentId: string, runId: string, input: Record<string, unknown>
+): { text: string; isError: boolean } {
+  const statement = String(input.statement ?? "").trim();
+  const disproof = String(input.disproof ?? "").trim();
+  if (!statement || !disproof)
+    return { isError: true, text: "Refused: a claim needs both a statement and what observation would prove it false." };
+
+  const projectId = project?.id ?? "";
+  const risk: Risk = input.risk === "high" || input.risk === "medium" ? input.risk : "low";
+  const cited = Array.isArray(input.evidence) ? input.evidence.map((e) => String(e).trim().toUpperCase()) : [];
+  const unknown = cited.filter((id) => !evidence.getEvidence(id, projectId));
+  if (unknown.length)
+    return {
+      isError: true,
+      text:
+        `Refused: ${unknown.join(", ")} ${unknown.length > 1 ? "do" : "does"} not exist in this project's evidence ledger. ` +
+        `Cite only the IDs shown at the end of tool results (\`[evidence EV-XXXXXXXX]\`) — you cannot create evidence, only reference it.`,
+    };
+
+  const claim = evidence.addClaim({ runId, projectId, agent: agentId, statement, disproof, risk, evidence: cited });
+  const fresh = new Map<string, Freshness>(
+    cited.map((id) => [id, freshnessOf(evidence.getEvidence(id, projectId)!, project?.sourceRoot ?? "")])
+  );
+  const status = claimStatus(claim, fresh);
+  const lines = cited.map((id) => `- ${id}: ${fresh.get(id)}`);
+  const unscoped = [...fresh.values()].filter((f) => f === "unscoped").length;
+  return {
+    isError: false,
+    text:
+      `Recorded claim ${claim.id} (risk ${risk}) — **${status}**.\n` +
+      (lines.length ? lines.join("\n") + "\n" : "No evidence cited, so this claim is unsupported.\n") +
+      (unscoped ? `${unscoped} cited record${unscoped > 1 ? "s are" : " is"} unscoped (no file list), so staleness cannot be detected for ${unscoped > 1 ? "them" : "it"}.\n` : "") +
+      `Note: evidence is a static tool's observation — nothing was executed.`,
+  };
+}
+
 async function runAgent(
   run: RunContext,
   agent: Agent,
@@ -1312,6 +1386,10 @@ async function runAgent(
     (t) => alwaysOn.includes(t.name) && !tools.some((x) => x.name === t.name)
   );
   if (missingAlwaysOn.length) tools = [...tools, ...missingAlwaysOn];
+  tools = [...tools, recordClaimTool()];
+  // Captured now: the identity global is replaced by the next run that starts.
+  const runId = currentRun?.runId ?? "";
+  const commit = currentRun?.commit ?? "";
 
   // A scoped run is an instruction to diff a range, so grant the tools that do it
   // whatever the agent declared. Telling an agent to call git_diff and then not
@@ -1449,6 +1527,11 @@ async function runAgent(
             captured.join("").trim().slice(0, 8000) ||
             "(sub-agent completed; its output/artifact is available)";
         }
+      } else if (tu.name === "record_claim") {
+        const r = handleRecordClaim(project, agent.id, runId, (tu.input ?? {}) as Record<string, unknown>);
+        emit({ type: "tool_result", id: tu.id, name: tu.name, result: r.text });
+        results.push({ type: "tool_result", tool_use_id: tu.id, content: r.text, ...(r.isError ? { is_error: true } : {}) });
+        continue;
       } else {
         // Phase 3 — hard template binding. A template that names THIS agent must be
         // read before the agent is allowed to save a deliverable. Enforced here rather
@@ -1510,6 +1593,20 @@ async function runAgent(
             const m = resultText.match(/^Proposed change to `([^`]+)`/);
             if (m) savedThisRun.add(m[1]);
           }
+          // Last, after every tracker above has read the raw result: record what the
+          // tool observed and hand the agent the ID, so a later claim can cite it.
+          if (isEvidenceTool(tu.name) && !isErrorResult(resultText)) {
+            const a = (tu.input ?? {}) as Record<string, unknown>;
+            const rec = evidence.addObservation({
+              runId, projectId: project?.id ?? "", agent: agent.id, tool: tu.name,
+              args: summarizeArgs(a), outputHash: sha256(resultText),
+              excerpt: resultText.slice(0, 300), commit,
+              files: project?.sourceRoot
+                ? snapshotFiles(project.sourceRoot, evidenceFilesFor(tu.name, a, resultText))
+                : [],
+            });
+            resultText += `\n\n[evidence ${rec.id}]`;
+          }
         } catch (e) {
           resultText = `ERROR: ${(e as Error).message}`;
         }
@@ -1554,6 +1651,20 @@ async function runAgent(
     emit({ type: "text_delta", text: note });
     outText += note;
     console.error(`[golden] ${agent.id} cited without reading: ${unread.join(", ")}`);
+  }
+
+  // The same lookup for the evidence ledger: an ID the agent writes that no tool ever
+  // returned is invented, and reads exactly like a real one.
+  const unknownIds = unknownEvidenceCitations(written, evidence.knownIds(project?.id ?? ""));
+  if (unknownIds.length) {
+    const note =
+      `\n\n_⚠ **Unknown evidence reference${unknownIds.length > 1 ? "s" : ""}:** ` +
+      `${unknownIds.join(", ")} ${unknownIds.length > 1 ? "do" : "does"} not exist in this project's evidence ledger. ` +
+      `Evidence IDs are issued by the server when a tool returns a result; ${unknownIds.length > 1 ? "these were" : "this was"} not. ` +
+      `Treat the surrounding claim${unknownIds.length > 1 ? "s" : ""} as unsupported._`;
+    emit({ type: "text_delta", text: note });
+    outText += note;
+    console.error(`[evidence] ${agent.id} cited unknown ids: ${unknownIds.join(", ")}`);
   }
 
   // Same idea as the citation check, applied to claims about the running world.
@@ -1744,6 +1855,37 @@ app.get("/api/golden", (req, res) => {
  * Is the library working? Joins each item against what agents actually consulted.
  * MUST stay above `/:id` or "health" is read as an item id.
  */
+// The ledger for the active project, with freshness computed now against the files on
+// disk — a stored verdict would go stale exactly when it matters.
+app.get("/api/evidence", async (req, res) => {
+  const { project } = await contextOf(req, res);
+  if (!project) { res.json({ project: null, evidence: [], claims: [], summary: null }); return; }
+
+  const all = evidence.forProject(project.id);
+  const recent = all.evidence.slice(-200).reverse();
+  const fresh = new Map<string, Freshness>();
+  for (const e of all.evidence) fresh.set(e.id, freshnessOf(e, project.sourceRoot));
+
+  const claims = all.claims.slice(-100).reverse().map((c) => ({
+    ...c,
+    status: claimStatus(c, fresh),
+    evidenceFreshness: Object.fromEntries(c.evidence.map((id) => [id, fresh.get(id) ?? "stale"])),
+  }));
+  const count = (f: Freshness) => [...fresh.values()].filter((v) => v === f).length;
+  res.json({
+    project: { id: project.id, name: project.name },
+    evidence: recent.map((e) => ({ ...e, freshness: fresh.get(e.id) })),
+    claims,
+    summary: {
+      evidence: all.evidence.length,
+      fresh: count("fresh"), stale: count("stale"), unscoped: count("unscoped"),
+      claims: all.claims.length,
+      unsupported: claims.filter((c) => c.status === "unsupported").length,
+      staleClaims: claims.filter((c) => c.status === "stale").length,
+    },
+  });
+});
+
 app.get("/api/golden/health", (_req, res) => {
   const { runs, since, byItem } = goldenUsage.health();
   const items = golden.list({ includeArchived: false }).map((i) => {

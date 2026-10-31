@@ -7,9 +7,10 @@
   "scripts": {
     "start": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts",
-    "test": "npm run test:verify && npm run test:workspace",
+    "test": "npm run test:verify && npm run test:workspace && npm run test:evidence",
     "test:verify": "tsx test/verify.test.ts",
-    "test:workspace": "tsx test/workspace.test.ts"
+    "test:workspace": "tsx test/workspace.test.ts",
+    "test:evidence": "tsx test/evidence.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.2",
