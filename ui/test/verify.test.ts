@@ -150,6 +150,19 @@ const INPUTS: Array<[string, string[]]> = [
   ["Assess regression risk from candidate.md and cg-output.cs", ["candidate.md", "cg-output.cs"]],
   // No filenames at all is the common case and must stay empty.
   ["Review the data access layer for security problems.", []],
+  // A dotted name is not a file. Found by a live run: "under Libraries/Nop.Core" was read
+  // as an input that had to be opened, and blocked a proposal the agent was entitled to
+  // make. Namespaced folders are the normal case in .NET, packages in Java.
+  ["Find a small C# file under Libraries/Nop.Core, read it", []],
+  ["Review Nop.Services.Tax and Nop.Web.Framework for problems", []],
+  ["Look at com.acme.orders and org.springframework.web", []],
+  ["Upgrade from .NET 4.5.1 to 4.8", []],
+  ["Migrate the Node.js app, e.g. the API, i.e. the main one", []],
+  ["Nop.Services.Sql is the module to look at", []],
+  // Real files, including ones inside those same paths, must still be found.
+  ["Read Libraries/Nop.Core/Domain/GenericAttribute.cs and summarise", ["GenericAttribute.cs"]],
+  ["Compare appsettings.Production.json with web.config.md", ["appsettings.Production.json", "web.config.md"]],
+  ["Open Nop.Core.csproj and README.md", ["Nop.Core.csproj", "README.md"]],
 ];
 
 for (const [msg, expected] of INPUTS) {

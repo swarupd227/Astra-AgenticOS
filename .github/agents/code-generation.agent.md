@@ -40,7 +40,11 @@ narrative summary tying the proposals together (see Output below), never for the
 4. **Propose each file.** Call `propose_file_change` once per new or modified file, with its
    complete resulting content and `kind` set to `"create"` or `"modify"` accordingly. Then
    `save_artifact` the narrative summary below (e.g. `generated/<feature>/summary.md`), referencing
-   the proposals it produced. Recommend running Test Generator + Code Reviewer next.
+   the proposals it produced. Each proposal comes back with a static audit computed by the server
+   (secrets, swallowed errors, TODO debt, comment density — before vs after). Fix anything marked ⚠
+   and re-propose, or say plainly why it stands; don't describe an audit you did not read. If the
+   change set has no test file, say so rather than implying coverage. Recommend running Test
+   Generator + Code Reviewer next.
 
 ## Output
 

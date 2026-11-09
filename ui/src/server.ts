@@ -10,8 +10,9 @@ import { GoldenStore, catalogBlock, CATALOG_CAP, type ProjectGoldenSelection, ty
 import { GoldenUsageStore } from "./golden-usage.js";
 import {
   EvidenceStore, claimStatus, evidenceFilesFor, freshnessOf, isErrorResult, isEvidenceTool,
-  sha256, snapshotFiles, summarizeArgs, unknownEvidenceCitations, type Freshness, type Risk,
+  safeJoin, sha256, snapshotFiles, summarizeArgs, unknownEvidenceCitations, type Freshness, type Risk,
 } from "./evidence.js";
+import { auditChange, formatAudit, proposalsWithoutTests } from "./audit.js";
 import { NEVER_INDEXED, unzipExcludeArgs, pruneUnindexed, countFiles } from "./workspace.js";
 import {
   unprovenClaims,
@@ -893,6 +894,46 @@ async function callMcpTool(ws: Workspace, name: string, args: Record<string, unk
   return text || "(no output)";
 }
 
+/**
+ * Audit a proposal the moment it is made, so none exists without one. The server does
+ * this, not the agent: it compares the real file as it is now against the proposed
+ * content, saves the result next to the proposal, and records it in the evidence
+ * ledger against the file's current hash — so the audit goes stale if the file moves.
+ * Fails loudly: a proposal whose audit could not run says so in its own result.
+ */
+async function auditProposal(
+  ws: Workspace, project: Project | null, args: Record<string, unknown>, result: string,
+  ctx: { runId: string; commit: string; agentId: string }
+): Promise<string> {
+  try {
+    const root = project?.sourceRoot;
+    if (!root) throw new Error("the project has no source root to compare against");
+    const rel = String(args.targetPath ?? "").trim();
+    const kind = args.kind === "create" ? "create" : "modify";
+    let before = "";
+    if (kind === "modify") {
+      const full = safeJoin(root, rel);
+      if (!full) throw new Error("target path escapes the project root");
+      before = fs.readFileSync(full, "utf8");
+    }
+    const audit = auditChange(rel, kind, before, String(args.content ?? ""));
+
+    // The proposal's own result names where its diff went; the audit sits beside it.
+    const named = result.match(/Diff saved to `([^`]+)\.diff`/);
+    if (named) await callMcpTool(ws, "save_artifact", { name: `${named[1]}.audit.json`, content: JSON.stringify(audit, null, 2) });
+
+    const text = formatAudit(audit);
+    const rec = evidence.addObservation({
+      runId: ctx.runId, projectId: project!.id, agent: ctx.agentId, tool: "change_audit",
+      args: `targetPath=${rel} kind=${kind}`, outputHash: sha256(text), excerpt: text.slice(0, 300),
+      commit: ctx.commit, files: snapshotFiles(root, [rel]),
+    });
+    return `\n\n${text}\n[audit evidence ${rec.id}]`;
+  } catch (e) {
+    return `\n\n⚠ **Audit could not be completed for this proposal:** ${(e as Error).message}. Treat it as unaudited.`;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Agentic loop — Claude picks tools, MCP executes, events stream to the UI
 // ---------------------------------------------------------------------------
@@ -1369,6 +1410,7 @@ async function runAgent(
   const required = requiredInputs(userMessage);
   const readOk = new Set<string>();
   const savedThisRun = new Set<string>();
+  const proposedThisRun = new Set<string>();
   // Orchestrator (top level only) gets read-only grounding tools + `delegate`.
   // Everyone else: intersect declared tools with what the MCP server provides.
   const isOrch = agent.id === ORCH_ID && depth === 0;
@@ -1591,7 +1633,11 @@ async function runAgent(
             // "Proposed change to `path` (kind) — …" — a proposal is a written
             // deliverable too, so the saved-claim check has to recognise it as one.
             const m = resultText.match(/^Proposed change to `([^`]+)`/);
-            if (m) savedThisRun.add(m[1]);
+            if (m) {
+              savedThisRun.add(m[1]);
+              proposedThisRun.add(m[1]);
+              resultText += await auditProposal(ws, project, (tu.input ?? {}) as Record<string, unknown>, resultText, { runId, commit, agentId: agent.id });
+            }
           }
           // Last, after every tracker above has read the raw result: record what the
           // tool observed and hand the agent the ID, so a later claim can cite it.
@@ -1651,6 +1697,17 @@ async function runAgent(
     emit({ type: "text_delta", text: note });
     outText += note;
     console.error(`[golden] ${agent.id} cited without reading: ${unread.join(", ")}`);
+  }
+
+  // Run-level, because a test proposed after its source would otherwise be missed at the
+  // moment the source was audited. Says only that this change set has no test in it.
+  const untested = proposalsWithoutTests([...proposedThisRun]);
+  if (untested.length) {
+    const note =
+      `\n\n_ℹ **No test change was proposed alongside:** ${untested.map((p) => `\`${p}\``).join(", ")}. ` +
+      `Existing tests elsewhere in the repository may already cover ${untested.length > 1 ? "them" : "it"} — this run's proposals include none._`;
+    emit({ type: "text_delta", text: note });
+    outText += note;
   }
 
   // The same lookup for the evidence ledger: an ID the agent writes that no tool ever

@@ -201,7 +201,42 @@ export function missingInputGate(toolName: string, failedReads: Set<string>): st
 }
 
 /** A file the request names, e.g. `brd-basket-approved.md` or `Basket.cs`. */
-const FILENAME = /`?\b([\w.-]+\.[A-Za-z0-9]{1,5})\b`?/g;
+const FILENAME = /`?\b([\w.-]+\.[A-Za-z0-9]{1,8})\b`?/g;
+
+/**
+ * Extensions that make a dotted token a file rather than a name.
+ *
+ * Anything-with-a-dot was the first rule, and a live run showed what it costs: "under
+ * Libraries/Nop.Core" was read as an input that had to be opened, and the agent was
+ * blocked from proposing a change it was entitled to make. Namespaced folders
+ * (`Nop.Core`), Java packages (`com.acme.orders`), version numbers (`4.5.1`) and
+ * framework names (`Node.js`) all look like `name.ext`. A known-extension list errs
+ * toward missing an unusual file type, which only fails open — the gate was built for
+ * named briefs and artifacts, and those are all in here.
+ *
+ * `config` is deliberately absent: `com.acme.config` is a package far more often than
+ * `app.config` is a file someone must have read.
+ */
+const FILE_EXTENSIONS = new Set(
+  (
+    "md markdown txt rst adoc pdf doc docx pptx xlsx csv tsv json jsonc yml yaml toml ini xml html htm css scss sql " +
+    "proto graphql gql sh bash ps1 bat tf tfvars bicep log diff patch lock " +
+    "cs csx vb fs java kt kts scala groovy gradle ts tsx js jsx mjs cjs vue svelte py ipynb rb go rs php " +
+    "c h cc cpp hpp cxx swift m mm dart lua pl r jl ex exs erl hs clj " +
+    "sln csproj vbproj fsproj props targets xaml razor cshtml aspx ashx resx"
+  ).split(" ")
+);
+
+/** `Node.js`, `Vue.js` and friends are products, not files anyone has to open. */
+const FRAMEWORK_NAME = /^(?:node|vue|react|next|nuxt|express|angular|ember|backbone|three|d3|chart|socket|p5)\.js$/i;
+
+function looksLikeFile(name: string): boolean {
+  const ext = name.slice(name.lastIndexOf(".") + 1);
+  // `Nop.Sql` is a namespace; `nop.sql` and `NOP.SQL` are files.
+  if (ext !== ext.toLowerCase() && ext !== ext.toUpperCase()) return false;
+  if (!FILE_EXTENSIONS.has(ext.toLowerCase())) return false;
+  return !FRAMEWORK_NAME.test(name);
+}
 
 /** Words that mark the *next* filename as the thing to write, not a thing to read. */
 const OUTPUT_POSITION = /\b(?:save|saved|saving|write|written|store|persist|output|as|named|call it|produce)\b[^.]{0,30}$/i;
@@ -224,6 +259,7 @@ export function requiredInputs(message: string): string[] {
   for (const m of message.matchAll(FILENAME)) {
     const before = message.slice(Math.max(0, m.index! - 40), m.index!);
     if (OUTPUT_POSITION.test(before)) continue;
+    if (!looksLikeFile(m[1])) continue;
     found.add(m[1]);
   }
   return [...found];
