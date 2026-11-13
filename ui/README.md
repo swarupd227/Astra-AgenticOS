@@ -52,8 +52,36 @@ Switching a project re-points the MCP server at the new source root and re-index
 for a small repo, ~10s for a large one like nopCommerce). The **nopCommerce 3.90 demo** project is
 always present and can't be removed. Project definitions persist in `ui/projects.json` (gitignored).
 
+- **Documents** — no code at all. A project that is a set of **input documents** (Word, PDF, Markdown or
+  text): requirement documents, briefs, a client's prompt. Documents are converted to Markdown and stored
+  under the project's artifacts folder (`inputs/`), where agents read them with `list_artifacts` /
+  `read_artifact`. They belong to that project alone — nothing is published to the shared Golden library,
+  and they are deleted with the project. Add or remove them later from the Artifacts panel. (The code
+  index ignores `.md` and `.txt`, which is why a documents project cannot be an ordinary folder.)
+
+Golden items can also be **scoped to one project** (`?scope=<projectId>` on import, or `scope` when
+creating an item) so a client's library is visible to that client's project only.
+
 Endpoints: `GET /api/projects`, `POST /api/projects`, `POST /api/projects/:id/activate`,
-`DELETE /api/projects/:id`.
+`DELETE /api/projects/:id`, `GET|POST|DELETE /api/projects/:id/inputs` (the `POST` takes the raw file and
+`?filename=`).
+
+## Checks on deliverables written from documents
+
+The **Requirements / BRD from Source Documents** agent is checked by the server after each
+`save_artifact`, and the result is returned to the agent so it can fix the document while it still can
+(`ui/src/source-checks.ts`): citations against the cited text (word-pair containment — it says where
+wording is found when it is not in the cited source), sections against a bound template, the task's
+prohibitions (user stories, acceptance criteria), and source conflicts it was shown by `compare_sources`.
+These are heuristics over text and report what they compared, not whether a claim is true.
+
+## Evaluating changes
+
+`npm run eval` runs fixed cases against a live server (it costs model calls) and scores them against
+`ui/eval/baseline.json`: hard properties (requested sections, nothing forbidden, nothing invented, conflicts
+and gaps recorded, inputs read in full) must hold on every run, and soft ones (citation miss rate, length)
+must stay within tolerance. Each run uses a throwaway project with no Golden items, so the result does not
+depend on the library. `npm test` runs the model-free suites, including the scoring rules.
 
 ## Config (env vars)
 

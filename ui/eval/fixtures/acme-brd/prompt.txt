@@ -1,0 +1,15 @@
+Write a Business Requirements Document for Acme Equipment Hire from the input documents only. Save it as brd-acme-eval.md.
+
+Use exactly these sections, in this order, as level-2 headings:
+## Business Objectives
+## Success Criteria
+## Requirements
+## Open Questions
+
+Rules:
+- Use only information in the input documents. Do not use industry knowledge or best practice.
+- Do not generate user stories. Do not generate acceptance criteria.
+- Number requirements REQ-001, REQ-002, and so on. Each requirement names the document it comes from.
+- Where information is missing, write "Not specified in source" and collect the question under Open Questions.
+- If two sources conflict, write "Source Conflict Identified", quote both wordings with their sources, and do not resolve it.
+- Do not invent roles, statuses, fields, values or systems that the documents do not state.

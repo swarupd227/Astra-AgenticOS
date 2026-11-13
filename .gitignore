@@ -47,3 +47,9 @@ artifacts/*
 *.suo
 
 ui/review-shots/
+
+# evaluation run output (the baseline file IS tracked)
+ui/eval/results/
+
+# evidence ledger: tool-output excerpts from real projects (state, not source)
+ui/evidence/

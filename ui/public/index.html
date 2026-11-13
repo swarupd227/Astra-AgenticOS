@@ -111,6 +111,7 @@
           <button type="button" class="seg-btn active" data-type="local">Local folder</button>
           <button type="button" class="seg-btn" data-type="git">Git repository</button>
           <button type="button" class="seg-btn" data-type="upload">Upload .zip</button>
+          <button type="button" class="seg-btn" data-type="documents">Documents</button>
         </div>
 
         <label class="field">
@@ -147,7 +148,18 @@
           </div>
         </div>
 
-        <label class="field">
+        <div id="field-documents" hidden>
+          <div class="dropzone" id="np-docs-drop" tabindex="0" role="button" aria-label="Choose documents">
+            <span class="dz-ico" id="dz-docs-ico"></span>
+            <div class="dz-main" id="dz-docs-main">Drop documents here, or click to browse</div>
+            <div class="dz-sub">.docx, .pdf, .md, .markdown or .txt — pick as many as you like.</div>
+            <input type="file" id="np-docs-file" accept=".docx,.pdf,.md,.markdown,.txt" multiple hidden />
+          </div>
+          <div class="set-hint">For requirements, briefs or prompts — no code needed. Agents read these documents (converted to Markdown) as the project's source material.</div>
+          <div class="doc-list" id="np-docs-list" hidden></div>
+        </div>
+
+        <label class="field" id="np-sub-field">
           <span class="field-label">Sub-folder to index <span class="opt">(optional)</span></span>
           <input id="np-sub" type="text" placeholder="src" />
         </label>
@@ -214,6 +226,8 @@
         </div>
         <button class="icon-btn sm" id="drawer-close" aria-label="Close"></button>
       </div>
+      <div class="inputs-sec" id="inputs-sec" hidden></div>
+      <input type="file" id="inputs-file" accept=".docx,.pdf,.md,.markdown,.txt" multiple hidden />
       <div class="drawer-list" id="artifacts-list"></div>
     </aside>
   </div>
@@ -233,6 +247,10 @@
           <button class="icon-btn sm" id="golden-close" aria-label="Close"></button>
         </div>
       </div>
+      <label class="gold-scope-opt" id="golden-scope-row" title="Applies to the next .zip import only">
+        <input type="checkbox" id="golden-import-scope" />
+        <span id="golden-scope-label">Visible only to the current project</span>
+      </label>
       <div class="golden-tabs">
         <button class="gt-btn active" data-tab="library">Library</button>
         <button class="gt-btn" data-tab="selection">This project's knowledge</button>
@@ -252,6 +270,7 @@
         <button class="icon-btn sm" id="gold-edit-close" aria-label="Close"></button>
       </div>
       <div class="modal-body">
+        <div class="set-hint" id="gi-scope-note" hidden></div>
         <label class="field">
           <span class="field-label">Title</span>
           <input id="gi-title" type="text" placeholder="e.g. Bank .NET Coding Standards" />

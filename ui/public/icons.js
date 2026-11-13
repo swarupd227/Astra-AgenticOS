@@ -62,6 +62,7 @@ function icon(name, size = 18) {
 const AGENT_VISUAL = {
   "orchestrator": { icon: "workflow", hue: 250, cat: "orchestration" },
   "requirements-brd": { icon: "file-text", hue: 262, cat: "discovery" },
+  "brd-from-documents": { icon: "file-text", hue: 280, cat: "discovery" },
   "impact-analysis": { icon: "git-branch", hue: 199, cat: "discovery" },
   "traceability": { icon: "link", hue: 330, cat: "discovery" },
   "architecture-adr": { icon: "layers", hue: 160, cat: "design" },

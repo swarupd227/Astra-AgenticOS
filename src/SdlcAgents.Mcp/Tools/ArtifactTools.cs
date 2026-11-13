@@ -64,7 +64,7 @@ public static class ArtifactTools
     public static string ReadArtifact(
         CodeIndex index,
         [Description("Artifact path as shown by list_artifacts, e.g. 'brd-checkout.md' or 'tests/TaxServiceTests.cs'.")] string name,
-        [Description("Max characters to return (default 20000).")] int maxChars = 20000)
+        [Description("Max characters to return (default 20000). Pass 0 for the whole document — required for a long source document, where the default returns only the beginning.")] int maxChars = 20000)
     {
         var safe = ArtifactStore.SanitizeRelative(name);
         if (safe is null)
@@ -75,8 +75,12 @@ public static class ArtifactTools
             return $"Artifact not found: '{name}'. Use list_artifacts to see what exists.";
 
         var text = File.ReadAllText(full);
-        var truncated = maxChars > 0 && text.Length > maxChars;
-        if (truncated) text = text[..maxChars] + "\n… (truncated)";
+        var total = text.Length;
+        var truncated = maxChars > 0 && total > maxChars;
+        // Say how much was cut and how to get the rest. A bare "(truncated)" let an agent
+        // treat the first 20,000 characters of a 120,000-character source as the source.
+        if (truncated)
+            text = text[..maxChars] + $"\n… (truncated at {maxChars:N0} of {total:N0} characters — call read_artifact again with maxChars 0 to read the whole document)";
         return $"# `{safe}` ({new FileInfo(full).Length} bytes)\n\n{text}";
     }
 }

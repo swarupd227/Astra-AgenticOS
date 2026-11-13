@@ -43,6 +43,15 @@ export interface GoldenItem {
   version: number;
   status: GoldenStatus;
   sourceName?: string;         // original filename / repo path
+  /**
+   * A project id. When set, only that project can see the item — in every selection
+   * mode, including "all". Unset is the normal case: organisation-wide.
+   *
+   * Without this, anything published to the library reached every project that uses
+   * "all", which is wrong for client-specific material: loading one client's documents
+   * for one project made them readable by the rest.
+   */
+  scope?: string;
   contentChars: number;
   createdAt: string;
   updatedAt: string;
@@ -129,9 +138,12 @@ export class GoldenStore {
     catch { return null; }
   }
 
-  /** Items a project has selected — the boundary an agent must never see past. */
-  selectedFor(sel: ProjectGoldenSelection | undefined): GoldenItem[] {
-    const live = this.list();
+  /**
+   * Items a project has selected — the boundary an agent must never see past.
+   * An item scoped to another project is never visible, whatever the selection says.
+   */
+  selectedFor(sel: ProjectGoldenSelection | undefined, projectId?: string): GoldenItem[] {
+    const live = this.list().filter((i) => !i.scope || i.scope === projectId);
     if (!sel || sel.mode === "all") return live;
     const ids = new Set(sel.itemIds ?? []);
     const tags = (sel.tags ?? []).map((t) => t.toLowerCase());
@@ -155,7 +167,7 @@ export class GoldenStore {
     title: string; description?: string; kind: GoldenKind;
     enforcement?: GoldenEnforcement; appliesTo?: string[]; tags?: string[]; aliases?: string[];
     owner?: string; approvedBy?: string; content: string; sourceName?: string;
-    status?: GoldenStatus;
+    status?: GoldenStatus; scope?: string;
   }): Promise<GoldenItem> {
     return this.mutate(() => {
       const title = (input.title || "").trim();
@@ -183,6 +195,7 @@ export class GoldenStore {
         approvedBy: input.approvedBy, approvedAt: input.approvedBy ? now : undefined,
         version: 1, status,
         sourceName: input.sourceName,
+        ...(input.scope ? { scope: input.scope } : {}),
         contentChars: content.length,
         createdAt: now, updatedAt: now,
       };
@@ -211,6 +224,11 @@ export class GoldenStore {
       }
       for (const k of ["title", "description", "kind", "appliesTo", "tags", "aliases", "owner"] as const) {
         if (patch[k] !== undefined) (item as any)[k] = patch[k];
+      }
+      // `scope` can be set, or cleared with an empty string to make an item organisation-wide.
+      if (patch.scope !== undefined) {
+        if (patch.scope) item.scope = String(patch.scope);
+        else delete item.scope;
       }
       item.enforcement = enforcement;
       item.status = status;

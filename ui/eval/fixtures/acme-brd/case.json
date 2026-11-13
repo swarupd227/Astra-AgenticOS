@@ -1,0 +1,44 @@
+{
+  "id": "acme-brd",
+  "description": "BRD from two short documents, with a seeded definition conflict, two seeded gaps and decoy terms that appear in no source.",
+  "agent": "brd-from-documents",
+  "saveAs": "brd-acme-eval.md",
+  "inputs": [
+    "inputs/acme-process-flow.md",
+    "inputs/acme-detailed-requirements.md"
+  ],
+  "sections": [
+    "Business Objectives",
+    "Success Criteria",
+    "Requirements",
+    "Open Questions"
+  ],
+  "conflictTerms": [
+    "Reservation"
+  ],
+  "gaps": [
+    [
+      "late-fee",
+      "late fee"
+    ],
+    [
+      "per customer",
+      "customer level",
+      "customer or agreement",
+      "per agreement"
+    ]
+  ],
+  "facts": [
+    "28 Day",
+    "Weekly",
+    "Monthly",
+    "unbilled rental value"
+  ],
+  "decoys": [
+    "Daily Billing",
+    "Four-Weekly",
+    "Avalara",
+    "Branch Manager",
+    "SLA"
+  ]
+}

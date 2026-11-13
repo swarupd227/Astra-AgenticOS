@@ -11,6 +11,11 @@ cited to `file.cs:line`.
 ## Requirements & Analysis
 2. **Requirements / BRD** — Reads existing code and writes the business rules it follows, in plain language.
    Recovers a full Business Requirements Document for an undocumented feature, with every rule traced back to the code it came from.
+2a. **Requirements / BRD from Source Documents** — Writes a BRD from the documents a project was given (requirement
+   documents, briefs, a client's prompt), not from code. The supplied prompt or template is authoritative; every input
+   document must be read in full before it can save; terms the sources define differently are surfaced for it to record as
+   source conflicts; and after each save the server checks its citations against the cited text, its sections against any
+   bound template, and the document against the task's prohibitions (e.g. no user stories).
 3. **Impact Analysis** — Tells you what could break if you change a class or method, and what to re-test.
    Uses the real reference graph (and pairs a class with its interface) to rate risk and list dependents by layer — a free, local alternative to tools like CAST Imaging.
 4. **Traceability** — Maps each requirement to the code that implements it and the tests that verify it.

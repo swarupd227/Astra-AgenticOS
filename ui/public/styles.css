@@ -417,9 +417,21 @@ kbd {
 .seg-btn.active { background: var(--accent); color: #fff; box-shadow: var(--shadow-sm); }
 .field { display: flex; flex-direction: column; gap: 6px; }
 /* The tab wrappers must space their fields like the modal body does. */
-#field-local, #field-git, #field-upload { display: flex; flex-direction: column; gap: 14px; }
-#field-local[hidden], #field-git[hidden], #field-upload[hidden] { display: none; }
+#field-local, #field-git, #field-upload, #field-documents { display: flex; flex-direction: column; gap: 14px; }
+#field-local[hidden], #field-git[hidden], #field-upload[hidden], #field-documents[hidden] { display: none; }
 #field-local .set-hint, #field-git .set-hint { margin-top: -8px; }
+#field-documents .set-hint { margin-top: -6px; }
+#np-sub-field[hidden] { display: none; }
+
+/* Documents project: the chosen files, each removable before anything is uploaded */
+.doc-list { display: flex; flex-direction: column; gap: 6px; max-height: 190px; overflow-y: auto; }
+.doc-list[hidden] { display: none; }
+.doc-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+.doc-row .dr-ico { color: var(--accent); flex: 0 0 auto; display: grid; }
+.doc-row .dr-name { flex: 1; min-width: 0; font-size: 12.5px; font-family: "JetBrains Mono", monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-row .dr-size { font-size: 11px; color: var(--text-3); flex: 0 0 auto; }
+.doc-row .dr-rm { background: none; border: none; color: var(--text-3); cursor: pointer; padding: 4px; border-radius: 6px; display: grid; flex: 0 0 auto; }
+.doc-row .dr-rm:hover { color: var(--red); background: var(--surface-3); }
 
 /* Upload drop zone */
 .dropzone {
@@ -482,6 +494,18 @@ kbd {
 .art-row .ar-dl { color: var(--text-3); padding: 6px; border-radius: 8px; flex: 0 0 auto; }
 .art-row .ar-dl:hover { color: var(--accent); background: var(--surface-3); }
 .drawer-empty { color: var(--text-3); font-size: 13px; text-align: center; padding: 40px 20px; line-height: 1.6; }
+
+/* Input documents (top of the Artifacts drawer) */
+.inputs-sec { padding: 12px 12px 10px; border-bottom: 1px solid var(--border-soft); display: flex; flex-direction: column; gap: 8px; max-height: 46vh; overflow-y: auto; flex: 0 0 auto; }
+.inputs-sec[hidden] { display: none; }
+.inputs-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.inputs-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.inputs-hint { font-size: 11.5px; color: var(--text-3); line-height: 1.5; }
+.inputs-sec .convert-note { margin-top: 0; }
+.inputs-sec .cn-dismiss { float: right; background: none; border: none; color: var(--text-3); cursor: pointer; font-size: 11px; padding: 0 0 0 8px; }
+.inputs-sec .cn-dismiss:hover { color: var(--text); }
+.art-row .ar-rm { background: none; border: none; color: var(--text-3); cursor: pointer; padding: 6px; border-radius: 8px; flex: 0 0 auto; display: grid; }
+.art-row .ar-rm:hover { color: var(--red); background: var(--surface-3); }
 
 /* ---------- Golden Repository ---------- */
 .drawer.wide { width: min(760px, 96vw); }
@@ -546,6 +570,10 @@ kbd {
 .chip.draft { background: var(--surface-2); }
 .chip.archived { opacity: .6; }
 .chip.kind { background: var(--accent-bg); border-color: transparent; color: var(--accent); }
+.chip.scope { background: var(--surface-3); border-color: var(--border-strong); color: var(--text); }
+.gold-scope-opt { display: flex; align-items: center; gap: 8px; padding: 8px 18px; font-size: 12px; color: var(--text-2); border-bottom: 1px solid var(--border-soft); cursor: pointer; }
+.gold-scope-opt[hidden] { display: none; }
+.gold-scope-opt input { flex: 0 0 auto; }
 
 /* selection list */
 .gold-pick { display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow-y: auto;

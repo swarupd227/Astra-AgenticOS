@@ -107,6 +107,7 @@ async function boot() {
   $("#send").innerHTML = icon("send", 18);
   $("#nav-toggle").innerHTML = icon("menu", 20);
   $("#dz-ico").innerHTML = icon("upload", 26);
+  $("#dz-docs-ico").innerHTML = icon("upload", 26);
   // Clickable logo → home (UI-04); hamburger toggles the sidebar on small screens (UI-02)
   $("#brand").onclick = goHome;
   $("#nav-toggle").onclick = () => document.body.classList.toggle("nav-open");
@@ -155,12 +156,120 @@ function initProjectUI() {
     })
   );
   initUploadUI();
+  initDocsUI();
 }
 
 function showTab(type) {
   $("#field-local").hidden = type !== "local";
   $("#field-git").hidden = type !== "git";
   $("#field-upload").hidden = type !== "upload";
+  $("#field-documents").hidden = type !== "documents";
+  // A documents-only project has no code, so there is nothing to scope to a sub-folder.
+  $("#np-sub-field").hidden = type === "documents";
+}
+
+// ---------- documents-only projects (requirements, briefs, prompts — no code) ----------
+const DOC_EXT = /\.(docx|pdf|md|markdown|txt)$/i;
+let docFiles = []; // File[] chosen in the New Project dialog
+
+function addDocFiles(fileList) {
+  const rejected = [];
+  for (const f of Array.from(fileList || [])) {
+    if (!DOC_EXT.test(f.name)) { rejected.push(f.name); continue; }
+    // Same name replaces — the server overwrites on re-upload, so two entries would just race.
+    docFiles = docFiles.filter((x) => x.name !== f.name);
+    docFiles.push(f);
+  }
+  renderDocFiles();
+  if (rejected.length) showModalErr(`Skipped (unsupported type): ${rejected.join(", ")}. Use .docx, .pdf, .md, .markdown or .txt.`);
+  else $("#np-error").hidden = true;
+  // Documents are often named after what they describe, so offer that as the project name.
+  if (docFiles.length && !$("#np-name").value.trim())
+    $("#np-name").value = docFiles[0].name.replace(/\.[^.]+$/, "");
+}
+
+function renderDocFiles() {
+  const drop = $("#np-docs-drop"), list = $("#np-docs-list");
+  drop.classList.toggle("has-file", docFiles.length > 0);
+  $("#dz-docs-main").innerHTML = docFiles.length
+    ? `${docFiles.length} document${docFiles.length === 1 ? "" : "s"} ready — drop or click to add more`
+    : "Drop documents here, or click to browse";
+  list.hidden = !docFiles.length;
+  list.innerHTML = docFiles.map((f, i) => `
+    <div class="doc-row">
+      <span class="dr-ico">${icon("file-text", 15)}</span>
+      <span class="dr-name" title="${esc(f.name)}">${esc(f.name)}</span>
+      <span class="dr-size">${fmtSize(f.size)}</span>
+      <button type="button" class="dr-rm" data-i="${i}" title="Remove" aria-label="Remove ${esc(f.name)}">${icon("x", 14)}</button>
+    </div>`).join("");
+  list.querySelectorAll(".dr-rm").forEach((b) => (b.onclick = () => {
+    docFiles.splice(Number(b.dataset.i), 1);
+    renderDocFiles();
+  }));
+}
+
+function initDocsUI() {
+  const drop = $("#np-docs-drop"), input = $("#np-docs-file");
+  if (!drop) return;
+  drop.onclick = () => input.click();
+  drop.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } };
+  input.onchange = () => { addDocFiles(input.files); input.value = ""; };
+  ["dragenter", "dragover"].forEach((ev) =>
+    drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((ev) =>
+    drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", (e) => addDocFiles(e.dataTransfer.files));
+}
+
+/** Upload one input document. Throws with the server's message on failure. */
+async function uploadInputDoc(projectId, file) {
+  const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/inputs?filename=${encodeURIComponent(file.name)}`, {
+    method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file,
+  });
+  let r = {};
+  try { r = await resp.json(); } catch {}
+  if (!resp.ok || !r.ok) throw new Error(r.error || `Upload failed (HTTP ${resp.status})`);
+  return r;
+}
+
+/**
+ * Upload several documents one after another. A failure on one file never stops the
+ * rest, and nothing here throws — the caller gets both lists and decides what to say.
+ */
+async function uploadInputDocs(projectId, files, onStep) {
+  const done = [], failed = [];
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    if (onStep) onStep(i + 1, files.length, f.name);
+    try {
+      const r = await uploadInputDoc(projectId, f);
+      done.push({ name: f.name, chars: r.chars, warnings: r.warnings || [] });
+    } catch (e) {
+      failed.push({ name: f.name, error: e.message });
+    }
+  }
+  return { done, failed };
+}
+
+/**
+ * One combined, readable notice for a batch of uploads — never an alert per file.
+ * Server warnings are shown verbatim; SECURITY ones are called out.
+ */
+function inputsNoticeFor(res, projectName) {
+  const total = res.done.length + res.failed.length;
+  const sec = [], warn = [];
+  for (const d of res.done) for (const w of d.warnings) (/^SECURITY/i.test(w) ? sec : warn).push({ name: d.name, w });
+  const li = (x) => `<li><b>${esc(x.name)}</b> — ${esc(x.w)}</li>`;
+  const cls = sec.length || res.failed.length ? "danger" : warn.length ? "warn" : "ok";
+  const html =
+    `<b>Added ${res.done.length} of ${total} document${total === 1 ? "" : "s"}${projectName ? ` to ${esc(projectName)}` : ""}.</b>` +
+    (sec.length ? `<ul class="cn-list danger">${sec.map(li).join("")}</ul>` : "") +
+    (warn.length ? `<ul class="cn-list">${warn.map(li).join("")}</ul>` : "") +
+    (res.failed.length
+      ? `<div style="margin-top:6px"><b>Not added:</b></div><ul class="cn-list danger">${res.failed.map((x) => `<li><b>${esc(x.name)}</b> — ${esc(x.error)}</li>`).join("")}</ul>` +
+        `<div>You can add these again from the Artifacts panel (Input documents → Add documents).</div>`
+      : "");
+  return { cls, html, attention: cls !== "ok" };
 }
 
 // ---------- zip upload ----------
@@ -251,12 +360,12 @@ function renderProjectMenu() {
     const unavailable = p.available === false;
     const sub = unavailable
       ? "source not found — cannot open"
-      : (p.type === "git" ? (p.repoUrl || "git repo") : p.sourceRoot);
+      : (p.type === "git" ? (p.repoUrl || "git repo") : p.type === "documents" ? "Documents only" : p.sourceRoot);
     const del = p.id === "nopcommerce" ? "" :
       `<button class="pm-del" data-del="${esc(p.id)}" title="Remove project">${icon("trash", 15)}</button>`;
     const check = active ? `<span class="pm-check">${icon("check", 16)}</span>` : "";
     return `<div class="pm-item ${active ? "active" : ""} ${unavailable ? "pm-unavailable" : ""}" data-id="${esc(p.id)}" ${unavailable ? 'title="This project\'s code isn\'t on this machine"' : ""}>
-      <span class="pm-ico">${icon(p.type === "git" ? "git" : "folder", 15)}</span>
+      <span class="pm-ico">${icon(p.type === "git" ? "git" : p.type === "documents" ? "file-text" : "folder", 15)}</span>
       <span class="pm-meta"><span class="pm-name">${esc(p.name)}</span><span class="pm-sub">${esc(sub)}</span></span>
       ${check}${del}
     </div>`;
@@ -311,6 +420,7 @@ function openModal(type) {
   $("#np-error").hidden = true;
   setUploadFile(null);
   $("#np-file").value = "";
+  docFiles = []; renderDocFiles();
   applyHostHints();
   // Hosted users cannot reach the server's disk, so upload is the sensible default.
   if (!type) type = hostInfo && hostInfo.cloud ? "upload" : "local";
@@ -336,7 +446,7 @@ async function submitNewProject() {
     return showModalErr("Still setting up the previous project — wait for it to finish, then try again.");
 
   const seg = document.querySelector("#type-seg .seg-btn.active");
-  if (!seg) return showModalErr("Pick where the code lives (local folder, git repository, or zip).");
+  if (!seg) return showModalErr("Pick where the code lives (local folder, git repository, zip, or documents).");
   const type = seg.dataset.type;
   const name = $("#np-name").value.trim();
   const sub = $("#np-sub").value.trim();
@@ -345,6 +455,10 @@ async function submitNewProject() {
   if (!name) return showModalErr("Please give the project a name.");
   if (type === "local") { body.path = $("#np-path").value.trim(); if (!body.path) return showModalErr("Enter a folder path."); }
   else if (type === "upload") { if (!uploadFile) return showModalErr("Choose a .zip file to upload."); }
+  else if (type === "documents") {
+    if (!docFiles.length) return showModalErr("Add at least one document (.docx, .pdf, .md, .markdown or .txt).");
+    delete body.subPath; // a documents project has no code to scope
+  }
   else {
     body.repoUrl = $("#np-repo").value.trim();
     if (!body.repoUrl) return showModalErr("Enter a repository URL.");
@@ -357,9 +471,10 @@ async function submitNewProject() {
   $("#np-create").disabled = true;
   closeModal();
   showBusy(
-    type === "git" ? "Cloning repository…" : type === "upload" ? "Uploading…" : "Adding project…",
-    "Then indexing the codebase — this can take a moment."
+    type === "git" ? "Cloning repository…" : type === "upload" ? "Uploading…" : type === "documents" ? "Creating project…" : "Adding project…",
+    type === "documents" ? "Then adding your documents." : "Then indexing the codebase — this can take a moment."
   );
+  let docSummary = ""; // documents flow: what to tell the user if the page refresh fails
   // The project either got created or it didn't. Re-opening the form on a
   // post-creation refresh failure told the user it failed when it hadn't, and a
   // retry then produced a duplicate — so the two outcomes are tracked apart.
@@ -389,13 +504,37 @@ async function submitNewProject() {
     })).json();
     if (!r.ok) throw new Error(r.error || "Could not create project");
     created = true;
+    if (type === "documents") {
+      // From here the project EXISTS. Upload failures are reported, never thrown —
+      // re-opening the form would create a duplicate project.
+      const pid = r.project && r.project.id;
+      // POST /api/projects activates the project server-wide but does not move THIS
+      // browser's session onto it, so the view would stay on the previous project and
+      // the Artifacts drawer would not show the new inputs. /activate does (instant here:
+      // the workspace is already open).
+      if (pid) {
+        try { await fetch(`/api/projects/${encodeURIComponent(pid)}/activate`, { method: "POST" }); }
+        catch (e) { console.error("[project] could not switch the view to the new project:", e); }
+      }
+      const res = pid
+        ? await uploadInputDocs(pid, docFiles, (i, n, fname) => showBusy(`Adding documents… (${i} of ${n})`, fname))
+        : { done: [], failed: docFiles.map((f) => ({ name: f.name, error: "the new project's id was not returned" })) };
+      const notice = inputsNoticeFor(res, name);
+      docSummary = res.failed.length
+        ? `\n${res.failed.length} document(s) were not added: ${res.failed.map((x) => x.name).join(", ")}. Add them from the Artifacts panel.`
+        : "";
+      await afterProjectChange();
+      inputsNotice = notice; // after afterProjectChange, which clears any older notice
+      if (notice.attention) await openDrawer(); // warnings and failures must be seen, not buried
+      return;
+    }
     await afterProjectChange();
   } catch (e) {
     if (created) {
       // Created, but a refresh step failed. Do NOT re-open the form — that invites
       // a duplicate. Reload instead, since the app's view of state is now stale.
       console.error("[project] created, but refreshing the view failed:", e);
-      alert(`"${name}" was created, but the page could not refresh (${e.message}).\nReloading.`);
+      alert(`"${name}" was created, but the page could not refresh (${e.message}).${docSummary}\nReloading.`);
       location.reload();
     } else {
       reopenModal(); showModalErr(e.message);
@@ -411,6 +550,7 @@ function showModalErr(msg) { const e = $("#np-error"); e.textContent = msg; e.hi
 
 // Re-sync everything after the active project changed.
 async function afterProjectChange() {
+  inputsNotice = null; // an upload notice belongs to the project it was shown for
   await loadProjects();
   agents = await (await fetch("/api/agents")).json(); // suggestions are project-aware
   renderAgents();
@@ -733,7 +873,16 @@ async function send() {
 
 // ---------- artifacts ----------
 let artifacts = [];
+let inputsNotice = null;  // {cls, html} — result of the last input-document upload/remove
+let inputsBusy = "";      // non-empty while an upload is running, e.g. "Adding 1 of 2…"
+const isInputPath = (p) => p.startsWith("inputs/");
 function initArtifactsUI() {
+  $("#inputs-file").onchange = async () => {
+    const input = $("#inputs-file");
+    const files = Array.from(input.files || []);
+    input.value = "";
+    if (files.length) await addInputDocuments(files);
+  };
   $("#artifacts-btn").onclick = openDrawer;
   $("#drawer-close").onclick = closeDrawer;
   $("#drawer-backdrop").onclick = (e) => { if (e.target === $("#drawer-backdrop")) closeDrawer(); };
@@ -753,18 +902,85 @@ async function refreshArtifacts() {
 async function openDrawer() { await refreshArtifacts(); renderArtifactsList(); $("#drawer-backdrop").hidden = false; }
 function closeDrawer() { $("#drawer-backdrop").hidden = true; }
 function renderArtifactsList() {
+  renderInputsSection();
   const list = $("#artifacts-list");
-  if (!artifacts.length) {
+  // Input documents live in their own section above; show each file in one place only.
+  const generated = artifacts.filter((f) => !isInputPath(f.path));
+  if (!generated.length) {
     list.innerHTML = `<div class="drawer-empty">No artifacts yet.<br/>Run an agent — generated BRDs, ADRs, reviews and tests appear here.</div>`;
     return;
   }
-  list.innerHTML = artifacts.map((f) => `
+  list.innerHTML = generated.map((f) => `
     <div class="art-row" data-path="${esc(f.path)}">
       <span class="ar-ico">${icon("file", 16)}</span>
       <span class="ar-meta"><span class="ar-name">${esc(f.path)}</span><span class="ar-sub">${fmtSize(f.size)} · ${fmtTime(f.mtime)}</span></span>
       <a class="ar-dl" href="/api/artifacts/download?path=${encodeURIComponent(f.path)}" title="Download" onclick="event.stopPropagation()">${icon("download", 16)}</a>
     </div>`).join("");
   list.querySelectorAll(".art-row").forEach((r) => (r.onclick = () => openViewer(r.dataset.path)));
+}
+
+// ---------- input documents (the user's own requirements / briefs / prompts) ----------
+function renderInputsSection() {
+  const sec = $("#inputs-sec");
+  if (!activeProjectId) { sec.hidden = true; return; }
+  const inputs = artifacts.filter((f) => isInputPath(f.path));
+  sec.hidden = false;
+  const rows = inputs.map((f) => `
+    <div class="art-row" data-path="${esc(f.path)}">
+      <span class="ar-ico">${icon("file-text", 16)}</span>
+      <span class="ar-meta"><span class="ar-name">${esc(f.path.replace(/^inputs\//, ""))}</span><span class="ar-sub">${fmtSize(f.size)} · ${fmtTime(f.mtime)}</span></span>
+      <button type="button" class="ar-rm" data-file="${esc(f.path.replace(/^inputs\//, ""))}" title="Remove this document" aria-label="Remove ${esc(f.path)}">${icon("trash", 15)}</button>
+    </div>`).join("");
+  sec.innerHTML = `
+    <div class="inputs-head">
+      <span class="inputs-title">Input documents${inputs.length ? ` (${inputs.length})` : ""}</span>
+      <button type="button" class="btn ghost sm" id="inputs-add" ${inputsBusy ? "disabled" : ""}>${inputsBusy ? esc(inputsBusy) : "Add documents"}</button>
+    </div>
+    ${inputsNotice ? `<div class="convert-note ${inputsNotice.cls}"><button type="button" class="cn-dismiss" id="inputs-dismiss">Dismiss</button>${inputsNotice.html}</div>` : ""}
+    ${inputs.length ? rows : `<div class="inputs-hint">No input documents yet — add requirements, briefs or prompts (.docx, .pdf, .md, .txt) for agents to read.</div>`}`;
+  $("#inputs-add").onclick = () => $("#inputs-file").click();
+  const dis = $("#inputs-dismiss");
+  if (dis) dis.onclick = () => { inputsNotice = null; renderInputsSection(); };
+  sec.querySelectorAll(".art-row").forEach((r) => (r.onclick = () => openViewer(r.dataset.path)));
+  sec.querySelectorAll(".ar-rm").forEach((b) =>
+    (b.onclick = (e) => { e.stopPropagation(); removeInputDocument(b.dataset.file); }));
+}
+
+async function addInputDocuments(files) {
+  const pid = activeProjectId;
+  if (!pid || inputsBusy) return;
+  const ok = files.filter((f) => DOC_EXT.test(f.name));
+  const skipped = files.filter((f) => !DOC_EXT.test(f.name));
+  const res = await (async () => {
+    inputsNotice = null;
+    inputsBusy = "Uploading…";
+    renderInputsSection();
+    try {
+      return await uploadInputDocs(pid, ok, (i, n) => { inputsBusy = `Adding ${i} of ${n}…`; renderInputsSection(); });
+    } finally { inputsBusy = ""; }
+  })();
+  for (const f of skipped) res.failed.push({ name: f.name, error: "unsupported type (use .docx, .pdf, .md, .markdown or .txt)" });
+  if (pid !== activeProjectId) return; // user switched project mid-upload; the notice would mislead
+  inputsNotice = inputsNoticeFor(res, "");
+  await refreshArtifacts();
+  renderInputsSection();
+}
+
+async function removeInputDocument(base) {
+  const pid = activeProjectId;
+  if (!pid || !base) return;
+  if (!confirm(`Remove "${base}" from this project's input documents?\n\nAgents will no longer be able to read it.`)) return;
+  try {
+    const resp = await fetch(`/api/projects/${encodeURIComponent(pid)}/inputs?file=${encodeURIComponent(base)}`, { method: "DELETE" });
+    let r = {};
+    try { r = await resp.json(); } catch {}
+    if (!resp.ok || !r.ok) throw new Error(r.error || `HTTP ${resp.status}`);
+    inputsNotice = null;
+  } catch (e) {
+    inputsNotice = { cls: "danger", html: `<b>Could not remove ${esc(base)}.</b> ${esc(e.message)}` };
+  }
+  await refreshArtifacts();
+  renderInputsSection();
 }
 // ---------- Golden Repository (org standards / templates / skills) ----------
 let goldenItems = [];        // the library
@@ -784,23 +1000,27 @@ function initGoldenUI() {
     const f = $("#golden-import-file").files[0];
     if (!f) return;
     $("#golden-import-file").value = "";
+    // Unticked by default: a library item is normally org-wide. Ticked, the import is
+    // visible to the current project only.
+    const scopeId = $("#golden-import-scope").checked && activeProjectId ? activeProjectId : "";
     if (!confirm(
       `Import "${f.name}"?\n\n` +
       `Every document found (.md, .txt, .docx, .pdf) becomes a Golden item as a DRAFT ` +
       `marked "reference" — nothing is published and nothing becomes mandatory. ` +
-      `You publish the ones you want afterwards.`
+      `You publish the ones you want afterwards.` +
+      (scopeId ? `\n\nThese items will be visible only to "${activeProjectName()}".` : "")
     )) return;
 
     showBusy("Importing documents…", "Extracting, converting and indexing — this can take a minute.");
     try {
-      const r = await (await fetch("/api/golden/import", {
+      const r = await (await fetch("/api/golden/import" + (scopeId ? `?scope=${encodeURIComponent(scopeId)}` : ""), {
         method: "POST", headers: { "Content-Type": "application/zip" }, body: f,
       })).json();
       if (!r.ok) throw new Error(r.error || "Import failed");
       await loadGolden();
       renderGoldenLibrary();
       renderGoldenSelection();
-      const bits = [`Imported ${r.imported} document${r.imported === 1 ? "" : "s"} as drafts.`];
+      const bits = [`Imported ${r.imported} document${r.imported === 1 ? "" : "s"} as drafts${scopeId ? ` (visible only to ${activeProjectName()})` : ""}.`];
       if (r.flagged) bits.push(`⚠ ${r.flagged} contain text written as instructions to an AI — review before publishing.`);
       if (r.skipped) bits.push(`${r.skipped} skipped (empty or unreadable).`);
       if (r.overCap) bits.push(`${r.overCap} beyond the ${300} file cap were NOT imported.`);
@@ -906,6 +1126,11 @@ async function loadGolden() {
 }
 
 async function openGolden() {
+  // Never carry "project only" over from a previous visit — it must be a deliberate choice each time.
+  const sc = $("#golden-import-scope");
+  sc.checked = false;
+  sc.disabled = !activeProjectId;
+  $("#golden-scope-label").textContent = `Visible only to the current project (${activeProjectName()}) — applies to .zip import`;
   await loadGolden();
   renderGoldenLibrary();
   renderGoldenSelection();
@@ -916,6 +1141,7 @@ function goldenChips(i) {
   const chips = [`<span class="chip kind">${esc(i.kind)}</span>`];
   if (i.enforcement === "mandatory") chips.push(`<span class="chip mandatory">mandatory</span>`);
   if (i.status !== "published") chips.push(`<span class="chip ${esc(i.status)}">${esc(i.status)}</span>`);
+  if (i.scope) chips.push(`<span class="chip scope" title="Visible only to ${esc(scopeProjectName(i.scope))}">Project only</span>`);
   return chips.join(" ");
 }
 
@@ -1045,6 +1271,12 @@ function renderGoldenSelection() {
   $("#gs-save").onclick = saveGoldenSelection;
 }
 
+// A scoped item names its project by id; fall back to the id if that project is gone.
+function scopeProjectName(id) {
+  const p = projects.find((x) => x.id === id);
+  return p ? p.name : id;
+}
+
 function activeProjectName() {
   const p = projects.find((x) => x.id === activeProjectId);
   return p ? p.name : "this project";
@@ -1085,6 +1317,9 @@ function openGoldenEditor(id) {
   $("#gi-content").value = "";
   $("#gi-file").value = "";
   $("#gi-error").hidden = true;
+  const scopeNote = $("#gi-scope-note");
+  scopeNote.hidden = !i?.scope;
+  scopeNote.textContent = i?.scope ? `Project only — this item is visible only to ${scopeProjectName(i.scope)}.` : "";
   $("#gi-enf").onchange();
   $("#gold-edit-backdrop").hidden = false;
   if (id) {

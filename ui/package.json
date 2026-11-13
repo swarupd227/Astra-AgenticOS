@@ -7,11 +7,16 @@
   "scripts": {
     "start": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts",
-    "test": "npm run test:verify && npm run test:workspace && npm run test:evidence && npm run test:audit",
+    "test": "npm run test:verify && npm run test:workspace && npm run test:evidence && npm run test:audit && npm run test:sources && npm run test:evalscore && npm run test:context && npm run test:goldenscope",
     "test:verify": "tsx test/verify.test.ts",
     "test:workspace": "tsx test/workspace.test.ts",
     "test:evidence": "tsx test/evidence.test.ts",
-    "test:audit": "tsx test/audit.test.ts"
+    "test:audit": "tsx test/audit.test.ts",
+    "test:sources": "tsx test/source-checks.test.ts",
+    "test:evalscore": "tsx test/eval-score.test.ts",
+    "eval": "tsx eval/run.ts",
+    "test:context": "tsx test/context.test.ts",
+    "test:goldenscope": "tsx test/golden-scope.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.2",

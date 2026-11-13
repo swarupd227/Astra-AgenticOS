@@ -13,6 +13,12 @@ import {
   safeJoin, sha256, snapshotFiles, summarizeArgs, unknownEvidenceCitations, type Freshness, type Risk,
 } from "./evidence.js";
 import { auditChange, formatAudit, proposalsWithoutTests } from "./audit.js";
+import { supersedeOldSaves } from "./context.js";
+import {
+  citationIssues, citationKey, constructsProhibitedBy, formatCitationReport, formatConflicts, formatDeviation,
+  formatInventedRoles, formatProhibited, inventedRoles, noCheckableCitations, prohibitedUsed, templateDeviations,
+  termConflicts, unaddressedConflicts, type TermConflict,
+} from "./source-checks.js";
 import { NEVER_INDEXED, unzipExcludeArgs, pruneUnindexed, countFiles } from "./workspace.js";
 import {
   unprovenClaims,
@@ -22,7 +28,7 @@ import {
   requiredInputs,
   stampable,
 } from "./verify.js";
-import { convertDocument } from "./doc-convert.js";
+import { convertDocument, scanForInjection } from "./doc-convert.js";
 import JSZip from "jszip";
 import Anthropic from "@anthropic-ai/sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -58,7 +64,6 @@ let MODEL = process.env.MODEL ?? "claude-sonnet-4-6";
 // non-streaming HTTP timeouts) was needlessly tight and truncated long deliverables —
 // BRDs, migration roadmaps. The models support 128k; 32k is a safe default.
 const MAX_TOKENS = Number(process.env.MAX_TOKENS ?? 32000);
-
 // Azure App Service (and most load balancers/proxies) close a connection that has
 // been idle for 230s. Long steps — cloning a big repo, indexing, a slow model turn —
 // can exceed that with no bytes on the wire, which the browser reports as a network
@@ -228,6 +233,7 @@ const GENERIC_SUGGESTED: Record<string, string[]> = {
     "Assess this solution for migration to .NET 10. Inventory the migration blockers, score the effort, and give me a phased roadmap.",
   ],
   "requirements-brd": ["Generate a Business Requirements Document for the main feature of this codebase, grounded in the code."],
+  "brd-from-documents": ["Write a Business Requirements Document from the input documents in this project. Follow the structure and rules in the prompt I give you, and record gaps and source conflicts instead of resolving them."],
   "impact-analysis": ["Pick a central service in this codebase and analyse the blast radius of changing it."],
   "architecture-adr": ["Give me an architecture overview of this solution."],
   "test-generator": ["Find an untested class and write unit tests for it, matching the existing test style."],
@@ -291,7 +297,8 @@ function loadAgents(): Agent[] {
 interface Project {
   id: string;
   name: string;
-  type: "local" | "git" | "upload";
+  /** `documents`: no code at all — the project is a set of input documents (see /inputs). */
+  type: "local" | "git" | "upload" | "documents";
   sourceRoot: string; // absolute path the MCP server indexes
   repoUrl?: string;
   subPath?: string;
@@ -538,7 +545,7 @@ async function connectMcp(project: Project, ws: Workspace) {
       // resolved id list (rather than the rule) makes the project boundary explicit —
       // the MCP server can only ever see items this project selected.
       GOLDEN_DIR,
-      GOLDEN_ITEMS: golden.selectedFor(project.golden).map((i) => i.id).join(","),
+      GOLDEN_ITEMS: golden.selectedFor(project.golden, project.id).map((i) => i.id).join(","),
     },
   });
   const client = new Client({ name: "astra-agenticos-ui", version: "2.0.0" });
@@ -935,6 +942,125 @@ async function auditProposal(
 }
 
 // ---------------------------------------------------------------------------
+// Deliverables written from source documents — checks made while the agent can still
+// fix what it saved (see source-checks.ts for what each one does and does not claim).
+// ---------------------------------------------------------------------------
+
+/** Every cited source the server can read: Golden items this project sees, and its input documents. */
+function citedSources(content: string, project: Project | null): Map<string, string> {
+  const out = new Map<string, string>();
+  const visible = new Map(golden.selectedFor(project?.golden, project?.id).map((i) => [i.id.toUpperCase(), i.id]));
+  for (const m of content.matchAll(/GLD-[A-Z]+-\d+/gi)) {
+    const id = visible.get(m[0].toUpperCase());
+    const text = id ? golden.readContent(id) : null;
+    if (id && text) out.set(citationKey(id), text);
+  }
+  if (project) {
+    for (const m of content.matchAll(/inputs\/[^\s,;)\]*]+\.(?:md|txt)/gi)) {
+      const file = path.join(inputsDirOf(project), path.basename(m[0]));
+      try { out.set(citationKey(`inputs/${path.basename(file)}`), fs.readFileSync(file, "utf8")); } catch { /* cited but absent: counted as unverifiable */ }
+    }
+  }
+  return out;
+}
+
+/**
+ * Everything an artifact is checked against once saved. Returns null when all is well.
+ *
+ * Structure and prohibitions apply to every agent. Citations and conflicts only to agents
+ * that write from source documents: there, wording is reproduced and a score against the
+ * cited text means something; elsewhere an agent paraphrasing a standard would be flagged
+ * for doing exactly what it should.
+ */
+function documentChecks(
+  content: string, task: string, agentId: string, project: Project | null, conflicts: TermConflict[], fromDocuments: boolean
+): string[] {
+  const notes: string[] = [];
+
+  const prohibited = formatProhibited(prohibitedUsed(content, constructsProhibitedBy(task)));
+  if (prohibited) notes.push(prohibited);
+
+  for (const t of boundTemplates(agentId, project)) {
+    const tpl = golden.readContent(t.id);
+    const dev = tpl ? templateDeviations(tpl, content) : null;
+    const msg = dev ? formatDeviation(dev, `${t.id} (${t.title})`) : null;
+    if (msg) notes.push(msg);
+  }
+
+  if (fromDocuments) {
+    const others = new Map<string, string>();
+    if (task.length > 200) others.set("task prompt", task);
+    const report = citationIssues(content, citedSources(content, project), others);
+    const cit = formatCitationReport(report) ?? noCheckableCitations(report, content.length);
+    if (cit) notes.push(cit);
+
+    const roles = formatInventedRoles(inventedRoles(content, documentSources(project, task).map((s) => s.text)));
+    if (roles) notes.push(roles);
+  }
+
+  if (fromDocuments && conflicts.length) {
+    const open = unaddressedConflicts(content, conflicts);
+    if (open.length)
+      notes.push(
+        `⚠ **Source conflicts not addressed:** compare_sources reported ${conflicts.length} term(s) defined in unlike words by different sources, ` +
+        `and this document does not record ${open.map((t) => `“${t}”`).join(", ")} as a **Source Conflict Identified** with both wordings quoted. Record each (or say it is not a real conflict), then save again.`
+      );
+  }
+  return notes;
+}
+
+/** The checks, worded for the agent that just saved: what to fix. */
+function postSaveChecks(
+  content: string, task: string, agentId: string, project: Project | null, conflicts: TermConflict[], fromDocuments: boolean
+): string | null {
+  const notes = documentChecks(content, task, agentId, project, conflicts, fromDocuments);
+  return notes.length
+    ? `\n\n**Checks the server ran on what you just saved** — fix these and save again (the earlier version is kept):\n\n${notes.join("\n\n")}`
+    : null;
+}
+
+// Synthetic tool: terms the sources define differently. Handled here because it needs the
+// task text, the project's input documents and its Golden selection together.
+function compareSourcesTool(): Anthropic.Tool {
+  return {
+    name: "compare_sources",
+    description:
+      "Find terms that different sources define in unlike words — the task prompt, this project's input documents, and the Golden Repository items you can see. Call it after reading the sources and before writing. It returns candidates for you to judge: record each genuine disagreement as a 'Source Conflict Identified' with both wordings quoted, and do not choose between them.",
+    input_schema: { type: "object", properties: {} } as Anthropic.Tool.InputSchema,
+  };
+}
+
+/** Everything a document-sourced deliverable may draw on: the task, this project's input documents, and the Golden items it can see. */
+function documentSources(project: Project | null, task: string): { name: string; text: string }[] {
+  const sources: { name: string; text: string }[] = [{ name: "task prompt", text: task }];
+  if (project) {
+    for (const f of walkFiles(inputsDirOf(project), project.artifactsDir)) {
+      try { sources.push({ name: f.path, text: fs.readFileSync(path.join(project.artifactsDir, f.path), "utf8") }); } catch { /* unreadable: skipped */ }
+    }
+  }
+  for (const i of golden.selectedFor(project?.golden, project?.id).filter((x) => x.status === "published")) {
+    const text = golden.readContent(i.id);
+    if (text) sources.push({ name: `${i.id} (${i.title})`, text });
+  }
+  return sources;
+}
+
+function handleCompareSources(
+  project: Project | null, task: string, agentId: string, runId: string, commit: string
+): { text: string; conflicts: TermConflict[] } {
+  const sources = documentSources(project, task);
+  // Only disagreements involving the task or this project's own documents matter to the
+  // document being written; reference items disagreeing among themselves do not.
+  const conflicts = termConflicts(sources, 0.4, (name) => name === "task prompt" || name.startsWith("inputs/"));
+  const text = `Compared ${sources.length} sources (${sources.map((s) => s.name).slice(0, 6).join("; ")}${sources.length > 6 ? "; …" : ""}).\n\n${formatConflicts(conflicts)}`;
+  evidence.addObservation({
+    runId, projectId: project?.id ?? "", agent: agentId, tool: "compare_sources",
+    args: `sources=${sources.length}`, outputHash: sha256(text), excerpt: text.slice(0, 300), commit, files: [],
+  });
+  return { text, conflicts };
+}
+
+// ---------------------------------------------------------------------------
 // Agentic loop — Claude picks tools, MCP executes, events stream to the UI
 // ---------------------------------------------------------------------------
 let anthropic = new Anthropic({ maxRetries: 4 }); // reads ANTHROPIC_API_KEY
@@ -1238,7 +1364,7 @@ function isRetryable(e: any): boolean {
  */
 function goldenCatalogFor(agentId: string, project: Project | null): string {
   try {
-    const selected = golden.selectedFor(project?.golden);
+    const selected = golden.selectedFor(project?.golden, project?.id);
     return catalogBlock(
       GoldenStore.relevantTo(selected, agentId),
       CATALOG_CAP,
@@ -1287,7 +1413,7 @@ const ARTIFACT_READ_TOOLS = ["list_artifacts", "read_artifact"];
  */
 function boundTemplates(agentId: string, project: Project | null) {
   return golden
-    .selectedFor(project?.golden)
+    .selectedFor(project?.golden, project?.id)
     .filter((i) => i.kind === "template" && i.status === "published" && i.appliesTo.includes(agentId));
 }
 
@@ -1429,6 +1555,12 @@ async function runAgent(
   );
   if (missingAlwaysOn.length) tools = [...tools, ...missingAlwaysOn];
   tools = [...tools, recordClaimTool()];
+  // Agents that write from source documents declare compare_sources; they also get the
+  // stricter rules below (every input document read, citations checked against the text).
+  const isDocAgent = agent.tools.includes("compare_sources");
+  if (isDocAgent) tools = [...tools, compareSourcesTool()];
+  let conflictsFound: TermConflict[] = [];
+  let lastDocSaved: { name: string; content: string } | null = null;
   // Captured now: the identity global is replaced by the next run that starts.
   const runId = currentRun?.runId ?? "";
   const commit = currentRun?.commit ?? "";
@@ -1458,6 +1590,9 @@ async function runAgent(
     // attempt can only have produced partial *text* — we tell the client to discard
     // that partial block ("text_reset") before re-streaming, so nothing duplicates.
     let resp: Anthropic.Message | undefined;
+    // Older copies of a document the agent has since re-saved only grow the request.
+    const dropped = supersedeOldSaves(messages as any);
+    if (dropped) console.error(`[context] ${agent.id}: omitted ${dropped.toLocaleString("en-US")} characters of superseded saves`);
     for (let attempt = 0; ; attempt++) {
       let emittedThisAttempt = 0;
       let attemptText = "";
@@ -1574,6 +1709,12 @@ async function runAgent(
         emit({ type: "tool_result", id: tu.id, name: tu.name, result: r.text });
         results.push({ type: "tool_result", tool_use_id: tu.id, content: r.text, ...(r.isError ? { is_error: true } : {}) });
         continue;
+      } else if (tu.name === "compare_sources" && isDocAgent) {
+        const r = handleCompareSources(project, userMessage, agent.id, runId, commit);
+        conflictsFound = r.conflicts;
+        emit({ type: "tool_result", id: tu.id, name: tu.name, result: r.text });
+        results.push({ type: "tool_result", tool_use_id: tu.id, content: r.text });
+        continue;
       } else {
         // Phase 3 — hard template binding. A template that names THIS agent must be
         // read before the agent is allowed to save a deliverable. Enforced here rather
@@ -1582,10 +1723,16 @@ async function runAgent(
         // propose_file_change modifying a real file adds its own targetPath to what
         // must have been read this run — the same rule save_artifact already applies
         // to named inputs, extended to the file the change is against.
-        const effectiveRequired =
+        let effectiveRequired =
           tu.name === "propose_file_change" && (tu.input as any)?.kind === "modify"
             ? [...required, String((tu.input as any)?.targetPath ?? "")]
             : required;
+        // A document-sourced deliverable must rest on every input document, not whichever
+        // the agent got to: in a live run the agent read both, but nothing made it.
+        if (tu.name === "save_artifact" && isDocAgent && project) {
+          const inputs = walkFiles(inputsDirOf(project), project.artifactsDir).map((f) => f.path);
+          effectiveRequired = [...new Set([...effectiveRequired, ...inputs])];
+        }
         const gate =
           templateGate(agent.id, tu.name, goldenReadThisRun, project) ??
           prerequisiteGate(tu.name, effectiveRequired, readOk, failedArtifactReads);
@@ -1616,7 +1763,11 @@ async function runAgent(
             } else if (asked && !resultText.startsWith("Refused:")) {
               // Only this name clears itself. Reading something else is not a recovery.
               failedArtifactReads.delete(asked);
-              readOk.add(asked);
+              // A truncated read of an input document is not having read it: the first
+              // 20,000 characters of a 120,000-character source is how a deliverable ends
+              // up resting on a fraction of it.
+              const partial = asked.startsWith("inputs/") && /…\s*\(truncated/.test(resultText);
+              if (!partial) readOk.add(asked);
             }
           }
           if (tu.name === "read_file" && !/^(?:ERROR|Refused:|Could not|No such)/.test(resultText)) {
@@ -1628,6 +1779,18 @@ async function runAgent(
             // "Artifact `path` already contains…" — "Refused:" deliberately matches none.
             const m = resultText.match(/^(?:Saved artifact to|Updated existing artifact|Artifact) `([^`]+)`/);
             if (m) savedThisRun.add(m[1]);
+            // Tell the agent what is wrong with what it just saved while it can still fix
+            // it — a warning appended to the final answer comes too late to act on.
+            const savedName = String((tu.input as any)?.name ?? "");
+            if (m && !/^Artifact `/.test(resultText) && stampable(savedName)) {
+              const content = String((tu.input as any)?.content ?? "");
+              if (isDocAgent) lastDocSaved = { name: savedName, content };
+              const notes = postSaveChecks(content, userMessage, agent.id, project, conflictsFound, isDocAgent);
+              if (notes) {
+                resultText += notes;
+                console.error(`[checks] ${agent.id} saved ${savedName} with flagged content`);
+              }
+            }
           }
           if (tu.name === "propose_file_change") {
             // "Proposed change to `path` (kind) — …" — a proposal is a written
@@ -1697,6 +1860,21 @@ async function runAgent(
     emit({ type: "text_delta", text: note });
     outText += note;
     console.error(`[golden] ${agent.id} cited without reading: ${unread.join(", ")}`);
+  }
+
+  // The agent is shown these checks on every save but is free to stop with some still open
+  // (a live run's citation misses went 20, 16, 7, 15, 37 across five saves). Whoever reads
+  // the answer should be told, not left to find it in a tool result.
+  if (isDocAgent && lastDocSaved) {
+    const open = documentChecks(lastDocSaved.content, userMessage, agent.id, project, conflictsFound, true);
+    if (open.length) {
+      const note =
+        `\n\n_⚠ **\`${lastDocSaved.name}\` was saved with checks still open.** The server compared the final saved version with its sources and the task:_\n\n` +
+        open.join("\n\n");
+      emit({ type: "text_delta", text: note });
+      outText += note;
+      console.error(`[checks] ${agent.id} finished with ${open.length} check(s) still open on ${lastDocSaved.name}`);
+    }
   }
 
   // Run-level, because a test proposed after its source would otherwise be missed at the
@@ -1979,10 +2157,20 @@ app.get("/api/golden/:id", (req, res) => {
   res.json({ ok: true, item, content: golden.readContent(item.id) ?? "" });
 });
 
+/** A scope must name a real project — a typo would otherwise hide the item from everyone. */
+function validScope(raw: unknown): string | undefined {
+  const s = String(raw ?? "").trim();
+  if (!s) return undefined;
+  if (!projects.some((p) => p.id === s)) throw new Error(`No such project to scope this to: ${s}`);
+  return s;
+}
+
 app.post("/api/golden", async (req, res) => {
   try {
     const b = req.body ?? {};
+    const scope = validScope(b.scope);
     const item = await golden.create({
+      scope,
       title: String(b.title ?? ""),
       description: b.description ? String(b.description) : undefined,
       kind: (b.kind ?? "reference") as GoldenKind,
@@ -2070,6 +2258,8 @@ function deriveDescription(md: string, fallback: string): string {
 app.post("/api/golden/import", async (req, res) => {
   const alive = keepJsonAlive(res); // extraction + conversion runs long and silent
   try {
+    // ?scope=<projectId> makes everything imported visible to that project only.
+    const scope = validScope(req.query.scope);
     const declared = Number(req.headers["content-length"] || 0);
     if (declared && declared > MAX_UPLOAD_MB * 1024 * 1024)
       throw new Error(`That zip is ${(declared / 1048576).toFixed(0)} MB — the limit is ${MAX_UPLOAD_MB} MB.`);
@@ -2134,6 +2324,7 @@ app.post("/api/golden/import", async (req, res) => {
           kind: "reference",
           enforcement: "reference",
           status: "draft",                     // never auto-publish
+          scope,
           appliesTo: ["all"],
           tags: tag ? [tag] : [],
           owner: "imported",
@@ -2227,7 +2418,7 @@ app.post("/api/golden/:id/test", async (req, res) => {
 app.get("/api/golden-selection", (req, res) => {
   const { state } = sessionOf(req, res);
   const p = projects.find((x) => x.id === state.projectId);
-  const selected = golden.selectedFor(p?.golden);
+  const selected = golden.selectedFor(p?.golden, p?.id);
   res.json({
     projectId: p?.id ?? null,
     selection: p?.golden ?? { mode: "all" },
@@ -2325,7 +2516,7 @@ app.post("/api/projects/:id/golden", async (req, res) => {
     try { await reopenWorkspace(p.id); }
     catch (e) { console.error("[golden] reopen failed:", (e as Error).message); }
   }
-  const selected = golden.selectedFor(sel);
+  const selected = golden.selectedFor(sel, p.id);
   res.json({ ok: true, selection: sel, selectedCount: selected.length });
 });
 
@@ -2656,6 +2847,12 @@ app.post("/api/projects", async (req, res) => {
       }
       sourceRoot = subPath ? path.join(dir, String(subPath)) : dir;
       repoUrlOut = cleanUrl; // stored without credentials
+    } else if (type === "documents") {
+      // Nothing to clone or index: an empty folder the MCP server can sit on while the
+      // project's real content arrives as input documents.
+      fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+      sourceRoot = path.join(WORKSPACE_DIR, id);
+      fs.mkdirSync(sourceRoot, { recursive: true });
     } else {
       throw new Error(`Unknown project type: ${type}`);
     }
@@ -2716,8 +2913,15 @@ app.delete("/api/projects/:id", async (req, res) => {
   }
   projects = projects.filter((x) => x.id !== id);
   saveProjects();
-  if (p.type === "git") {
+  if (p.type === "git" || p.type === "documents") {
     try { fs.rmSync(path.join(WORKSPACE_DIR, id), { recursive: true, force: true }); } catch {}
+  }
+  // Uploaded input documents are someone's source material, often a client's — they go
+  // with the project. (Generated artifacts stay, as they always have.)
+  try { fs.rmSync(inputsDirOf(p), { recursive: true, force: true }); } catch {}
+  // Library items scoped to this project would otherwise sit there unreachable.
+  for (const i of golden.list({ includeArchived: false }).filter((x) => x.scope === id)) {
+    try { await golden.archive(i.id); } catch {}
   }
   { const ws = workspaces.get(id); if (ws) await closeWorkspace(ws); }
 
@@ -2731,6 +2935,94 @@ app.delete("/api/projects/:id", async (req, res) => {
     // which can take ten minutes on a large repository.
     if (next) openWorkspace(next);
   }
+  res.json({ ok: true });
+});
+
+// ---- Input documents (per project) ---------------------------------------
+//
+// Source material for a project that has no code — requirement documents, briefs, a
+// client's prompt — or an extra input for one that does. Stored as Markdown under the
+// project's artifacts folder, which is exactly where agents already look for prior
+// deliverables, so `list_artifacts` / `read_artifact` open them with no new tool. They
+// belong to the project alone: nothing here is published to the shared Golden library.
+//
+// Why not the code index? It reads only code and config; a .md or .txt file is ignored,
+// so a documents-only project showed an agent zero readable files.
+const INPUT_EXT = new Set([".md", ".markdown", ".txt", ".docx", ".pdf"]);
+
+function inputsDirOf(p: Project): string { return path.join(p.artifactsDir, "inputs"); }
+
+/** Always a plain `<name>.md` inside the inputs folder, whatever the upload was called. */
+function safeInputName(filename: string): string {
+  const base = path.basename(String(filename || "document")).replace(/\.[^.]+$/, "");
+  const clean = base.replace(/[^A-Za-z0-9 ._()-]+/g, "-").replace(/\s+/g, "-").replace(/^[.-]+/, "").slice(0, 80);
+  return `${clean || "document"}.md`;
+}
+
+async function readRaw(req: express.Request, limitMb: number): Promise<Buffer> {
+  const declared = Number(req.headers["content-length"] || 0);
+  if (declared && declared > limitMb * 1024 * 1024)
+    throw new Error(`That file is ${(declared / 1048576).toFixed(1)} MB — the limit is ${limitMb} MB.`);
+  const chunks: Buffer[] = [];
+  let size = 0;
+  await new Promise<void>((resolve, reject) => {
+    req.on("data", (c: Buffer) => {
+      size += c.length;
+      if (size > limitMb * 1024 * 1024) { req.pause(); req.resume(); reject(new Error(`That file is larger than the ${limitMb} MB limit.`)); return; }
+      chunks.push(c);
+    });
+    req.on("end", () => resolve());
+    req.on("error", reject);
+  });
+  return Buffer.concat(chunks);
+}
+
+app.get("/api/projects/:id/inputs", (req, res) => {
+  const p = projects.find((x) => x.id === req.params.id);
+  if (!p) { res.status(404).json({ ok: false, error: "Project not found." }); return; }
+  res.json({ ok: true, files: walkFiles(inputsDirOf(p), p.artifactsDir).sort((a, b) => a.path.localeCompare(b.path)) });
+});
+
+app.post("/api/projects/:id/inputs", async (req, res) => {
+  try {
+    const p = projects.find((x) => x.id === req.params.id);
+    if (!p) { res.status(404).json({ ok: false, error: "Project not found." }); return; }
+    const filename = String(req.query.filename || "document").trim();
+    const ext = path.extname(filename).toLowerCase();
+    if (!INPUT_EXT.has(ext))
+      throw new Error(`"${filename}" is not a supported input. Use a Word (.docx), PDF, Markdown or text file.`);
+
+    const buf = await readRaw(req, MAX_DOC_MB);
+    if (!buf.length) throw new Error("The upload was empty.");
+
+    let markdown: string;
+    let warnings: string[] = [];
+    if (ext === ".docx" || ext === ".pdf") {
+      const out = await convertDocument(buf, filename, { stripLinkUrls: req.query.keepLinks !== "1" });
+      markdown = out.markdown; warnings = out.warnings;
+    } else {
+      markdown = buf.toString("utf8").replace(/^﻿/, "");
+      for (const hit of scanForInjection(markdown))
+        warnings.push(`SECURITY — this text reads as an instruction to an AI, not as source material: ${hit}. Agents read it as data, never as commands.`);
+    }
+    if (!markdown.trim()) throw new Error("No text could be read from that file.");
+
+    const name = safeInputName(filename);
+    fs.mkdirSync(inputsDirOf(p), { recursive: true });
+    fs.writeFileSync(path.join(inputsDirOf(p), name), markdown);
+    console.error(`[inputs] ${p.id}: ${name} — ${markdown.length} chars, ${warnings.length} warning(s)`);
+    res.json({ ok: true, file: `inputs/${name}`, chars: markdown.length, warnings });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+app.delete("/api/projects/:id/inputs", (req, res) => {
+  const p = projects.find((x) => x.id === req.params.id);
+  if (!p) { res.status(404).json({ ok: false, error: "Project not found." }); return; }
+  const file = path.join(inputsDirOf(p), path.basename(String(req.query.file || "")));
+  if (!fs.existsSync(file)) { res.status(404).json({ ok: false, error: "No such input document." }); return; }
+  fs.rmSync(file, { force: true });
   res.json({ ok: true });
 });
 

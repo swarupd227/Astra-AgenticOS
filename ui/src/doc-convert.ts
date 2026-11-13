@@ -53,7 +53,7 @@ const INJECTION_PATTERNS: Array<[RegExp, string]> = [
   [/\bdo\s+not\s+(tell|inform|mention\s+to)\s+the\s+user\b/i, "asks the reader to withhold information from the user"],
 ];
 
-function scanForInjection(text: string): string[] {
+export function scanForInjection(text: string): string[] {
   const hits: string[] = [];
   for (const [re, why] of INJECTION_PATTERNS) {
     const m = re.exec(text);
@@ -163,7 +163,18 @@ function tidy(s: string): string {
     .trim();
 }
 
-export async function convertDocument(buf: Buffer, filename: string): Promise<ConvertResult> {
+/**
+ * Drop the URL from a Markdown link and keep its label. Word documents exported from
+ * meeting tools carry a long tracking link per citation; in one real requirements
+ * document they were 40% of the text, which costs context on every read for no content.
+ */
+export function stripLinkUrls(md: string): string {
+  return md.replace(/\]\(https?:\/\/[^)]*\)/g, "]");
+}
+
+export async function convertDocument(
+  buf: Buffer, filename: string, opts: { stripLinkUrls?: boolean } = {}
+): Promise<ConvertResult> {
   const kind = sniffKind(buf);
   if (!kind) {
     const ext = (filename.match(/\.[a-z0-9]+$/i) || [""])[0].toLowerCase();
@@ -179,6 +190,12 @@ export async function convertDocument(buf: Buffer, filename: string): Promise<Co
   }
 
   const result = kind === "docx" ? await convertDocx(buf) : await convertPdf(buf);
+  if (opts.stripLinkUrls) {
+    const before = result.markdown.length;
+    result.markdown = stripLinkUrls(result.markdown);
+    result.stats.chars = result.markdown.length;
+    if (result.markdown.length < before) result.warnings.push(`Link URLs were removed (${before - result.markdown.length} characters); link labels are kept.`);
+  }
 
   const injection = scanForInjection(result.markdown);
   for (const hit of injection)
