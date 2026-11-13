@@ -8,6 +8,8 @@
  * be flagged, and the near-misses that must stay quiet.
  */
 import {
+  danglingReferences, formatDanglingReferences,
+  dependencyIssues, formatDependencyIssues, formatStrengthIssues, strengthIssues, strengthOf,
   citationIssues, citationKey, constructsProhibitedBy, extractDefinitions, formatCitationReport,
   formatInventedRoles, inventedRoles, noCheckableCitations, prohibitedUsed, templateDeviations, termConflicts,
   unaddressedConflicts,
@@ -86,6 +88,88 @@ eq("a clean artifact produces no report", formatCitationReport(citationIssues("N
   eq("a short document is left alone", noCheckableCitations(r, 300), null);
   eq("a document with checkable citations needs no such note",
     noCheckableCitations(citationIssues("- When exposure exceeds the credit limit the transaction is blocked or routed for approval. *(GLD-FS-002@1)*".repeat(1), sources, others), 5000), null);
+}
+
+// --- dependencies must quote a source ----------------------------------------------------
+{
+  const texts = [
+    "Delivery cannot be planned until an Agreement exists. Equipment is held against the Reservation until delivery.",
+    "Rebilling follows a credit memo only where the customer disputes the invoice.",
+  ];
+  const doc = [
+    "### REQ-007", "",
+    "**Requirement Statement:** Delivery is planned after the agreement.  ",
+    '**Dependencies:** REQ-003 — “Delivery cannot be planned until an Agreement exists.”  ', "",
+    "### REQ-008", "",
+    "**Dependencies:** REQ-007  ", "",
+    "### REQ-009", "",
+    '**Dependencies:** REQ-008 — “Payment is taken before the equipment leaves the yard.”  ', "",
+    "### REQ-010", "",
+    "**Dependencies:** Not specified  ", "",
+    "### REQ-011", "",
+    "**Dependencies:** None identified  ", "",
+    "**REQ-012** — A requirement written inline.", "Dependencies: REQ-011",
+  ].join("\n");
+  const r = dependencyIssues(doc, texts);
+  eq("trivial dependencies are not counted", r.checked, 4);
+  eq("a quoted, real source sentence passes; the others are flagged",
+    r.issues.map((i) => `${i.requirement}:${i.reason}`), ["REQ-008:no-quote", "REQ-009:quote-not-found", "REQ-012:no-quote"]);
+  eq("an ellipsis may join two fragments of one source sentence",
+    dependencyIssues('REQ-1 — x.\nDependencies: REQ-0 — “Delivery cannot be planned … until an Agreement exists.”', texts).issues.length, 0);
+  eq("a quote of fewer than four words proves nothing",
+    dependencyIssues("**Dependencies:** REQ-0 — “Agreement exists soon”", texts).issues.length, 1);
+  const note = formatDependencyIssues(r) ?? "";
+  if (!note.includes("Not specified") || !note.includes("REQ-008")) fail("the dependency note should name the requirement and the way out");
+  eq("no issues, no note", formatDependencyIssues({ checked: 2, issues: [] }), null);
+}
+
+// --- the source's strength must be kept ---------------------------------------------------
+{
+  const src = new Map([["GLD-FS-002", [
+    "The system should hold a credit limit for each customer account record in the billing ledger.",
+    "Delivery may capture signatures and photos of the delivered equipment at the customer site.",
+    "Invoices are generated on the billing schedule until the agreement closes for the customer account.",
+    "A required field must be completed before a quote is saved to the customer account.",
+    "Can sales users override rental pricing during quote creation for large orders?",
+  ].join("\n")]]);
+  const flag = (claim: string, cite = "GLD-FS-002@1") => strengthIssues(`- ${claim} *(${cite})*`, src).length;
+
+  eq("should written as shall is flagged", flag("The system shall hold a credit limit for each customer account record in the billing ledger."), 1);
+  eq("may written as must is flagged", flag("Delivery must capture signatures and photos of the delivered equipment at the customer site."), 1);
+  eq("should kept as should passes", flag("The system should hold a credit limit for each customer account record in the billing ledger."), 0);
+  eq("may kept as may passes", flag("Delivery may capture signatures and photos of the delivered equipment at the customer site."), 0);
+  eq("a source with no modal says nothing about strength", flag("Invoices shall be generated on the billing schedule until the agreement closes for the customer account."), 0);
+  eq("a mandatory source stays mandatory", flag("A required field must be completed before a quote is saved to the customer account."), 0);
+  eq("an open question carries no strength to harden",
+    flag("Sales users will override rental pricing during quote creation for large orders."), 0);
+  eq("a question in the document is not a requirement", flag("Must sales users override rental pricing during quote creation for large orders?"), 0);
+  eq("an unrelated sentence is not compared", flag("The warehouse shall open at nine every morning without exception."), 0);
+  eq("'required' as an adjective is not a modal",
+    strengthOf("Enter the required fields."), null);
+  eq("'is required' is", strengthOf("A signature is required."), 2);
+  eq("should is recommended", strengthOf("Rules should be enforced."), 1);
+  eq("may is permissive", strengthOf("Delivery may capture photos."), 0);
+  eq("the strongest modal wins", strengthOf("It may be sent and shall be logged."), 2);
+
+  // The ID-led layout: statement on one line, quoted source on the next.
+  const block = [
+    "**REQ-001** — The system shall hold a credit limit for each customer account record in the billing ledger.",
+    '*Source: GLD-FS-002@1 — “The system should hold a credit limit for each customer account record in the billing ledger.”*',
+    "", "**REQ-002** — Delivery may capture signatures and photos of the delivered equipment at the customer site.", "*Source: GLD-FS-002@1*",
+  ].join("\n");
+  eq("a statement and its source line on the next line are one unit", strengthIssues(block, src).length, 1);
+  const note = formatStrengthIssues(strengthIssues(block, src)) ?? "";
+  if (!note.includes("shall") || !note.includes("should")) fail("the strength note should name both words");
+}
+
+// --- the citation list is complete enough to act on -----------------------------------------
+{
+  const many = Array.from({ length: 45 }, (_, i) =>
+    `- The billing method number ${i} is selected during agreement creation and includes Calendar Month options. *(GLD-FS-001@1)*`).join("\n");
+  const r = citationIssues(many, sources, others);
+  const text = formatCitationReport(r) ?? "";
+  eq("up to forty misses are listed, not six", (text.match(/does not appear to contain/g) ?? []).length, 40);
+  if (!text.includes("and 5 more")) fail("what is not listed should be counted");
 }
 
 // --- terms defined differently -------------------------------------------------------
@@ -239,6 +323,25 @@ eq("a mention nowhere near a prohibition does not count",
   eq("the Given line and the Acceptance Criteria heading both counted", used.find((u) => u.construct === "acceptance criteria")?.count, 2);
   eq("a clean document uses neither", prohibitedUsed("## Objectives\nReduce credit risk.", ["user stories", "acceptance criteria"]), []);
   eq("only the prohibited constructs are reported", prohibitedUsed(doc, ["user stories"]).map((u) => u.construct), ["user stories"]);
+}
+
+// Pointers to parts of the document that do not exist (the run-7 BRD cited "Section 7" 57 times and never wrote it).
+{
+  const doc = [
+    "# BRD", "## 1. Purpose", "Text.", "## 4. Requirements", "### 4.1 Orders",
+    "| REQ-001 | Orders are created. | See Section 7 and OQ-001, OQ-002, OQ-003. |",
+    "- REQ-002 — Orders are billed. Depends on REQ-001 and REQ-009. Encoded as UTF-8; see Section 4.1.",
+    "Golden item GLD-REF-030 defines Reservation.",
+  ].join("\n");
+  const d = danglingReferences(doc);
+  eq("a missing section is found", d.sections, ["7"]);
+  eq("a nested section that exists is fine", d.sections.includes("4.1"), false);
+  eq("undefined IDs are found (the prefix is used 3+ times)", d.ids, ["OQ-001", "OQ-002", "OQ-003", "REQ-009"]);
+  eq("defined IDs, golden items and stray hyphenated words are not flagged", d.ids.some((i) => i === "REQ-001" || i.startsWith("GLD") || i.startsWith("UTF")), false);
+  eq("IDs that a source uses itself are the source's own", danglingReferences(doc, ["Open question OQ-001 OQ-002 OQ-003 stays."]).ids, ["REQ-009"]);
+  eq("a document without numbered headings has no section claims", danglingReferences("Text. See Section 7.").sections, []);
+  eq("a clean document reports nothing", formatDanglingReferences(danglingReferences("## 1. A\n- REQ-001 x\nSee Section 1 and REQ-001.")), null);
+  if (!(formatDanglingReferences(d) ?? "").includes("Section 7")) fail("the report should name the missing section");
 }
 
 console.log(`source checks — ${failures} failure(s)`);

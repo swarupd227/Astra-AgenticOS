@@ -13,11 +13,13 @@ import {
   safeJoin, sha256, snapshotFiles, summarizeArgs, unknownEvidenceCitations, type Freshness, type Risk,
 } from "./evidence.js";
 import { auditChange, formatAudit, proposalsWithoutTests } from "./audit.js";
-import { supersedeOldSaves } from "./context.js";
+import { SectionedDoc } from "./sections.js";
+import { contentKey, countCitations, destructiveSave, implausiblyShort } from "./guards.js";
 import {
   citationIssues, citationKey, constructsProhibitedBy, formatCitationReport, formatConflicts, formatDeviation,
-  formatInventedRoles, formatProhibited, inventedRoles, noCheckableCitations, prohibitedUsed, templateDeviations,
-  termConflicts, unaddressedConflicts, type TermConflict,
+  danglingReferences, dependencyIssues, formatDanglingReferences, formatDependencyIssues, formatInventedRoles, formatProhibited, formatStrengthIssues, inventedRoles,
+  noCheckableCitations, prohibitedUsed, strengthIssues, templateDeviations, termConflicts, unaddressedConflicts,
+  type TermConflict,
 } from "./source-checks.js";
 import { NEVER_INDEXED, unzipExcludeArgs, pruneUnindexed, countFiles } from "./workspace.js";
 import {
@@ -973,32 +975,54 @@ function citedSources(content: string, project: Project | null): Map<string, str
  * for doing exactly what it should.
  */
 function documentChecks(
-  content: string, task: string, agentId: string, project: Project | null, conflicts: TermConflict[], fromDocuments: boolean
+  content: string, task: string, agentId: string, project: Project | null, conflicts: TermConflict[], fromDocuments: boolean,
+  /** false for one section of a document being built: structure and conflicts only make sense on the whole. */
+  whole = true
 ): string[] {
   const notes: string[] = [];
+
+  // A near-empty document passed every check once, because there was nothing in it to check.
+  const short = fromDocuments && whole ? implausiblyShort(content.length) : null;
+  if (short) notes.push(short);
 
   const prohibited = formatProhibited(prohibitedUsed(content, constructsProhibitedBy(task)));
   if (prohibited) notes.push(prohibited);
 
-  for (const t of boundTemplates(agentId, project)) {
-    const tpl = golden.readContent(t.id);
-    const dev = tpl ? templateDeviations(tpl, content) : null;
-    const msg = dev ? formatDeviation(dev, `${t.id} (${t.title})`) : null;
-    if (msg) notes.push(msg);
+  if (whole) {
+    for (const t of boundTemplates(agentId, project)) {
+      const tpl = golden.readContent(t.id);
+      const dev = tpl ? templateDeviations(tpl, content) : null;
+      const msg = dev ? formatDeviation(dev, `${t.id} (${t.title})`) : null;
+      if (msg) notes.push(msg);
+    }
   }
 
   if (fromDocuments) {
     const others = new Map<string, string>();
     if (task.length > 200) others.set("task prompt", task);
-    const report = citationIssues(content, citedSources(content, project), others);
-    const cit = formatCitationReport(report) ?? noCheckableCitations(report, content.length);
+    const cited = citedSources(content, project);
+    const report = citationIssues(content, cited, others);
+    const cit = formatCitationReport(report) ?? (whole ? noCheckableCitations(report, content.length) : null);
     if (cit) notes.push(cit);
 
-    const roles = formatInventedRoles(inventedRoles(content, documentSources(project, task).map((s) => s.text)));
+    const strength = formatStrengthIssues(strengthIssues(content, cited));
+    if (strength) notes.push(strength);
+
+    const sourceTexts = documentSources(project, task).map((s) => s.text);
+    const deps = formatDependencyIssues(dependencyIssues(content, sourceTexts));
+    if (deps) notes.push(deps);
+
+    // Pointers into parts of the document that do not exist only make sense to judge on the whole document.
+    if (whole) {
+      const dangling = formatDanglingReferences(danglingReferences(content, sourceTexts));
+      if (dangling) notes.push(dangling);
+    }
+
+    const roles = formatInventedRoles(inventedRoles(content, sourceTexts));
     if (roles) notes.push(roles);
   }
 
-  if (fromDocuments && conflicts.length) {
+  if (fromDocuments && whole && conflicts.length) {
     const open = unaddressedConflicts(content, conflicts);
     if (open.length)
       notes.push(
@@ -1017,6 +1041,133 @@ function postSaveChecks(
   return notes.length
     ? `\n\n**Checks the server ran on what you just saved** — fix these and save again (the earlier version is kept):\n\n${notes.join("\n\n")}`
     : null;
+}
+
+// Synthetic tools for building a document one section at a time (see sections.ts). Handled here
+// because the server owns the composed document: the agent writes a section, the server keeps
+// the order, saves the whole, and checks the section while the agent still has it in mind.
+function writeSectionTool(): Anthropic.Tool {
+  return {
+    name: "write_section",
+    description:
+      "Write ONE section of a document. The server keeps the sections in order, composes the whole document, and saves it — so you never re-send the parts you are not changing. Write a section per call (for a long chapter, one call per sub-topic), then check what comes back: the server checks each section's citations, strength, dependencies and roles immediately. To fix a problem, call write_section again with the same section title; it replaces that section in place and nothing else changes. When all sections are written, call check_document.",
+    input_schema: {
+      type: "object",
+      properties: {
+        artifact: { type: "string", description: "File name of the document, ending in .md (for example brd-project.md)." },
+        section: { type: "string", description: "Section title, used to order and to replace it later. Keep it identical when rewriting." },
+        content: { type: "string", description: "The section in Markdown, normally beginning with its heading." },
+        after: { type: "string", description: "Optional: the title of an existing section to insert this one after. Omit to append at the end." },
+      },
+      required: ["artifact", "section", "content"],
+    } as Anthropic.Tool.InputSchema,
+  };
+}
+
+function checkDocumentTool(): Anthropic.Tool {
+  return {
+    name: "check_document",
+    description:
+      "Run the whole-document checks on a document built with write_section: structure against any bound template, source conflicts recorded, and every section's citations, strength, dependencies and roles together. Call it once after the last section, fix what it reports by rewriting the affected sections, and call it again.",
+    input_schema: {
+      type: "object",
+      properties: { artifact: { type: "string", description: "File name of the document." } },
+      required: ["artifact"],
+    } as Anthropic.Tool.InputSchema,
+  };
+}
+
+type SectionContext = {
+  ws: Workspace; project: Project | null; agentId: string; task: string; conflicts: TermConflict[];
+  docs: Map<string, SectionedDoc>;
+  refused: Set<string>;
+  /** Where each document was first saved this run; later writes overwrite it in place. */
+  paths: Map<string, string>;
+};
+
+/** An artifact already on disk, or null when there is none. */
+function existingArtifact(project: Project | null, name: string): { length: number; citations: number } | null {
+  if (!project || !name) return null;
+  const full = safeJoin(project.artifactsDir, name);
+  if (!full) return null;
+  try {
+    if (!fs.statSync(full).isFile()) return null;
+    const text = fs.readFileSync(full, "utf8");
+    return { length: text.length, citations: countCitations(text) };
+  } catch { return null; }
+}
+
+async function handleWriteSection(
+  ctx: SectionContext, input: Record<string, unknown>
+): Promise<{ text: string; saved?: { name: string; content: string; path: string }; isError?: boolean }> {
+  const name = String(input.artifact ?? "").trim();
+  const section = String(input.section ?? "").trim();
+  const content = String(input.content ?? "");
+  if (!/\.md$/i.test(name))
+    return { isError: true, text: "Refused: `artifact` must be a Markdown file name ending in .md." };
+  if (!section) return { isError: true, text: "Refused: a section needs a title." };
+  if (!content.trim()) return { isError: true, text: "Refused: the section has no content." };
+
+  let doc = ctx.docs.get(name);
+  if (!doc) { doc = new SectionedDoc(); ctx.docs.set(name, doc); }
+
+  // Rewriting a long section as a fragment is refused once, like a whole-document save.
+  const before = doc.text(section);
+  const refusal = destructiveSave({
+    kind: "section", newLen: content.length, prevLen: before ? before.length : null, name: `${name} § ${section}`,
+    prevCitations: before ? countCitations(before) : undefined, newCitations: countCitations(content),
+  });
+  const key = contentKey(`${name}§${section}`, content);
+  if (refusal && !ctx.refused.has(key)) {
+    ctx.refused.add(key);
+    return { isError: true, text: refusal };
+  }
+
+  const replaced = doc.set(section, content, String(input.after ?? "") || undefined);
+  const composed = doc.compose();
+
+  // The first write of a document this run goes through the normal save, so a version from an
+  // earlier run is preserved as .vN. Later writes only change what is still being built, and
+  // snapshotting each one left 39 near-identical copies of a single document on disk.
+  const body = stampable(name) && currentRun ? `${composed}${identityFooter(currentRun)}` : composed;
+  let result: string;
+  const known = ctx.paths.get(name);
+  if (known) {
+    fs.writeFileSync(known, body);
+    result = `Updated existing artifact \`${known}\` (${body.length} chars).`;
+  } else {
+    result = await callMcpTool(ctx.ws, "save_artifact", { name, content: body });
+  }
+  const where = result.match(/^(?:Saved artifact to|Updated existing artifact|Artifact) `([^`]+)`/);
+  if (!where) return { isError: true, text: result };
+  ctx.paths.set(name, where[1]);
+
+  const notes = documentChecks(doc.text(section) ?? content, ctx.task, ctx.agentId, ctx.project, ctx.conflicts, true, false);
+  const titles = doc.titles();
+  return {
+    saved: { name, content: composed, path: where[1] },
+    text:
+      `Section “${section}” ${replaced ? "replaced" : "added"}. The document now has ${titles.length} section${titles.length > 1 ? "s" : ""} ` +
+      `(${composed.length.toLocaleString("en-US")} characters), saved to \`${where[1]}\`.\n` +
+      `Sections so far: ${titles.join(" · ")}.` +
+      (notes.length
+        ? `\n\n**Checks on this section** — fix these by calling write_section again with the same title:\n\n${notes.join("\n\n")}`
+        : ""),
+  };
+}
+
+function handleCheckDocument(ctx: SectionContext, input: Record<string, unknown>): { text: string; isError?: boolean } {
+  const name = String(input.artifact ?? "").trim();
+  const doc = ctx.docs.get(name);
+  if (!doc) return { isError: true, text: `No document named ${name || "(none)"} has been built with write_section in this run.` };
+  const composed = doc.compose();
+  const notes = documentChecks(composed, ctx.task, ctx.agentId, ctx.project, ctx.conflicts, true, true);
+  const size = `${doc.titles().length} sections, ${composed.length.toLocaleString("en-US")} characters`;
+  return {
+    text: notes.length
+      ? `**Whole-document checks on ${name}** (${size}) — rewrite the sections concerned with write_section, then check again:\n\n${notes.join("\n\n")}`
+      : `The server's whole-document checks found nothing to report on ${name} (${size}). They are heuristics over text, not a judgment that every statement is true.`,
+  };
 }
 
 // Synthetic tool: terms the sources define differently. Handled here because it needs the
@@ -1149,6 +1300,8 @@ function loadSettings() {
 // Deep agents (threat model, code-gen, orchestrator) need many tool-call turns
 // before they synthesise. Too low a cap truncates them mid-analysis. Configurable.
 const MAX_TURNS = Number(process.env.MAX_TURNS_PER_RUN ?? 44);
+/** How many times a finished document that still fails its checks is handed back to the agent. */
+const MAX_REVIEW_ROUNDS = Number(process.env.REVIEW_ROUNDS ?? 2);
 
 // ---------------------------------------------------------------------------
 // Diagnostics — recent operational history, in memory.
@@ -1424,7 +1577,7 @@ function boundTemplates(agentId: string, project: Project | null) {
  * until it has actually read the template that governs it.
  */
 function templateGate(agentId: string, toolName: string, readSoFar: Set<string>, project: Project | null): string | null {
-  if (toolName !== "save_artifact") return null;
+  if (toolName !== "save_artifact" && toolName !== "write_section") return null;
   const missing = boundTemplates(agentId, project).filter((t) => !readSoFar.has(t.id.toUpperCase()));
   if (missing.length === 0) return null;
 
@@ -1558,8 +1711,13 @@ async function runAgent(
   // Agents that write from source documents declare compare_sources; they also get the
   // stricter rules below (every input document read, citations checked against the text).
   const isDocAgent = agent.tools.includes("compare_sources");
-  if (isDocAgent) tools = [...tools, compareSourcesTool()];
+  if (isDocAgent) tools = [...tools, compareSourcesTool(), writeSectionTool(), checkDocumentTool()];
   let conflictsFound: TermConflict[] = [];
+  const sectionDocs = new Map<string, SectionedDoc>();
+  const sectionPaths = new Map<string, string>();
+  let reviewRounds = 0;
+  /** Saves refused once as destructive; the same content sent again is allowed. */
+  const refusedSaves = new Set<string>();
   let lastDocSaved: { name: string; content: string } | null = null;
   // Captured now: the identity global is replaced by the next run that starts.
   const runId = currentRun?.runId ?? "";
@@ -1590,9 +1748,6 @@ async function runAgent(
     // attempt can only have produced partial *text* — we tell the client to discard
     // that partial block ("text_reset") before re-streaming, so nothing duplicates.
     let resp: Anthropic.Message | undefined;
-    // Older copies of a document the agent has since re-saved only grow the request.
-    const dropped = supersedeOldSaves(messages as any);
-    if (dropped) console.error(`[context] ${agent.id}: omitted ${dropped.toLocaleString("en-US")} characters of superseded saves`);
     for (let attempt = 0; ; attempt++) {
       let emittedThisAttempt = 0;
       let attemptText = "";
@@ -1675,7 +1830,31 @@ async function runAgent(
       });
       break;
     }
-    if (resp.stop_reason !== "tool_use") break;
+    if (resp.stop_reason !== "tool_use") {
+      // The agent is about to finish. A document-writing agent was asked to run check_document
+      // and fix what it reports; in a live run it never did, and finished with invented roles
+      // the per-section feedback had already named. Run the whole-document checks for it and,
+      // if anything is open, hand them back once or twice before the answer stands.
+      if (isDocAgent && lastDocSaved && reviewRounds < MAX_REVIEW_ROUNDS) {
+        const open = documentChecks(lastDocSaved.content, userMessage, agent.id, project, conflictsFound, true);
+        if (open.length) {
+          reviewRounds++;
+          emit({ type: "notice", message: `Checking the finished document against its sources (review ${reviewRounds} of ${MAX_REVIEW_ROUNDS})…` });
+          messages.push({
+            role: "user",
+            content: [{
+              type: "text",
+              text:
+                `Before this is final, the server ran its whole-document checks on \`${lastDocSaved.name}\` and found:\n\n${open.join("\n\n")}\n\n` +
+                `Fix what you can by rewriting the sections concerned with write_section (or save_artifact for a document written in one piece), ` +
+                `then give your final answer. If something cannot be fixed from the sources, say so plainly in the answer.`,
+            }],
+          });
+          continue;
+        }
+      }
+      break;
+    }
 
     // Execute tools / delegations and stream results back as each completes.
     const results: Anthropic.ToolResultBlockParam[] = [];
@@ -1729,7 +1908,7 @@ async function runAgent(
             : required;
         // A document-sourced deliverable must rest on every input document, not whichever
         // the agent got to: in a live run the agent read both, but nothing made it.
-        if (tu.name === "save_artifact" && isDocAgent && project) {
+        if ((tu.name === "save_artifact" || tu.name === "write_section") && isDocAgent && project) {
           const inputs = walkFiles(inputsDirOf(project), project.artifactsDir).map((f) => f.path);
           effectiveRequired = [...new Set([...effectiveRequired, ...inputs])];
         }
@@ -1742,6 +1921,26 @@ async function runAgent(
           results.push({ type: "tool_result", tool_use_id: tu.id, content: resultText, is_error: true });
           continue;
         }
+        // A save that would replace a long document with a much shorter one is refused once;
+        // sending the same content again lets it through (see guards.ts for why).
+        if (tu.name === "save_artifact") {
+          const sName = String((tu.input as any)?.name ?? "");
+          const sContent = String((tu.input as any)?.content ?? "");
+          const prior = existingArtifact(project, sName);
+          const refusal = destructiveSave({
+            kind: "document", newLen: sContent.length, prevLen: prior ? prior.length : null, name: sName,
+            prevCitations: prior?.citations, newCitations: countCitations(sContent),
+          });
+          const sKey = contentKey(sName, sContent);
+          if (refusal && !refusedSaves.has(sKey)) {
+            refusedSaves.add(sKey);
+            console.error(`[guard] ${agent.id}: refused a save of ${sName} (${sContent.length} chars over an existing document)`);
+            resultText = refusal;
+            emit({ type: "tool_result", id: tu.id, name: tu.name, result: resultText });
+            results.push({ type: "tool_result", tool_use_id: tu.id, content: resultText, is_error: true });
+            continue;
+          }
+        }
         try {
           const args = { ...((tu.input ?? {}) as Record<string, unknown>) };
           // Stamp provenance into the document itself. An artifact gets detached from
@@ -1751,7 +1950,18 @@ async function runAgent(
           if (tu.name === "save_artifact" && currentRun && stampable(String(args.name ?? ""))) {
             args.content = `${String(args.content ?? "")}${identityFooter(currentRun)}`;
           }
-          resultText = await callMcpTool(ws, tu.name, args);
+          if (tu.name === "write_section" && isDocAgent) {
+            const r = await handleWriteSection({ ws, project, agentId: agent.id, task: userMessage, conflicts: conflictsFound, docs: sectionDocs, refused: refusedSaves, paths: sectionPaths }, args);
+            resultText = r.text;
+            if (r.saved) {
+              savedThisRun.add(r.saved.path);
+              lastDocSaved = { name: r.saved.name, content: r.saved.content };
+            }
+          } else if (tu.name === "check_document" && isDocAgent) {
+            resultText = handleCheckDocument({ ws, project, agentId: agent.id, task: userMessage, conflicts: conflictsFound, docs: sectionDocs, refused: refusedSaves, paths: sectionPaths }, args).text;
+          } else {
+            resultText = await callMcpTool(ws, tu.name, args);
+          }
           if (tu.name === "golden_read") {
             const id = String((tu.input as any)?.id ?? "").trim().toUpperCase();
             if (id && !resultText.startsWith("'")) goldenReadThisRun.add(id); // '…' = refusal

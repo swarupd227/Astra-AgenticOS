@@ -63,6 +63,9 @@ export type CitationReport = { checked: number; unverifiable: number; issues: Ci
 
 type Unit = { text: string; claim: string };
 
+/** A line that opens an identified item: `REQ-012`, `**BR-3**`, `- OQ-07 …`. */
+const ID_LED = /^\s*(?:[-*]\s+)?\**[A-Z]{1,4}-\d{1,4}\b/;
+
 /**
  * Claim-plus-citation units. A `**Label:** ...` run is one unit (a requirement and its
  * source reference sit on adjacent lines); anything else is one line (a rule with its
@@ -81,6 +84,18 @@ function citationUnits(md: string): Unit[] {
       const text = block.join("\n");
       const stmt = block.find((l) => /^\s*\*\*(?:Requirement )?Statement:\*\*/i.test(l));
       units.push({ text, claim: plain((stmt ?? block.filter((l) => !/Source|Priority|Dependenc|Open Question/i.test(l)).join(" ")).replace(/^\s*\*\*[^*]+:\*\*/, "")) });
+      continue;
+    }
+    // `REQ-001 — statement` with its `*Source: …*` and notes on the lines below: one unit.
+    // Treated line by line, the source line became its own "claim" — a quoted source checked
+    // against itself — and the statement above it was never compared with anything.
+    if (ID_LED.test(line)) {
+      const block = [line];
+      while (i + 1 < lines.length && lines[i + 1].trim() && !/^#{1,6}\s/.test(lines[i + 1]) && !ID_LED.test(lines[i + 1]) && !labelled.test(lines[i + 1]))
+        block.push(lines[++i]);
+      const head = line.replace(/^\s*(?:[-*]\s+)?\**[A-Z]{1,4}-\d{1,4}\**\s*[—–:.-]*\s*/, "");
+      const cut = head.search(CITE);
+      units.push({ text: block.join("\n"), claim: plain(cut > 0 ? head.slice(0, cut) : head) });
       continue;
     }
     // Claim = what precedes the first citation; when nothing does, the line without them.
@@ -137,10 +152,15 @@ export function citationIssues(
   return report;
 }
 
-export function formatCitationReport(r: CitationReport, max = 6): string | null {
+/**
+ * Every hard miss is listed (up to `max`), then a few weak ones. The first version showed six
+ * and "…and 42 more": the agent could not fix what it could not see, and a live run ended with
+ * the misses still open after six saves.
+ */
+export function formatCitationReport(r: CitationReport, max = 40): string | null {
   const hard = r.issues.filter((i) => i.kind === "not-found");
   if (!hard.length && !r.issues.length) return null;
-  const shown = [...hard, ...r.issues.filter((i) => i.kind === "weak")].slice(0, max);
+  const shown = [...hard.slice(0, max), ...r.issues.filter((i) => i.kind === "weak").slice(0, 5)];
   const lines = shown.map(
     (i) => `- \`${i.citation}\` ${i.kind === "not-found" ? "does not appear to contain" : "only weakly matches"} “${i.claim}” (wording overlap ${Math.round(i.score * 100)}%)` +
       (i.foundIn ? ` — this wording is found in the ${i.foundIn}; cite that instead.` : "")
@@ -150,6 +170,196 @@ export function formatCitationReport(r: CitationReport, max = 6): string | null 
     lines.join("\n") +
     (r.issues.length > shown.length ? `\n- …and ${r.issues.length - shown.length} more.` : "") +
     `\nThis compares the claim's wording with the cited text; it does not judge whether the claim is true. Fix each citation or reword the claim, then save again.`
+  );
+}
+
+// --- 1a. Dependencies must quote a source ------------------------------------------------
+
+export type DependencyIssue = { requirement: string; value: string; reason: "no-quote" | "quote-not-found" };
+
+const NO_DEPENDENCY = /^(?:not specified|none(?: identified)?|n\/a|no information provided|not available in source|no dependenc)/i;
+const DEPENDENCY_LINE = /^\s*(?:[-*>]\s+)?\**\s*Dependenc(?:y|ies)\s*\**\s*:\s*\**\s*(.*)$/i;
+const REQUIREMENT_ID = /\b([A-Z]{1,4}-\d{1,4})\b/;
+
+/**
+ * A requirement's Dependencies field may name a dependency only if a source states it, and
+ * must quote the sentence that does. Left to an instruction, about 70% of the links in a live
+ * BRD were the document's own inference ("REQ-060 depends on REQ-056 through REQ-059") — it
+ * follows the order the document happened to be written in, not anything a source says. A
+ * quote is something the server can look for, so "Not specified" becomes the easier answer.
+ */
+export function dependencyIssues(artifact: string, sourceTexts: string[]): { checked: number; issues: DependencyIssue[] } {
+  const hay = ` ${sourceTexts.map(plainKey).join(" ")} `;
+  const found = (quote: string) =>
+    quote.split(/\s*(?:…|\.\.\.)\s*/).filter((f) => f.trim().split(/\s+/).length >= 4).every((f) => hay.includes(` ${plainKey(f)} `)) &&
+    plainKey(quote).split(" ").length >= 4;
+
+  let current = "";
+  let checked = 0;
+  const issues: DependencyIssue[] = [];
+  for (const line of artifact.split("\n")) {
+    if (/^#{1,6}\s/.test(line) || ID_LED.test(line)) current = line.match(REQUIREMENT_ID)?.[1] ?? current;
+    const m = line.match(DEPENDENCY_LINE);
+    if (!m) continue;
+    const value = m[1].replace(/[*_\s]+$/g, "").trim();
+    if (!value || NO_DEPENDENCY.test(value)) continue;
+    checked++;
+    const quotes = [...value.matchAll(/[“"]([^”"]{15,500})[”"]/g)].map((q) => q[1]);
+    if (!quotes.length) { issues.push({ requirement: current || "(unnamed)", value: value.slice(0, 100), reason: "no-quote" }); continue; }
+    if (!quotes.some(found)) issues.push({ requirement: current || "(unnamed)", value: value.slice(0, 100), reason: "quote-not-found" });
+  }
+  return { checked, issues };
+}
+
+export function formatDependencyIssues(r: { checked: number; issues: DependencyIssue[] }, max = 25): string | null {
+  if (!r.issues.length) return null;
+  const lines = r.issues.slice(0, max).map(
+    (i) => `- ${i.requirement}: “${i.value}” — ${i.reason === "no-quote" ? "no source sentence quoted" : "the quoted sentence is not in any source"}`
+  );
+  return (
+    `⚠ **Dependencies not backed by a source — ${r.issues.length} of ${r.checked}:**\n${lines.join("\n")}` +
+    (r.issues.length > max ? `\n- …and ${r.issues.length - max} more.` : "") +
+    `\nA dependency belongs in the document only where a source states it. Give the sentence that does, in quotation marks ` +
+    `(\`Dependencies: REQ-007 — “the quoted source sentence”\`), or write *Not specified*. Do not link requirements because they sit next to each other.`
+  );
+}
+
+// --- 1a'. The source's strength must be kept ---------------------------------------------------
+
+// "required" alone is usually an adjective ("a required field"); only the modal uses count.
+const MANDATORY = /\b(?:shall|must|will|(?:is|are|be|been|being)\s+required|required\s+to|(?:is|are|be)\s+mandatory)\b/i;
+const RECOMMENDED = /\b(?:should|ideally|recommended|expected to)\b/i;
+const PERMISSIVE = /\b(?:may|might|could|can|potentially|optional(?:ly)?|possibly)\b/i;
+const LEVEL_WORD = ["permissive", "recommended", "mandatory"];
+
+/** 0 permissive, 1 recommended, 2 mandatory; the strongest modal present; null if none. */
+export function strengthOf(s: string): number | null {
+  if (MANDATORY.test(s)) return 2;
+  if (RECOMMENDED.test(s)) return 1;
+  if (PERMISSIVE.test(s)) return 0;
+  return null;
+}
+
+const strongestWord = (s: string) => (s.match(MANDATORY) ?? s.match(RECOMMENDED) ?? s.match(PERMISSIVE))?.[0].toLowerCase() ?? "";
+
+export type StrengthIssue = { citation: string; claim: string; claimWord: string; sourceWord: string; sourceSentence: string };
+
+type Sentences = { text: string; bi: Set<string> }[];
+/** Per call, never kept: the same citation id can name different text on the next save. */
+function sentencesOf(cache: Map<string, Sentences>, key: string, text: string): Sentences {
+  let s = cache.get(key);
+  if (!s) {
+    s = text.split(/(?<=[.!?])\s+|\n+/).map((t) => t.trim()).filter((t) => t.length > 20 && !t.includes("?"))
+      .map((t) => ({ text: t, bi: new Set(bigramList(contentWords(t))) }));
+    cache.set(key, s);
+  }
+  return s;
+}
+
+/**
+ * "May" written as "shall". Each claim is matched to the source sentence it reproduces; when
+ * that sentence says may or should and the claim says shall or must, the document has settled
+ * something the source left open. A claim that carries its own "the source says 'should'; this is
+ * preserved" note while saying "shall" is the case this was built for.
+ */
+export function strengthIssues(artifact: string, sources: Map<string, string>): StrengthIssue[] {
+  const out: StrengthIssue[] = [];
+  const cache = new Map<string, Sentences>();
+  for (const u of citationUnits(artifact)) {
+    // A question has no strength, and a metadata line ("Source Reference: …") is not a claim.
+    if (u.claim.includes("?") || /^\s*(?:source|sources|priority|dependenc|open question)/i.test(u.claim)) continue;
+    const claimLevel = strengthOf(u.claim);
+    if (claimLevel === null) continue;
+    const claimBi = bigramList(contentWords(u.claim));
+    if (claimBi.length < MIN_BIGRAMS) continue;
+    for (const c of new Set((u.text.match(CITE) ?? []).map(citationKey))) {
+      const text = sources.get(c);
+      if (!text) continue;
+      let best: { text: string; shared: number; ratio: number } | null = null;
+      for (const s of sentencesOf(cache, c, text)) {
+        let shared = 0; for (const b of claimBi) if (s.bi.has(b)) shared++;
+        const ratio = s.bi.size ? shared / s.bi.size : 0;
+        if (shared >= 3 && ratio >= 0.5 && (!best || shared > best.shared || (shared === best.shared && ratio > best.ratio))) best = { text: s.text, shared, ratio };
+      }
+      if (!best) continue;
+      const srcLevel = strengthOf(best.text);
+      if (srcLevel !== null && claimLevel > srcLevel)
+        out.push({ citation: c, claim: u.claim.replace(/\s+/g, " ").slice(0, 120), claimWord: strongestWord(u.claim), sourceWord: strongestWord(best.text), sourceSentence: best.text.replace(/\s+/g, " ").slice(0, 140) });
+    }
+  }
+  return out;
+}
+
+export interface DanglingRefs { sections: string[]; ids: string[]; }
+
+/**
+ * References inside the document that point at nothing in it: "Section 7" when the document stops at 6, or
+ * "OQ-012" when no open question is ever defined. IDs that appear in a source text (`sourceTexts`) are the sources'
+ * own and are ignored, as are Golden items (GLD-…), which live outside the document.
+ */
+export function danglingReferences(doc: string, sourceTexts: string[] = []): DanglingRefs {
+  const lines = doc.split(/\r?\n/);
+  const headingNums = new Set<string>();
+  for (const l of lines) {
+    const m = /^#{1,6}\s+(?:Section\s+)?(\d+(?:\.\d+)*)\b/i.exec(l);
+    if (m) { let acc = ""; for (const part of m[1].split(".")) { acc = acc ? `${acc}.${part}` : part; headingNums.add(acc); } }
+  }
+  const sections = new Set<string>();
+  if (headingNums.size) {
+    for (const m of doc.matchAll(/(?:\bSections?\s+|§\s*)(\d+(?:\.\d+)*)\b/gi)) {
+      if (headingNums.has(m[1])) continue;
+      // "Detailed-Requirements.md, Section 14" is the source's own numbering, not this document's.
+      const before = doc.slice(Math.max(0, (m.index ?? 0) - 120), m.index ?? 0);
+      if (/\.(?:md|docx?|pdf|txt)\b|inputs\/|GLD-|\b(?:source|prompt|requirements document|specification)\b|\b[A-Z][\w-]*-[A-Z][\w-]*\b/i.test(before)) continue;
+      sections.add(m[1]);
+    }
+  }
+
+  const fromSources = new Set<string>();
+  for (const t of sourceTexts) for (const m of t.matchAll(/\b[A-Z]{2,6}-\d{1,4}\b/g)) fromSources.add(m[0]);
+  const defined = new Set<string>();
+  const referenced = new Set<string>();
+  for (const l of lines) {
+    const lead = /^\s*(?:#{1,6}\s+|[-*+]\s+|\|\s*|\d+\.\s+)?(?:\*\*|__)?\s*([A-Z]{2,6}-\d{1,4})\b/.exec(l);
+    if (lead) defined.add(lead[1]);
+  }
+  for (const m of doc.matchAll(/\b([A-Z]{2,6})-(\d{1,4})\b/g)) {
+    if (m[1] === "GLD" || fromSources.has(m[0])) continue;
+    referenced.add(m[0]);
+  }
+  // Only a prefix the document uses for its own items can be "undefined"; a stray "UTF-8" or "ISO-9001" is not one.
+  const definedPrefixes = new Set([...defined].map((d) => d.split("-")[0]));
+  const referencedByPrefix = new Map<string, number>();
+  for (const r of referenced) referencedByPrefix.set(r.split("-")[0], (referencedByPrefix.get(r.split("-")[0]) ?? 0) + 1);
+  const ids = [...referenced].filter((r) => {
+    const p = r.split("-")[0];
+    if (defined.has(r)) return false;
+    return definedPrefixes.has(p) || (referencedByPrefix.get(p) ?? 0) >= 3;
+  });
+  const byNum = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true });
+  return { sections: [...sections].sort(byNum), ids: ids.sort(byNum) };
+}
+
+export function formatDanglingReferences(d: DanglingRefs, max = 15): string | null {
+  if (!d.sections.length && !d.ids.length) return null;
+  const parts: string[] = [];
+  if (d.sections.length) parts.push(`sections that do not exist: ${d.sections.slice(0, max).map((s) => `Section ${s}`).join(", ")}`);
+  if (d.ids.length) parts.push(`IDs used but never defined: ${d.ids.slice(0, max).join(", ")}${d.ids.length > max ? ` …and ${d.ids.length - max} more` : ""}`);
+  return (
+    `⚠ **The document points at things it does not contain — ${parts.join("; ")}.**\n` +
+    `Either write the missing section or item (use write_section), or remove the pointers to it. A reader who follows these gets nowhere.`
+  );
+}
+
+export function formatStrengthIssues(issues: StrengthIssue[], max = 20): string | null {
+  if (!issues.length) return null;
+  const lines = issues.slice(0, max).map(
+    (i) => `- “${i.claim}” says **${i.claimWord}**; \`${i.citation}\` says **${i.sourceWord}**: “${i.sourceSentence}”`
+  );
+  return (
+    `⚠ **Source strength changed — ${issues.length} requirement${issues.length > 1 ? "s" : ""} say more than their source:**\n${lines.join("\n")}` +
+    (issues.length > max ? `\n- …and ${issues.length - max} more.` : "") +
+    `\nWhere a source says "may" or "should", keep it — or say the strength is undecided. Writing "shall" settles something the source left open.`
   );
 }
 

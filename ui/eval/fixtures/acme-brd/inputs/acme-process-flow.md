@@ -14,7 +14,7 @@ The billing method is selected when the Agreement is created. Supported billing 
 
 ## Delivery
 
-Delivery follows this sequence: Agreement, Allocation, Checkout, Delivery Planning, Delivery, Confirmation. Delivery may capture signatures and photos.
+Delivery cannot be planned until an Agreement exists. Delivery follows this sequence: Agreement, Allocation, Checkout, Delivery Planning, Delivery, Confirmation. Delivery may capture signatures and photos.
 
 ## Returns
 

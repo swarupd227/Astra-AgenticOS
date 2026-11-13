@@ -75,6 +75,12 @@ wording is found when it is not in the cited source), sections against a bound t
 prohibitions (user stories, acceptance criteria), and source conflicts it was shown by `compare_sources`.
 These are heuristics over text and report what they compared, not whether a claim is true.
 
+A long document is built **one section at a time** with `write_section` (the server keeps the order,
+composes the whole, and saves it each time) and finished with `check_document`. A correction rewrites
+one section instead of re-sending the document, so the model generates about one copy of the document
+rather than one per correction, and each section is checked the moment it is written. Whole-document
+checks (template structure, conflicts recorded) run in `check_document` and again when the run ends.
+
 ## Evaluating changes
 
 `npm run eval` runs fixed cases against a live server (it costs model calls) and scores them against

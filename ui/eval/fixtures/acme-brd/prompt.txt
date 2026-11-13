@@ -13,3 +13,5 @@ Rules:
 - Where information is missing, write "Not specified in source" and collect the question under Open Questions.
 - If two sources conflict, write "Source Conflict Identified", quote both wordings with their sources, and do not resolve it.
 - Do not invent roles, statuses, fields, values or systems that the documents do not state.
+- Give each requirement a Dependencies line. A dependency may be named only if a document states it, and the sentence that states it must be quoted in quotation marks. Otherwise write Not specified.
+- Keep each source's strength: where a document says should or may, the requirement says should or may.

@@ -204,6 +204,10 @@ const GATE: Array<[string, string, string[], string[], string[], boolean]> = [
   ["proposed change's own target never opened", "propose_file_change", ["TaxService.cs"], [], [], true],
   ["proposed change's target read first", "propose_file_change", ["TaxService.cs"], ["TaxService.cs"], [], false],
   ["proposal also names an unread BRD", "propose_file_change", ["TaxService.cs", "brd.md"], ["TaxService.cs"], [], true],
+  // write_section writes a deliverable too, so it cannot be a way around the gate.
+  ["a section written before its input was opened", "write_section", ["inputs/spec.md"], [], [], true],
+  ["a section written after its input was opened", "write_section", ["inputs/spec.md"], ["inputs/spec.md"], [], false],
+  ["checking a document is never gated", "check_document", ["inputs/spec.md"], [], [], false],
 ];
 
 for (const [label, tool, req, ok, failed, shouldBlock] of GATE) {

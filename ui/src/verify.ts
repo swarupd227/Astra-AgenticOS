@@ -311,7 +311,8 @@ export function prerequisiteGate(
   readOk: Set<string>,
   failedReads: Set<string>
 ): string | null {
-  if (toolName !== "save_artifact" && toolName !== "propose_file_change") return null;
+  // write_section is another way to write a deliverable, so it is held to the same rule.
+  if (toolName !== "save_artifact" && toolName !== "propose_file_change" && toolName !== "write_section") return null;
   const missing = [...new Set([...unreadRequiredInputs(required, readOk), ...failedReads])];
   return missing.length ? blockedMessage(missing) : null;
 }

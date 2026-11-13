@@ -11,7 +11,8 @@
  * a citation misses) and fail only when they move past a tolerance from the baseline.
  */
 import {
-  citationIssues, citationKey, constructsProhibitedBy, prohibitedUsed, templateDeviations, unaddressedConflicts,
+  citationIssues, citationKey, constructsProhibitedBy, dependencyIssues, prohibitedUsed, strengthIssues,
+  templateDeviations, unaddressedConflicts,
 } from "../src/source-checks.js";
 
 export type EvalCase = {
@@ -49,6 +50,8 @@ export type Metrics = {
   inputsReadInFull: number;        // of case.inputs
   citationsChecked: number;
   citationMissRate: number;        // not-found / checked; 0 when nothing was checked
+  dependenciesUnbacked: number;    // dependency lines with no verifiable source quote
+  hardenedModals: number;          // requirements saying more than their source (may/should -> shall/must)
   characters: number;
   toolCalls: number;
   seconds: number;
@@ -88,9 +91,13 @@ export function scoreRun(c: EvalCase, e: RunEvidence): Metrics {
   const cit = citationIssues(art, sources, new Map([["task prompt", e.task]]));
   const missed = cit.issues.filter((i) => i.kind === "not-found").length;
 
+  const dependenciesUnbacked = dependencyIssues(art, [...Object.values(e.inputTexts), e.task]).issues.length;
+  const hardenedModals = strengthIssues(art, sources).length;
+
   return {
     sectionsInOrder, prohibitedConstructs: prohibited, decoysInvented, conflictsRecorded, gapsRecorded, factsPresent,
     inputsReadInFull, citationsChecked: cit.checked, citationMissRate: cit.checked ? +(missed / cit.checked).toFixed(3) : 0,
+    dependenciesUnbacked, hardenedModals,
     characters: art.length, toolCalls: e.toolCalls, seconds: e.seconds,
   };
 }
@@ -109,6 +116,8 @@ export function hardChecks(c: EvalCase, m: Metrics): Verdict[] {
     v("inputs read in full", m.inputsReadInFull === c.inputs.length, `${m.inputsReadInFull} of ${c.inputs.length}`),
     // A citation check that found nothing to check has not passed — it has not run.
     v("citations checkable", m.citationsChecked > 0, m.citationsChecked > 0 ? `${m.citationsChecked} checked` : "no citation names a source the server can verify"),
+    // The task says a dependency needs a quoted source sentence; a link without one is the document's own.
+    v("dependencies backed by a source", m.dependenciesUnbacked === 0, `${m.dependenciesUnbacked} without a verifiable quote`),
   ];
 }
 
@@ -129,6 +138,8 @@ export function worstOf(runs: Metrics[]): Metrics {
     inputsReadInFull: min((r) => r.inputsReadInFull),
     citationsChecked: min((r) => r.citationsChecked),
     citationMissRate: max((r) => r.citationMissRate),
+    dependenciesUnbacked: max((r) => r.dependenciesUnbacked),
+    hardenedModals: max((r) => r.hardenedModals),
     characters: mean((r) => r.characters),
     toolCalls: mean((r) => r.toolCalls),
     seconds: mean((r) => r.seconds),
@@ -145,6 +156,7 @@ export function compareToBaseline(now: Metrics, base: Metrics): Verdict[] {
   out.push(v("citation miss rate", now.citationMissRate <= base.citationMissRate + 0.15,
     `${now.citationMissRate} now vs ${base.citationMissRate} baseline (allowed +0.15)`));
   out.push(v("facts present", now.factsPresent >= base.factsPresent, `${now.factsPresent} now vs ${base.factsPresent} baseline`));
+  out.push(v("hardened modals", now.hardenedModals <= base.hardenedModals + 1, `${now.hardenedModals} now vs ${base.hardenedModals} baseline (allowed +1)`));
   const lo = Math.round(base.characters * 0.4), hi = Math.round(base.characters * 2.5);
   out.push(v("length", now.characters >= lo && now.characters <= hi, `${now.characters} chars; baseline ${base.characters} (allowed ${lo}-${hi})`));
   return out;

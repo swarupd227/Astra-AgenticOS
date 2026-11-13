@@ -1,7 +1,7 @@
 {
   "acme-brd": {
     "case": "acme-brd",
-    "recordedAt": "2026-11-13T04:12:02.672Z",
+    "recordedAt": "2026-11-13T10:35:15.046Z",
     "runs": 2,
     "metrics": {
       "sectionsInOrder": true,
@@ -11,11 +11,13 @@
       "gapsRecorded": 2,
       "factsPresent": 4,
       "inputsReadInFull": 2,
-      "citationsChecked": 5,
+      "citationsChecked": 3,
       "citationMissRate": 0,
-      "characters": 7333,
-      "toolCalls": 14,
-      "seconds": 154
+      "dependenciesUnbacked": 0,
+      "hardenedModals": 0,
+      "characters": 8571,
+      "toolCalls": 13,
+      "seconds": 160
     }
   }
 }
