@@ -242,7 +242,14 @@ export function strengthOf(s: string): number | null {
 
 const strongestWord = (s: string) => (s.match(MANDATORY) ?? s.match(RECOMMENDED) ?? s.match(PERMISSIVE))?.[0].toLowerCase() ?? "";
 
-export type StrengthIssue = { citation: string; claim: string; claimWord: string; sourceWord: string; sourceSentence: string };
+/** A source that only suggests: "This suggests corrected invoices can be regenerated" is not a requirement. */
+const HEDGE = /\b(?:suggests?|implies|implied|appears? to|seems? to|likely|probably|presumably|may indicate|could indicate|potentially)\b/i;
+
+export type StrengthIssue = {
+  citation: string; claim: string; claimWord: string; sourceWord: string; sourceSentence: string;
+  /** hardened (default): the claim is stronger than the source; weakened: an obligation became a suggestion. */
+  direction?: "weakened";
+};
 
 type Sentences = { text: string; bi: Set<string> }[];
 /** Per call, never kept: the same citation id can name different text on the next save. */
@@ -282,9 +289,12 @@ export function strengthIssues(artifact: string, sources: Map<string, string>): 
         if (shared >= 3 && ratio >= 0.5 && (!best || shared > best.shared || (shared === best.shared && ratio > best.ratio))) best = { text: s.text, shared, ratio };
       }
       if (!best) continue;
-      const srcLevel = strengthOf(best.text);
-      if (srcLevel !== null && claimLevel > srcLevel)
-        out.push({ citation: c, claim: u.claim.replace(/\s+/g, " ").slice(0, 120), claimWord: strongestWord(u.claim), sourceWord: strongestWord(best.text), sourceSentence: best.text.replace(/\s+/g, " ").slice(0, 140) });
+      const hedged = HEDGE.test(best.text) && !HEDGE.test(u.claim);
+      // A hedged source sits below "may": any modal the claim adds to it is stronger than the source.
+      const srcLevel = hedged ? -1 : strengthOf(best.text);
+      const base = { citation: c, claim: u.claim.replace(/\s+/g, " ").slice(0, 120), claimWord: strongestWord(u.claim), sourceWord: hedged ? (best.text.match(HEDGE)?.[0].toLowerCase() ?? "suggests") : strongestWord(best.text), sourceSentence: best.text.replace(/\s+/g, " ").slice(0, 140) };
+      if (srcLevel !== null && claimLevel > srcLevel) out.push(base);
+      else if (srcLevel === 2 && claimLevel < 2) out.push({ ...base, direction: "weakened" });
     }
   }
   return out;
@@ -320,10 +330,13 @@ export function danglingReferences(doc: string, sourceTexts: string[] = []): Dan
   const defined = new Set<string>();
   const referenced = new Set<string>();
   for (const l of lines) {
-    const lead = /^\s*(?:#{1,6}\s+|[-*+]\s+|\|\s*|\d+\.\s+)?(?:\*\*|__)?\s*([A-Z]{2,6}-\d{1,4})\b/.exec(l);
-    if (lead) defined.add(lead[1]);
+    // An ID defines itself when it opens the item and is followed by its title or text, not by a bare aside:
+    // "- OQ-012 (to be raised with Finance)" mentions OQ-012 and says nothing about what it is.
+    const lead = /^\s*(?:#{1,6}\s+|[-*+]\s+|\|\s*|\d+\.\s+)?(?:\*\*|__)?\s*([A-Z]{1,6}-\d{1,4})(?:\*\*|__)?\s*(?:[—–:.|-]\s*)?(?![(\[])(\S.*)?$/.exec(l);
+    if (lead && (lead[2] ?? "").trim().length >= 3) defined.add(lead[1]);
+    else if (lead && /^\s*(?:#{1,6}\s+|\|)/.test(l)) defined.add(lead[1]); // a bare heading or table cell is a definition
   }
-  for (const m of doc.matchAll(/\b([A-Z]{2,6})-(\d{1,4})\b/g)) {
+  for (const m of doc.matchAll(/\b([A-Z]{1,6})-(\d{1,4})\b/g)) {
     if (m[1] === "GLD" || fromSources.has(m[0])) continue;
     referenced.add(m[0]);
   }
@@ -353,14 +366,23 @@ export function formatDanglingReferences(d: DanglingRefs, max = 15): string | nu
 
 export function formatStrengthIssues(issues: StrengthIssue[], max = 20): string | null {
   if (!issues.length) return null;
-  const lines = issues.slice(0, max).map(
-    (i) => `- “${i.claim}” says **${i.claimWord}**; \`${i.citation}\` says **${i.sourceWord}**: “${i.sourceSentence}”`
-  );
-  return (
-    `⚠ **Source strength changed — ${issues.length} requirement${issues.length > 1 ? "s" : ""} say more than their source:**\n${lines.join("\n")}` +
-    (issues.length > max ? `\n- …and ${issues.length - max} more.` : "") +
-    `\nWhere a source says "may" or "should", keep it — or say the strength is undecided. Writing "shall" settles something the source left open.`
-  );
+  const line = (i: StrengthIssue) => `- “${i.claim}” says **${i.claimWord}**; \`${i.citation}\` says **${i.sourceWord}**: “${i.sourceSentence}”`;
+  const hardened = issues.filter((i) => i.direction !== "weakened");
+  const weakened = issues.filter((i) => i.direction === "weakened");
+  const parts: string[] = [];
+  if (hardened.length)
+    parts.push(
+      `⚠ **Source strength changed — ${hardened.length} requirement${hardened.length > 1 ? "s" : ""} say more than their source:**\n${hardened.slice(0, max).map(line).join("\n")}` +
+      (hardened.length > max ? `\n- …and ${hardened.length - max} more.` : "") +
+      `\nWhere a source says "may", "should" or only "suggests", keep that — or say the strength is undecided. Writing "shall" settles something the source left open.`
+    );
+  if (weakened.length)
+    parts.push(
+      `⚠ **Source obligation softened — ${weakened.length} requirement${weakened.length > 1 ? "s" : ""} say less than their source:**\n${weakened.slice(0, max).map(line).join("\n")}` +
+      (weakened.length > max ? `\n- …and ${weakened.length - max} more.` : "") +
+      `\nWhere a source says "must" or "shall", the requirement keeps it. Turning an obligation into "should" or "may" drops it without anyone deciding to.`
+    );
+  return parts.join("\n\n");
 }
 
 /**
@@ -636,5 +658,241 @@ export function formatProhibited(r: { construct: string; count: number; example:
     `⚠ **The task prohibits constructs this document contains:**\n` +
     r.map((x) => `- ${x.construct}: ${x.count} found, e.g. “${x.example.replace(/\s+/g, " ").slice(0, 110)}”`).join("\n") +
     `\nRemove them — the task's prohibitions override your default document structure — then save again.`
+  );
+}
+
+// --- Omissions: what the sources say that the document does not --------------------------------
+//
+// The checks above test what the document claims. None of them can see what it leaves out, and a
+// live run showed that: a BRD with no invented roles, no dangling references and every citation
+// resolving had also dropped a scope item, every source-stated dependency and the UX section.
+
+/** The prefix a document uses for its requirements — REQ, FR, BR … — or the one it defines most. */
+const REQUIREMENT_PREFIX = /^(?:REQ|FR|NFR|BR|RQ|R)$/;
+const DEFINES_ID = /^(\s*)(#{1,6}\s+|[-*+]\s+|\|\s*|\d+\.\s+)?(?:\*\*|__)?\s*([A-Z]{1,6})-(\d{1,4})\b/;
+
+/** The text of the document's requirement items only — not its open questions, stakeholders or glossary. */
+export function requirementText(doc: string): string {
+  return requirementBlocks(doc).join("\n");
+}
+
+/** One entry per requirement item: its heading or row and the lines under it. */
+export function requirementBlocks(doc: string): string[] {
+  const lines = doc.split("\n");
+  const starts = new Map<number, string>();
+  const count = new Map<string, number>();
+  lines.forEach((l, i) => {
+    const m = DEFINES_ID.exec(l);
+    if (m) { starts.set(i, m[3]); count.set(m[3], (count.get(m[3]) ?? 0) + 1); }
+  });
+  let prefix = [...count.entries()].filter(([p, n]) => REQUIREMENT_PREFIX.test(p) && n >= 5).sort((a, b) => b[1] - a[1])[0]?.[0];
+  prefix ??= [...count.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  if (!prefix) return [doc];
+  const blocks: string[][] = [];
+  let on = false;
+  lines.forEach((l, i) => {
+    if (starts.has(i)) { on = starts.get(i) === prefix; if (on) blocks.push([]); }
+    else if (/^#{1,6}\s/.test(l)) on = false;
+    if (on) blocks[blocks.length - 1].push(l);
+  });
+  return blocks.map((b) => b.join("\n"));
+}
+
+/** Lines of an approved-scope list in a source or prompt: from "…approved scope" to "anything outside this list". */
+export function scopeLines(text: string): string[] {
+  const lines = text.split(/\r?\n/);
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i].trim();
+    if (!(l.length < 80 && !/[.:]$/.test(l) && /\b(?:approved|in)[- ]scope\b|\bscope list\b/i.test(l))) continue;
+    for (let j = i + 1; j < Math.min(lines.length, i + 80); j++) {
+      const s = lines[j].trim();
+      if (/\bout of scope\b|anything outside|outside (?:of )?(?:this|the) (?:list|scope)/i.test(s)) break;
+      if (s) out.push(s.replace(/^[-*•\d.)\s]+/, ""));
+    }
+    break;
+  }
+  return out;
+}
+
+export type CoverageGap = { scope: string; missing: string };
+
+/**
+ * Scope-list items no requirement mentions. A scope line often reaches us as one run of
+ * capitalised items with nothing between them ("Multi Equipment Rentals Multi Configuration
+ * Rentals"), so items cannot be split. Instead the line's adjacent word pairs are looked up in the
+ * requirement text, and two or more missing in a row mark an item that is not there; a single
+ * missing pair is usually just the join between two items.
+ */
+export function coverageGaps(doc: string, sourceTexts: string[]): { scopeLines: number; gaps: CoverageGap[] } {
+  const lines = [...new Set(sourceTexts.flatMap(scopeLines))];
+  if (!lines.length) return { scopeLines: 0, gaps: [] };
+  const blocks = requirementBlocks(doc);
+  const have = bigramSet(blocks.join("\n"));
+  const blockWords = blocks.map((b) => new Set(words(b).map(stem)));
+  // An item is covered if one requirement mentions all of its words, even in another order.
+  const together = (ws: string[]) => blockWords.some((s) => ws.every((w) => s.has(stem(w))));
+  const gaps: CoverageGap[] = [];
+  let checked = 0;
+  for (const line of lines) {
+    const cw = contentWords(line);
+    if (cw.length < 3) continue; // a heading, not a list of items
+    checked++;
+    const bg = bigramList(cw);
+    let run = 0;
+    const flush = (end: number) => {
+      if (run >= 2) {
+        const phrase = cw.slice(end - run, end + 1);
+        if (!together(phrase)) gaps.push({ scope: line.slice(0, 120), missing: phrase.join(" ") });
+      }
+      run = 0;
+    };
+    bg.forEach((b, i) => { if (have.has(b)) flush(i); else run++; });
+    flush(bg.length);
+  }
+  return { scopeLines: checked, gaps };
+}
+
+export function formatCoverageGaps(g: { scopeLines: number; gaps: CoverageGap[] }, max = 12): string | null {
+  if (!g.gaps.length) return null;
+  const lines = g.gaps.slice(0, max).map((x) => `- “${x.missing}” (scope line: ${x.scope})`);
+  return (
+    `⚠ **Scope not covered — the approved scope names items that no requirement mentions:**\n${lines.join("\n")}` +
+    (g.gaps.length > max ? `\n- …and ${g.gaps.length - max} more.` : "") +
+    `\nEvery item in the approved scope needs at least one requirement of its own. Merging fields into one requirement is fine; dropping an item is not. ` +
+    `Write the missing requirements with write_section, or tell the user the item has no source detail.`
+  );
+}
+
+export type OmittedDependency = { sentence: string };
+
+// The noun only: "depends on" turns up in every descriptive sentence, "a dependency on X" is a statement of one.
+const DEPENDS = /\bdependenc(?:y|ies)\b/i;
+const INSTRUCTION = /\b(?:do not|don't|must not|never|only (?:if|where|when)|avoid|ensure that|ensure the|should be stated)\b/i;
+
+/** Source sentences that state a dependency which appears nowhere in the document. */
+export function omittedDependencies(doc: string, sourceTexts: string[]): OmittedDependency[] {
+  const have = bigramSet(doc);
+  const out: OmittedDependency[] = [];
+  const seen = new Set<string>();
+  for (const t of sourceTexts) {
+    for (const s of t.split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim())) {
+      if (s.length < 25 || s.length > 400 || s.includes("?") || !DEPENDS.test(s) || INSTRUCTION.test(s)) continue;
+      // A run of Capitalised Words is a template's field list ("… Inputs Outputs Dependencies Upstream Impact …"), not a statement.
+      const toks = s.split(/\s+/);
+      if (toks.filter((t) => /^[A-Z]/.test(t)).length / toks.length > 0.5) continue;
+      const bg = bigramList(contentWords(s));
+      if (bg.length < 3) continue;
+      const key = plainKey(s);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const contained = bg.filter((b) => have.has(b)).length / bg.length;
+      if (contained < 0.6) out.push({ sentence: s.replace(/\s+/g, " ") });
+    }
+  }
+  return out;
+}
+
+export function formatOmittedDependencies(o: OmittedDependency[], max = 10): string | null {
+  if (!o.length) return null;
+  return (
+    `⚠ **Dependencies the sources state that the document does not carry — ${o.length}:**\n` +
+    o.slice(0, max).map((x) => `- “${x.sentence.slice(0, 200)}”`).join("\n") +
+    (o.length > max ? `\n- …and ${o.length - max} more.` : "") +
+    `\nPut each on the requirement it concerns, quoting the sentence: \`Dependencies: REQ-nnn — “the quoted sentence”\`. Leaving "Not specified" is right only where no source says so.`
+  );
+}
+
+// --- Quotes must be verbatim --------------------------------------------------------------
+
+export type QuoteIssue = { quote: string; kind: "reworded" | "not-in-any-source" };
+
+/**
+ * Text inside quotation marks is a promise that a source says exactly this. A live document put a
+ * bullet list from a source inside one pair of quotes as if it were one sentence, and altered
+ * spelling inside quote marks; both read as verbatim and are not. Fragments split on "…" are
+ * checked one by one.
+ */
+export function quoteIssues(doc: string, sourceTexts: string[]): { checked: number; issues: QuoteIssue[] } {
+  const hay = ` ${sourceTexts.map(plainKey).join(" ")} `;
+  const hayBi = bigramSet(sourceTexts.join("\n"));
+  let checked = 0;
+  const issues: QuoteIssue[] = [];
+  const seen = new Set<string>();
+  for (const m of doc.matchAll(/[“"]([^”"\n]{25,600})[”"]/g)) {
+    const frags = m[1].split(/\s*(?:…|\.\.\.)\s*/).map((f) => f.trim()).filter((f) => f.split(/\s+/).length >= 5);
+    for (const f of frags) {
+      const key = plainKey(f);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      checked++;
+      if (hay.includes(` ${key} `)) continue;
+      const bg = bigramList(contentWords(f));
+      const score = bg.length ? bg.filter((b) => hayBi.has(b)).length / bg.length : 0;
+      issues.push({ quote: f.replace(/\s+/g, " ").slice(0, 140), kind: score >= 0.6 ? "reworded" : "not-in-any-source" });
+    }
+  }
+  return { checked, issues };
+}
+
+export function formatQuoteIssues(r: { checked: number; issues: QuoteIssue[] }, max = 15): string | null {
+  if (!r.issues.length) return null;
+  const lines = r.issues.slice(0, max).map(
+    (i) => `- “${i.quote}” — ${i.kind === "reworded" ? "close to a source, but not the source's words" : "no source contains this"}`
+  );
+  return (
+    `⚠ **Quotation marks around text that is not verbatim — ${r.issues.length} of ${r.checked} quoted passages:**\n${lines.join("\n")}` +
+    (r.issues.length > max ? `\n- …and ${r.issues.length - max} more.` : "") +
+    `\nInside quotation marks, copy the source exactly (use “…” to skip words). To summarise a list or paraphrase, drop the quotation marks and cite the source.`
+  );
+}
+
+// --- Fields with no value in any source ---------------------------------------------------------
+
+const GROUNDED_FIELDS = /^(?:engagement level|operational frequency|usage frequency|frequency|interaction level|stakeholder type|influence|impact level)$/i;
+const NO_VALUE = /^(?:not specified|n\/a|none|tbd|not stated|no information|not available|not defined|to be confirmed)/i;
+const FIELD_LINE = /^\s*(?:[-*]\s+)?\*\*([^*:]+):?\*\*:?\s*(.+)$/;
+
+/** Words in an entity's heading that say what kind of thing it is, not which one — they would ground any value. */
+const GENERIC_ENTITY = new Set(["stakeholder", "stakeholders", "function", "functions", "team", "teams", "users", "user", "manage", "management", "owner", "owners", "who", "group", "groups", "role", "roles", "audience", "persona"]);
+
+export type UngroundedField ={ entity: string; field: string; value: string };
+
+/**
+ * A field such as Engagement Level or Operational Frequency must hold a value some source gives for
+ * that entity, or say it is not specified. The value counts as given when one sentence of a source
+ * mentions both the value and a word from the entity's heading. All seven engagement levels in a
+ * live BRD were invented, and "no roles are named" sat above each of them.
+ */
+export function ungroundedFields(doc: string, sourceTexts: string[]): UngroundedField[] {
+  const sentences = sourceTexts.flatMap((t) => t.split(/(?<=[.!?])\s+|\n+/)).map((s) => new Set(words(s).map(stem)));
+  const out: UngroundedField[] = [];
+  let entity = "";
+  let entityWords: string[] = [];
+  for (const line of doc.split("\n")) {
+    const h = /^#{1,6}\s+(.*)$/.exec(line);
+    if (h) {
+      entity = h[1].replace(/^[A-Z]{1,6}-\d{1,4}\s*[—–:.-]*\s*/, "").trim();
+      entityWords = contentWords(entity).filter((w) => w.length >= 4 && !GENERIC_ENTITY.has(w)).map(stem);
+      continue;
+    }
+    const m = FIELD_LINE.exec(line);
+    if (!m || !GROUNDED_FIELDS.test(m[1].trim())) continue;
+    const value = m[2].replace(/[*_.\s]+$/g, "").trim();
+    if (!value || NO_VALUE.test(value) || !entityWords.length) continue;
+    const terms = value.split(/\s*[,;/]\s*|\s+and\s+/i).map((t) => contentWords(t).map(stem)).filter((t) => t.length);
+    const ungrounded = terms.filter((t) => !sentences.some((s) => t.every((w) => s.has(w)) && entityWords.some((e) => s.has(e))));
+    if (ungrounded.length) out.push({ entity, field: m[1].trim(), value: value.slice(0, 80) });
+  }
+  return out;
+}
+
+export function formatUngroundedFields(u: UngroundedField[], max = 15): string | null {
+  if (!u.length) return null;
+  return (
+    `⚠ **Field values no source gives — ${u.length}:**\n` +
+    u.slice(0, max).map((x) => `- ${x.entity} — ${x.field}: ${x.value}`).join("\n") +
+    (u.length > max ? `\n- …and ${u.length - max} more.` : "") +
+    `\nWrite *Not specified in source* for any field the sources give no value for. A plausible value is still an invented one.`
   );
 }

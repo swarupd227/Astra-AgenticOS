@@ -3,7 +3,7 @@
  *
  *   npm test
  */
-import { contentKey, countCitations, destructiveSave, implausiblyShort } from "../src/guards.js";
+import { contentKey, countCitations, countIds, destructiveSave, implausiblyShort } from "../src/guards.js";
 
 let failures = 0;
 const fail = (m: string) => { console.error(m); failures++; };
@@ -49,6 +49,22 @@ eq("a small section can shrink freely", refused({ kind: "section", newLen: 100, 
     refused({ kind: "section", newLen: 2500, prevLen: 3000, name: "brd.md § Requirements", prevCitations: 9, newCitations: 0 }), true);
   eq("countCitations counts both kinds", countCitations("a GLD-REF-030@1 and inputs/spec.md and gld-fs-001"), 3);
   eq("no citations counts zero", countCitations("plain text"), 0);
+}
+
+// Review of the guard: 60 citations cut to 1 is as good as none, and merging items keeps the length but loses them.
+{
+  const same = { kind: "document" as const, newLen: 140000, prevLen: 148929, name: "brd.md" };
+  eq("60 citations cut to 1 is refused", refused({ ...same, prevCitations: 60, newCitations: 1 }), true);
+  eq("60 cut to 12 (20%) passes", refused({ ...same, prevCitations: 60, newCitations: 12 }), false);
+  eq("a mid-sized set cut to a few is not held to the ratio", refused({ ...same, prevCitations: 8, newCitations: 1 }), false);
+  eq("97 items merged into 30 is refused", refused({ ...same, prevIds: 97, newIds: 30 }), true);
+  const msg = destructiveSave({ ...same, prevIds: 97, newIds: 30 }) ?? "";
+  if (!msg.includes("97") || !msg.includes("30") || !msg.includes("Merging")) fail("the item refusal should state both counts and why");
+  eq("97 to 70 items passes", refused({ ...same, prevIds: 97, newIds: 70 }), false);
+  eq("few items are not held to the ratio", refused({ ...same, prevIds: 6, newIds: 1 }), false);
+  eq("a section that loses half its items is refused", refused({ kind: "section", newLen: 2500, prevLen: 3000, name: "brd.md § R", prevIds: 20, newIds: 8 }), true);
+  eq("unknown item counts change nothing", refused(same), false);
+  eq("countIds counts distinct ID-led lines", countIds("### REQ-001 — a\n- REQ-002 — b\n| REQ-003 | c |\ntext mentioning REQ-009 in a sentence\n### REQ-001 — dup"), 3);
 }
 
 eq("a repeat of the same content has the same key", contentKey("a.md", "same text"), contentKey("a.md", "same text"));

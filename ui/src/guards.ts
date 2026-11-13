@@ -19,6 +19,9 @@ const FLOOR: Record<SaveKind, { minPrev: number; ratio: number }> = {
 };
 
 const CITATION = /GLD-[A-Z]+-\d+|inputs\/[^\s,;)\]*]+\.(?:md|txt)/gi;
+/** Distinct numbered items a text defines: lines that open with an ID such as REQ-012, OQ-3 or BR-7. */
+export const countIds = (text: string) =>
+  new Set([...text.matchAll(/^\s*(?:#{1,6}\s+|[-*+]\s+|\|\s*|\d+\.\s+)?(?:\*\*|__)?\s*([A-Z]{1,6}-\d{1,4})\b/gm)].map((m) => m[1])).size;
 /** How many checkable citations the text carries — what the server's other checks have to work with. */
 export const countCitations = (text: string) => (text.match(CITATION) ?? []).length;
 
@@ -31,18 +34,30 @@ export const countCitations = (text: string) => (text.match(CITATION) ?? []).len
  * so a rewrite that strips them all passes everything.
  */
 export function destructiveSave(
-  opts: { kind: SaveKind; newLen: number; prevLen: number | null; name: string; prevCitations?: number; newCitations?: number }
+  opts: { kind: SaveKind; newLen: number; prevLen: number | null; name: string; prevCitations?: number; newCitations?: number; prevIds?: number; newIds?: number }
 ): string | null {
   const { kind, newLen, prevLen, name } = opts;
   if (prevLen === null) return null;                       // nothing is being replaced
   const f = FLOOR[kind];
   const tiny = prevLen >= 1000 && newLen < 200;
-  const lostCitations = (opts.prevCitations ?? 0) >= 5 && opts.newCitations === 0;
+  const pc = opts.prevCitations ?? 0, nc = opts.newCitations;
+  // Every citation gone, or all but a few of a large number: the second keeps the checks alive on paper only.
+  const lostCitations = (pc >= 5 && nc === 0) || (pc >= 10 && nc !== undefined && nc < pc * 0.2);
+  const pi = opts.prevIds ?? 0, ni = opts.newIds;
+  // Merging many short items into a few long ones keeps the length and loses the items.
+  const lostIds = ni !== undefined && ((kind === "document" && pi >= 10 && ni < pi * 0.6) || (kind === "section" && pi >= 5 && ni < pi * 0.5));
   if (lostCitations && !tiny)
     return (
-      `BLOCKED — nothing was saved. The ${kind} you sent (\`${name}\`) has no citations, but the version it would replace has ${opts.prevCitations}. ` +
+      `BLOCKED — nothing was saved. The ${kind} you sent (\`${name}\`) has ${nc === 0 ? "no citations" : "only " + nc + " citation" + (nc === 1 ? "" : "s")}, but the version it would replace has ${pc}. ` +
       `With no citations the server has nothing to check, so this would silence every check on the ${kind} rather than pass them.\n\n` +
       `Send the full ${kind} with its citations. If you really do mean to remove them all, send exactly the same content again and it will be saved ` +
+      `(the previous version is always kept as \`${name}.vN\`).`
+    );
+  if (lostIds && !tiny)
+    return (
+      `BLOCKED — nothing was saved. The ${kind} you sent (\`${name}\`) defines ${ni} numbered item${ni === 1 ? "" : "s"}, but the version it would replace defines ${pi}. ` +
+      `Merging items loses them: every requirement, question or rule that disappears is one nobody decided to drop.\n\n` +
+      `Send the full ${kind} with its items. If you really do mean to merge them, send exactly the same content again and it will be saved ` +
       `(the previous version is always kept as \`${name}.vN\`).`
     );
   if (!tiny && !(prevLen >= f.minPrev && newLen < prevLen * f.ratio)) return null;

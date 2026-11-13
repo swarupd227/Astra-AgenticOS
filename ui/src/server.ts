@@ -14,10 +14,11 @@ import {
 } from "./evidence.js";
 import { auditChange, formatAudit, proposalsWithoutTests } from "./audit.js";
 import { SectionedDoc } from "./sections.js";
-import { contentKey, countCitations, destructiveSave, implausiblyShort } from "./guards.js";
+import { contentKey, countCitations, countIds, destructiveSave, implausiblyShort } from "./guards.js";
 import {
   citationIssues, citationKey, constructsProhibitedBy, formatCitationReport, formatConflicts, formatDeviation,
-  danglingReferences, dependencyIssues, formatDanglingReferences, formatDependencyIssues, formatInventedRoles, formatProhibited, formatStrengthIssues, inventedRoles,
+  coverageGaps, danglingReferences, dependencyIssues, formatCoverageGaps, formatDanglingReferences, formatOmittedDependencies, formatQuoteIssues, formatUngroundedFields, omittedDependencies, quoteIssues, ungroundedFields,
+   formatDependencyIssues, formatInventedRoles, formatProhibited, formatStrengthIssues, inventedRoles,
   noCheckableCitations, prohibitedUsed, strengthIssues, templateDeviations, termConflicts, unaddressedConflicts,
   type TermConflict,
 } from "./source-checks.js";
@@ -1020,6 +1021,20 @@ function documentChecks(
 
     const roles = formatInventedRoles(inventedRoles(content, sourceTexts));
     if (roles) notes.push(roles);
+
+    const quotes = formatQuoteIssues(quoteIssues(content, sourceTexts));
+    if (quotes) notes.push(quotes);
+
+    const fields = formatUngroundedFields(ungroundedFields(content, sourceTexts));
+    if (fields) notes.push(fields);
+
+    // What is missing can only be judged on the whole document.
+    if (whole) {
+      const gaps = formatCoverageGaps(coverageGaps(content, sourceTexts));
+      if (gaps) notes.push(gaps);
+      const omitted = formatOmittedDependencies(omittedDependencies(content, sourceTexts));
+      if (omitted) notes.push(omitted);
+    }
   }
 
   if (fromDocuments && whole && conflicts.length) {
@@ -1086,14 +1101,14 @@ type SectionContext = {
 };
 
 /** An artifact already on disk, or null when there is none. */
-function existingArtifact(project: Project | null, name: string): { length: number; citations: number } | null {
+function existingArtifact(project: Project | null, name: string): { length: number; citations: number; ids: number } | null {
   if (!project || !name) return null;
   const full = safeJoin(project.artifactsDir, name);
   if (!full) return null;
   try {
     if (!fs.statSync(full).isFile()) return null;
     const text = fs.readFileSync(full, "utf8");
-    return { length: text.length, citations: countCitations(text) };
+    return { length: text.length, citations: countCitations(text), ids: countIds(text) };
   } catch { return null; }
 }
 
@@ -1116,6 +1131,7 @@ async function handleWriteSection(
   const refusal = destructiveSave({
     kind: "section", newLen: content.length, prevLen: before ? before.length : null, name: `${name} § ${section}`,
     prevCitations: before ? countCitations(before) : undefined, newCitations: countCitations(content),
+    prevIds: before ? countIds(before) : undefined, newIds: countIds(content),
   });
   const key = contentKey(`${name}§${section}`, content);
   if (refusal && !ctx.refused.has(key)) {
@@ -1930,6 +1946,7 @@ async function runAgent(
           const refusal = destructiveSave({
             kind: "document", newLen: sContent.length, prevLen: prior ? prior.length : null, name: sName,
             prevCitations: prior?.citations, newCitations: countCitations(sContent),
+            prevIds: prior?.ids, newIds: countIds(sContent),
           });
           const sKey = contentKey(sName, sContent);
           if (refusal && !refusedSaves.has(sKey)) {

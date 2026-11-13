@@ -8,7 +8,7 @@
  * be flagged, and the near-misses that must stay quiet.
  */
 import {
-  danglingReferences, formatDanglingReferences,
+  coverageGaps, danglingReferences, formatDanglingReferences, omittedDependencies, quoteIssues, requirementText, scopeLines, ungroundedFields,
   dependencyIssues, formatDependencyIssues, formatStrengthIssues, strengthIssues, strengthOf,
   citationIssues, citationKey, constructsProhibitedBy, extractDefinitions, formatCitationReport,
   formatInventedRoles, inventedRoles, noCheckableCitations, prohibitedUsed, templateDeviations, termConflicts,
@@ -342,6 +342,75 @@ eq("a mention nowhere near a prohibition does not count",
   eq("a document without numbered headings has no section claims", danglingReferences("Text. See Section 7.").sections, []);
   eq("a clean document reports nothing", formatDanglingReferences(danglingReferences("## 1. A\n- REQ-001 x\nSee Section 1 and REQ-001.")), null);
   if (!(formatDanglingReferences(d) ?? "").includes("Section 7")) fail("the report should name the missing section");
+}
+
+
+// Omissions and the review fixes: scope coverage, stated dependencies, verbatim quotes, hedges, softening, ungrounded fields.
+{
+  const scope = "SPRINT 2 APPROVED SCOPE\n\nRental Reservations\n\nMulti Equipment Rentals Multi Configuration Rentals\n\nBilling\n\nPost Billing Pre Billing Billing Methods\n\nAnything outside this list is out of scope.\n\nLater text.";
+  eq("the scope list is read between its heading and the out-of-scope line", scopeLines(scope), ["Rental Reservations", "Multi Equipment Rentals Multi Configuration Rentals", "Billing", "Post Billing Pre Billing Billing Methods"]);
+  const covered = [
+    "## Requirements", "### REQ-001 — Multi equipment", "A reservation can include multiple items of equipment as a multi equipment rental.",
+    "### REQ-002 — Multi configuration", "Multi configuration rentals carry several configurations.",
+    "### REQ-003 — Billing", "Post billing and pre billing are billing methods.",
+  ].join("\n");
+  eq("a covered scope reports nothing", coverageGaps(covered, [scope]).gaps, []);
+  const dropped = covered.replace(/### REQ-001[\s\S]*### REQ-002/, "### REQ-002").replace("Multi configuration rentals carry several configurations.", "Configurations can be chosen.");
+  eq("a dropped scope item is reported", coverageGaps(dropped, [scope]).gaps.length > 0, true);
+  eq("mentioning the item outside a requirement does not count", coverageGaps(dropped + "\n## Key features\nKF-04 — Multi equipment rentals", [scope]).gaps.length > 0, true);
+  eq("no scope list, no claims", coverageGaps(dropped, ["Plain text with no list."]), { scopeLines: 0, gaps: [] });
+  eq("requirementText keeps requirements only", requirementText("### OQ-001 — q\nQuestion text\n### REQ-001 — a\nrequirement one\n### REQ-002 — b\nrequirement two\n### REQ-003 — c\nc\n### REQ-004 — d\nd\n### REQ-005 — e\ne\n").includes("Question text"), false);
+}
+{
+  const src = ["The cost of insurance is high. This creates a dependency on the LDW process. Billing depends on returns.", "Template: Business Objective Inputs Outputs Dependencies Upstream Impact Downstream Impact."];
+  const gone = omittedDependencies("## REQ-001\nThe system invoices rentals.", src);
+  eq("a source-stated dependency missing from the document is found", gone.map((g) => g.sentence), ["This creates a dependency on the LDW process."]);
+  eq("a field list in a template is not a dependency", gone.some((g) => /Upstream/.test(g.sentence)), false);
+  eq("once the document carries it, it is not reported", omittedDependencies("REQ-001 — Dependencies: LDW — “This creates a dependency on the LDW process.”", src), []);
+}
+{
+  const src = ["The invoice lists charges. Charges can be applied at: Agreement, Quote, Reservation. Behavior is configurable."];
+  const doc = [
+    "REQ-1 — Verbatim: “The invoice lists charges.”",
+    "REQ-2 — Joined list: “Charges can be applied at: Agreement.”",
+    "REQ-3 — Spelling: “Behaviour is configurable and flexible.”",
+    "REQ-4 — Skip: “The invoice … charges” appears in the source.",
+    "REQ-5 — Invented: “Every invoice must be approved by a director before release.”",
+  ].join("\n");
+  const q = quoteIssues(doc, src);
+  eq("verbatim and elided quotes pass", q.issues.some((i) => /^The invoice/.test(i.quote)), false);
+  eq("a quote that is not the source's words is reported", q.issues.some((i) => /Behaviour/.test(i.quote)), true);
+  eq("a quote found nowhere is reported as such", q.issues.find((i) => /director/.test(i.quote))?.kind, "not-in-any-source");
+  eq("short quotes are not checked", quoteIssues("Status is “Not Specified in Source”.", src).checked, 0);
+}
+{
+  // A hedged source is below "may"; softening an obligation is its own finding.
+  const sources = new Map([[citationKey("inputs/a.md"), "This suggests that corrected invoices can be regenerated after review. Invoices must be approved by finance before release to customers."]]);
+  const hardened = strengthIssues("REQ-1 — Corrected invoices should be regenerated after review. Source: inputs/a.md", sources);
+  eq("a hedge hardened to should is found", hardened.map((h) => [h.claimWord, h.sourceWord, h.direction ?? null]), [["should", "suggests", null]]);
+  const weak = strengthIssues("REQ-2 — Invoices should be approved by finance before release to customers. Source: inputs/a.md", sources);
+  eq("must softened to should is found, marked as weakened", weak.map((h) => [h.sourceWord, h.direction]), [["must", "weakened"]]);
+  eq("keeping must is fine", strengthIssues("REQ-3 — Invoices must be approved by finance before release to customers. Source: inputs/a.md", sources), []);
+  const msg = formatStrengthIssues([...hardened, ...weak]) ?? "";
+  if (!msg.includes("say more than their source") || !msg.includes("say less than their source")) fail("both directions should be reported, each worded for what went wrong");
+}
+{
+  const src = ["The Operations Team may review invoices. Finance approves the credit limit."];
+  const doc = [
+    "### SH-01 — Operations Team", "**Engagement Level:** Review, Consult", "### SH-02 — Finance Team", "**Engagement Level:** Approve",
+    "### SH-03 — Branch Manager", "**Engagement Level:** Not Specified in Source.", "### SH-04 — Sales Group", "**Operational Frequency:** Daily",
+  ].join("\n");
+  const u = ungroundedFields(doc, src);
+  eq("a value no source gives for that role is found", u.map((x) => x.entity), ["Operations Team", "Sales Group"]);
+  eq("a value a source gives for that role passes, and 'not specified' passes", u.some((x) => x.entity === "Finance Team" || x.entity === "Branch Manager"), false);
+}
+{
+  // Review fixes: a bare aside is not a definition, and one-letter prefixes count.
+  const aside = ["## 1. A", "- OQ-001 — First question", "- OQ-002 (to be raised with Finance)", "- OQ-003 — Third", "See OQ-001, OQ-002 and OQ-003.", "Cited: R-10, R-11 and R-12 in prose."].join("\n");
+  const d = danglingReferences(aside);
+  eq("an ID followed only by an aside defines nothing", d.ids.includes("OQ-002"), true);
+  eq("an ID with a title does define itself", d.ids.includes("OQ-001"), false);
+  eq("one-letter prefixes are tracked", d.ids.includes("R-12"), true);
 }
 
 console.log(`source checks — ${failures} failure(s)`);

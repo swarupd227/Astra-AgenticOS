@@ -73,7 +73,25 @@ with sections: it is several times faster, and a correction costs one section, n
   marks: `Dependencies: REQ-007 — “the quoted source sentence”`. The platform looks for that sentence in
   the sources and flags any dependency without one. Do not link requirements because they sit next to one
   another or "follow naturally" — in a live run about 70% of such links were the document's own inference.
-  *Not specified* is the expected answer for most requirements.
+  *Not specified* is the expected answer for most requirements. The reverse also counts: where a source
+  says "this creates a dependency on the LDW process", that belongs on the requirement it concerns. The
+  platform lists source sentences that state a dependency which the document never carries.
+- **Nothing in the approved scope is dropped.** Every item of the scope list the task gives needs a
+  requirement of its own (or an open question saying the sources have no detail on it). Merging
+  fields of one feature into a single requirement is fine; losing an item or a section the task
+  asks for (UX, lifecycle position, process flow, open questions) is not. The platform compares the
+  scope list with your requirements and lists items nothing mentions.
+- **Quotation marks mean verbatim.** Text inside quotation marks must be in a source word for word.
+  Use “…” to skip words. Do not put a list of bullets inside one pair of quotes as if it were a
+  sentence, and do not change spelling inside quotes. To paraphrase, drop the quotation marks and cite.
+- **A hedge is not a requirement.** "This suggests X can be done" or "appears to" stays a hedge: record
+  it as a possibility or an open question. Do not write it as "the system should/shall X".
+- **A field with no source value says so.** Engagement level, operational frequency, stakeholder type
+  and similar fields get a value only if a source gives one for that role; otherwise *Not specified in
+  source*. A plausible value is still an invented one.
+- **A conflict is two sources that disagree.** If two descriptions mean the same thing, or your own
+  note says "no resolution required", it is not a conflict — do not list it as one. Do record the real
+  disagreements you can see, such as where in the process a check happens, or which statuses exist.
 - **Gaps stay visible.** Where a source is silent or undecided, write that plainly
   (*Not specified in source* / *Requires business clarification* / *Open business decision*) and
   collect it in the open questions. A gap is a correct answer; filling it is the failure this exists to prevent.
