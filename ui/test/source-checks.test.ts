@@ -8,7 +8,7 @@
  * be flagged, and the near-misses that must stay quiet.
  */
 import {
-  coverageGaps, danglingReferences, formatDanglingReferences, omittedDependencies, quoteIssues, requirementText, scopeLines, ungroundedFields,
+  coverageGaps, formatCoverageGaps, danglingReferences, formatDanglingReferences, omittedDependencies, quoteIssues, requirementText, scopeLines, ungroundedFields,
   dependencyIssues, formatDependencyIssues, formatStrengthIssues, strengthIssues, strengthOf,
   citationIssues, citationKey, constructsProhibitedBy, extractDefinitions, formatCitationReport,
   formatInventedRoles, inventedRoles, noCheckableCitations, prohibitedUsed, templateDeviations, termConflicts,
@@ -411,6 +411,17 @@ eq("a mention nowhere near a prohibition does not count",
   eq("an ID followed only by an aside defines nothing", d.ids.includes("OQ-002"), true);
   eq("an ID with a title does define itself", d.ids.includes("OQ-001"), false);
   eq("one-letter prefixes are tracked", d.ids.includes("R-12"), true);
+}
+
+
+{
+  // Peer review of the omission checks: silence must not read as a pass, and an appendix quote is not a carried dependency.
+  eq('no scope list in a long document says so', (formatCoverageGaps({ scopeLines: 0, gaps: [] }, 12, 50000) ?? '').includes('not checked'), true);
+  eq('a short document with no scope list stays quiet', formatCoverageGaps({ scopeLines: 0, gaps: [] }, 12, 500), null);
+  const src = ['This creates a dependency on the LDW process.'];
+  const appendix = ["### REQ-001 — a", "Invoices are produced.", "## Appendix", "This creates a dependency on the LDW process."].join("\n");
+  eq('a dependency quoted only outside the requirements is still omitted', omittedDependencies(appendix, src).length, 1);
+  eq('a dependency inside a requirement is carried', omittedDependencies(["### REQ-001 — a", "Dependencies: LDW — This creates a dependency on the LDW process."].join("\n"), src), []);
 }
 
 console.log(`source checks — ${failures} failure(s)`);

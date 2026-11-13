@@ -1009,7 +1009,11 @@ function documentChecks(
     const strength = formatStrengthIssues(strengthIssues(content, cited));
     if (strength) notes.push(strength);
 
-    const sourceTexts = documentSources(project, task).map((s) => s.text);
+    const allSources = documentSources(project, task);
+    const sourceTexts = allSources.map((s) => s.text);
+    // What the document must carry comes from the task and this project's own documents; reference
+    // items in the Golden Repository (code conventions, other products) are material to cite, not obligations.
+    const ownTexts = allSources.filter((s) => s.name === "task prompt" || s.name.startsWith("inputs/")).map((s) => s.text);
     const deps = formatDependencyIssues(dependencyIssues(content, sourceTexts));
     if (deps) notes.push(deps);
 
@@ -1030,9 +1034,9 @@ function documentChecks(
 
     // What is missing can only be judged on the whole document.
     if (whole) {
-      const gaps = formatCoverageGaps(coverageGaps(content, sourceTexts));
+      const gaps = formatCoverageGaps(coverageGaps(content, ownTexts), 12, content.length);
       if (gaps) notes.push(gaps);
-      const omitted = formatOmittedDependencies(omittedDependencies(content, sourceTexts));
+      const omitted = formatOmittedDependencies(omittedDependencies(content, ownTexts));
       if (omitted) notes.push(omitted);
     }
   }
@@ -1851,8 +1855,10 @@ async function runAgent(
       // and fix what it reports; in a live run it never did, and finished with invented roles
       // the per-section feedback had already named. Run the whole-document checks for it and,
       // if anything is open, hand them back once or twice before the answer stands.
+      console.error(`[review] ${agent.id}: turn ended (stop=${resp.stop_reason}) doc=${isDocAgent} saved=${lastDocSaved ? (lastDocSaved as any).name : "none"} rounds=${reviewRounds}/${MAX_REVIEW_ROUNDS}`);
       if (isDocAgent && lastDocSaved && reviewRounds < MAX_REVIEW_ROUNDS) {
         const open = documentChecks(lastDocSaved.content, userMessage, agent.id, project, conflictsFound, true);
+        console.error(`[review] ${agent.id}: ${open.length} whole-document check(s) open`);
         if (open.length) {
           reviewRounds++;
           emit({ type: "notice", message: `Checking the finished document against its sources (review ${reviewRounds} of ${MAX_REVIEW_ROUNDS})…` });

@@ -753,7 +753,10 @@ export function coverageGaps(doc: string, sourceTexts: string[]): { scopeLines: 
   return { scopeLines: checked, gaps };
 }
 
-export function formatCoverageGaps(g: { scopeLines: number; gaps: CoverageGap[] }, max = 12): string | null {
+export function formatCoverageGaps(g: { scopeLines: number; gaps: CoverageGap[] }, max = 12, documentChars = 0): string | null {
+  // Finding no scope list is not a pass: say so rather than let silence read as "covered".
+  if (!g.scopeLines && documentChars >= 20000)
+    return `ℹ **Scope coverage was not checked** — no approved-scope list was found in the task or the sources, so nothing was compared with your requirements. Check by hand that every item the task names has a requirement.`;
   if (!g.gaps.length) return null;
   const lines = g.gaps.slice(0, max).map((x) => `- “${x.missing}” (scope line: ${x.scope})`);
   return (
@@ -768,11 +771,12 @@ export type OmittedDependency = { sentence: string };
 
 // The noun only: "depends on" turns up in every descriptive sentence, "a dependency on X" is a statement of one.
 const DEPENDS = /\bdependenc(?:y|ies)\b/i;
-const INSTRUCTION = /\b(?:do not|don't|must not|never|only (?:if|where|when)|avoid|ensure that|ensure the|should be stated)\b/i;
+const INSTRUCTION = /\b(?:do not|don't|must not|never|only (?:if|where|when|include)|avoid|ensure that|ensure the|should be stated|explain |identify dependencies|preserving)\b/i;
 
 /** Source sentences that state a dependency which appears nowhere in the document. */
 export function omittedDependencies(doc: string, sourceTexts: string[]): OmittedDependency[] {
-  const have = bigramSet(doc);
+  // Carried means held by a requirement: a sentence quoted only in an appendix does not count.
+  const have = bigramSet(requirementBlocks(doc).join("\n"));
   const out: OmittedDependency[] = [];
   const seen = new Set<string>();
   for (const t of sourceTexts) {
@@ -799,7 +803,8 @@ export function formatOmittedDependencies(o: OmittedDependency[], max = 10): str
     `⚠ **Dependencies the sources state that the document does not carry — ${o.length}:**\n` +
     o.slice(0, max).map((x) => `- “${x.sentence.slice(0, 200)}”`).join("\n") +
     (o.length > max ? `\n- …and ${o.length - max} more.` : "") +
-    `\nPut each on the requirement it concerns, quoting the sentence: \`Dependencies: REQ-nnn — “the quoted sentence”\`. Leaving "Not specified" is right only where no source says so.`
+    `\nPut each on the requirement it concerns, quoting the sentence: \`Dependencies: REQ-nnn — “the quoted sentence”\`. Leaving "Not specified" is right only where no source says so. ` +
+    `(This list covers sentences that use the word "dependency"; a source that says "requires X first" or "relies on" is not found, so read the sources for those too.)`
   );
 }
 
