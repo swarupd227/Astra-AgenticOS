@@ -303,28 +303,33 @@ export function strengthIssues(artifact: string, sources: Map<string, string>): 
   for (const u of citationUnits(artifact)) {
     // A question has no strength, and a metadata line ("Source Reference: …") is not a claim.
     if (u.claim.includes("?") || /^\s*(?:source|sources|priority|dependenc|open question)/i.test(u.claim)) continue;
-    const claimLevel = strengthOf(u.claim);
-    if (claimLevel === null) continue;
-    const claimBi = bigramList(contentWords(u.claim));
-    if (claimBi.length < MIN_BIGRAMS) continue;
-    for (const c of new Set((u.text.match(CITE) ?? []).map(citationKey))) {
-      const text = sources.get(c);
-      if (!text) continue;
-      let best: { text: string; shared: number; ratio: number } | null = null;
-      for (const s of sentencesOf(cache, c, text)) {
-        let shared = 0; for (const b of claimBi) if (s.bi.has(b)) shared++;
-        const ratio = s.bi.size ? shared / s.bi.size : 0;
-        // A short claim inside a long source sentence is the same sentence, though little of the sentence is in the claim.
-        const contained = shared / claimBi.length >= 0.7;
-        if (shared >= 3 && (ratio >= 0.5 || contained) && (!best || shared > best.shared || (shared === best.shared && ratio > best.ratio))) best = { text: s.text, shared, ratio };
+    // One claim sentence at a time. A statement that says "should maintain credit status" and then, in its own words,
+    // "additional statuses may emerge" holds two strengths; comparing its strongest modal with the source sentence
+    // for the second was a false finding that a live run spent six rewrites on.
+    for (const claim of u.claim.split(/(?<=[.!?])\s+/)) {
+      const claimLevel = strengthOf(claim);
+      if (claimLevel === null) continue;
+      const claimBi = bigramList(contentWords(claim));
+      if (claimBi.length < MIN_BIGRAMS) continue;
+      for (const c of new Set((u.text.match(CITE) ?? []).map(citationKey))) {
+        const text = sources.get(c);
+        if (!text) continue;
+        let best: { text: string; shared: number; ratio: number } | null = null;
+        for (const s of sentencesOf(cache, c, text)) {
+          let shared = 0; for (const b of claimBi) if (s.bi.has(b)) shared++;
+          const ratio = s.bi.size ? shared / s.bi.size : 0;
+          // A short claim inside a long source sentence is the same sentence, though little of the sentence is in the claim.
+          const contained = shared / claimBi.length >= 0.7;
+          if (shared >= 3 && (ratio >= 0.5 || contained) && (!best || shared > best.shared || (shared === best.shared && ratio > best.ratio))) best = { text: s.text, shared, ratio };
+        }
+        if (!best) continue;
+        const hedged = HEDGE.test(best.text) && !HEDGE.test(claim);
+        // A hedged source sits below "may": any modal the claim adds to it is stronger than the source.
+        const srcLevel = hedged ? -1 : strengthOf(best.text);
+        const base = { citation: c, claim: claim.replace(/\s+/g, " ").slice(0, 120), claimWord: strongestWord(claim), sourceWord: hedged ? (best.text.match(HEDGE)?.[0].toLowerCase() ?? "suggests") : strongestWord(best.text), sourceSentence: best.text.replace(/\s+/g, " ").slice(0, 140) };
+        if (srcLevel !== null && claimLevel > srcLevel) out.push(base);
+        else if (srcLevel === 2 && claimLevel < 2) out.push({ ...base, direction: "weakened" });
       }
-      if (!best) continue;
-      const hedged = HEDGE.test(best.text) && !HEDGE.test(u.claim);
-      // A hedged source sits below "may": any modal the claim adds to it is stronger than the source.
-      const srcLevel = hedged ? -1 : strengthOf(best.text);
-      const base = { citation: c, claim: u.claim.replace(/\s+/g, " ").slice(0, 120), claimWord: strongestWord(u.claim), sourceWord: hedged ? (best.text.match(HEDGE)?.[0].toLowerCase() ?? "suggests") : strongestWord(best.text), sourceSentence: best.text.replace(/\s+/g, " ").slice(0, 140) };
-      if (srcLevel !== null && claimLevel > srcLevel) out.push(base);
-      else if (srcLevel === 2 && claimLevel < 2) out.push({ ...base, direction: "weakened" });
     }
   }
   return out;

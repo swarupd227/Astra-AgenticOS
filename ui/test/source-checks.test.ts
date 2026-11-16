@@ -422,6 +422,12 @@ eq("a mention nowhere near a prohibition does not count",
   // A short claim is the same sentence as a long source one when most of the claim sits inside it.
   const long = new Map([[citationKey("inputs/a.md"), "During return processing, the system should capture operational return details such as return date, meter readings, fuel level and equipment condition for every returned unit."]]);
   eq("a short claim inside a long 'should' sentence is matched to it", strengthIssues("REQ-4 — The return process shall capture meter readings and fuel level. Source: inputs/a.md", long).map((h) => [h.claimWord, h.sourceWord]), [["shall", "should"]]);
+  // A statement that keeps the source's own "may" sentence next to its "should" holds two strengths; each is compared on its own.
+  const mixed = new Map([[citationKey("inputs/a.md"), "The system should maintain credit status values including at minimum: Approved, COD (Cash on Delivery), and Hold. Additional statuses may emerge during discovery."]]);
+  eq("a 'may' sentence kept beside a 'should' sentence is not a finding",
+    strengthIssues(make("The system should maintain credit status values including at minimum: Approved, COD (Cash on Delivery), and Hold. Additional statuses may emerge during discovery.", true).replace("a.md", "a.md"), mixed), []);
+  eq("but hardening that source's should to shall still is",
+    strengthIssues(make("The system shall maintain credit status values including at minimum: Approved, COD (Cash on Delivery), and Hold. Additional statuses may emerge during discovery.", true), mixed).map((h) => [h.claimWord, h.sourceWord]), [["shall", "should"]]);
   // Two requirements with no heading between them are two units, not one long claim.
   const two = make("Invoices should be emailed to the customer after approval by finance.", true) + "\n" + make(fabricated, true).replace("REQ-1", "REQ-2");
   eq("the next requirement's fields are not merged into the first", citationIssues(two, sources).issues.map((i) => i.claim.slice(0, 20)), ["The vendor portal sh"]);
