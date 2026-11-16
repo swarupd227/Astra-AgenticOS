@@ -76,8 +76,10 @@ prohibitions (user stories, acceptance criteria), and source conflicts it was sh
 These are heuristics over text and report what they compared, not whether a claim is true.
 
 A long document is built **one section at a time** with `write_section` (the server keeps the order,
-composes the whole, and saves it each time) and finished with `check_document`. A correction rewrites
-one section instead of re-sending the document, so the model generates about one copy of the document
+composes the whole, and saves it each time) and finished with `check_document`. A correction changes
+one section instead of re-sending the document: `patch_section` replaces exact text inside a section
+(each `find` must match one place; all edits apply or none do), and `write_section` with the same title
+rewrites a section when most of it changes. So the model generates about one copy of the document
 rather than one per correction, and each section is checked the moment it is written. Whole-document
 checks (template structure, conflicts recorded) run in `check_document` and again when the run ends.
 

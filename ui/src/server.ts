@@ -13,7 +13,7 @@ import {
   safeJoin, sha256, snapshotFiles, summarizeArgs, unknownEvidenceCitations, type Freshness, type Risk,
 } from "./evidence.js";
 import { auditChange, formatAudit, proposalsWithoutTests } from "./audit.js";
-import { SectionedDoc } from "./sections.js";
+import { SectionedDoc, applyEdits, type Edit } from "./sections.js";
 import { contentKey, countCitations, countIds, destructiveSave, implausiblyShort } from "./guards.js";
 import {
   citationIssues, citationKey, constructsProhibitedBy, formatCitationReport, formatConflicts, formatDeviation,
@@ -1085,6 +1085,34 @@ function writeSectionTool(): Anthropic.Tool {
   };
 }
 
+function patchSectionTool(): Anthropic.Tool {
+  return {
+    name: "patch_section",
+    description:
+      "Change part of a section you already wrote with write_section, without sending the rest of it. To fix a finding, give the exact text to change (`find`) and what it becomes (`replace`); a few edits can go in one call. Each `find` must match exactly one place in the section, so include enough surrounding words to be unique. Use this instead of rewriting the section whenever the fix is a sentence, a field or a requirement — it costs a fraction of a rewrite. All edits apply or none do. Use write_section when the section needs restructuring or most of it changes.",
+    input_schema: {
+      type: "object",
+      properties: {
+        artifact: { type: "string", description: "File name of the document, ending in .md." },
+        section: { type: "string", description: "Title of the section to change, as it was written." },
+        edits: {
+          type: "array",
+          description: "The changes, applied in order. An empty `replace` deletes the text.",
+          items: {
+            type: "object",
+            properties: {
+              find: { type: "string", description: "Exact text now in the section. It must appear once." },
+              replace: { type: "string", description: "What it becomes." },
+            },
+            required: ["find", "replace"],
+          },
+        },
+      },
+      required: ["artifact", "section", "edits"],
+    } as Anthropic.Tool.InputSchema,
+  };
+}
+
 function checkDocumentTool(): Anthropic.Tool {
   return {
     name: "check_document",
@@ -1173,9 +1201,25 @@ async function handleWriteSection(
       `(${composed.length.toLocaleString("en-US")} characters), saved to \`${where[1]}\`.\n` +
       `Sections so far: ${titles.join(" · ")}.` +
       (notes.length
-        ? `\n\n**Checks on this section** — fix these by calling write_section again with the same title:\n\n${notes.join("\n\n")}`
+        ? `\n\n**Checks on this section** — fix these with patch_section (the exact text to change) — or write_section with the same title if most of the section changes:\n\n${notes.join("\n\n")}`
         : ""),
   };
+}
+
+async function handlePatchSection(
+  ctx: SectionContext, input: Record<string, unknown>
+): Promise<{ text: string; saved?: { name: string; content: string; path: string }; isError?: boolean }> {
+  const name = String(input.artifact ?? "").trim();
+  const section = String(input.section ?? "").trim();
+  const doc = ctx.docs.get(name);
+  const current = doc?.text(section) ?? null;
+  if (current === null)
+    return { isError: true, text: `Nothing to patch: no section “${section}” of ${name || "(none)"} has been written with write_section in this run. Write it with write_section first${doc ? ` (sections so far: ${doc.titles().join(" · ")})` : ""}.` };
+  const edits = Array.isArray(input.edits) ? (input.edits as Edit[]) : [];
+  const patched = applyEdits(current, edits);
+  if (!patched.ok) return { isError: true, text: `Not patched — ${patched.error} The section is unchanged.` };
+  const r = await handleWriteSection(ctx, { artifact: name, section, content: patched.text });
+  return { ...r, text: r.isError ? r.text : `Patched “${section}” (${patched.changes} edit${patched.changes > 1 ? "s" : ""}). ${r.text.replace(/^Section “[^”]*” replaced\.\s*/, "")}` };
 }
 
 function handleCheckDocument(ctx: SectionContext, input: Record<string, unknown>): { text: string; isError?: boolean } {
@@ -1187,7 +1231,7 @@ function handleCheckDocument(ctx: SectionContext, input: Record<string, unknown>
   const size = `${doc.titles().length} sections, ${composed.length.toLocaleString("en-US")} characters`;
   return {
     text: notes.length
-      ? `**Whole-document checks on ${name}** (${size}) — rewrite the sections concerned with write_section, then check again:\n\n${notes.join("\n\n")}`
+      ? `**Whole-document checks on ${name}** (${size}) — fix each with patch_section (or rewrite the section with write_section if most of it changes), then check again:\n\n${notes.join("\n\n")}`
       : `The server's whole-document checks found nothing to report on ${name} (${size}). They are heuristics over text, not a judgment that every statement is true.`,
   };
 }
@@ -1733,7 +1777,7 @@ async function runAgent(
   // Agents that write from source documents declare compare_sources; they also get the
   // stricter rules below (every input document read, citations checked against the text).
   const isDocAgent = agent.tools.includes("compare_sources");
-  if (isDocAgent) tools = [...tools, compareSourcesTool(), writeSectionTool(), checkDocumentTool()];
+  if (isDocAgent) tools = [...tools, compareSourcesTool(), writeSectionTool(), patchSectionTool(), checkDocumentTool()];
   let conflictsFound: TermConflict[] = [];
   const sectionDocs = new Map<string, SectionedDoc>();
   const sectionPaths = new Map<string, string>();
@@ -1870,7 +1914,7 @@ async function runAgent(
               type: "text",
               text:
                 `Before this is final, the server ran its whole-document checks on \`${lastDocSaved.name}\` and found:\n\n${open.join("\n\n")}\n\n` +
-                `Fix what you can by rewriting the sections concerned with write_section (or save_artifact for a document written in one piece), ` +
+                `Fix what you can with patch_section, or by rewriting the sections concerned with write_section (or save_artifact for a document written in one piece), ` +
                 `then give your final answer. If something cannot be fixed from the sources, say so plainly in the answer.`,
             }],
           });
@@ -1977,6 +2021,13 @@ async function runAgent(
           }
           if (tu.name === "write_section" && isDocAgent) {
             const r = await handleWriteSection({ ws, project, agentId: agent.id, task: userMessage, conflicts: conflictsFound, docs: sectionDocs, refused: refusedSaves, paths: sectionPaths }, args);
+            resultText = r.text;
+            if (r.saved) {
+              savedThisRun.add(r.saved.path);
+              lastDocSaved = { name: r.saved.name, content: r.saved.content };
+            }
+          } else if (tu.name === "patch_section" && isDocAgent) {
+            const r = await handlePatchSection({ ws, project, agentId: agent.id, task: userMessage, conflicts: conflictsFound, docs: sectionDocs, refused: refusedSaves, paths: sectionPaths }, args);
             resultText = r.text;
             if (r.saved) {
               savedThisRun.add(r.saved.path);

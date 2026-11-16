@@ -3,7 +3,7 @@
  *
  *   npm test
  */
-import { SectionedDoc, sectionKey } from "../src/sections.js";
+import { SectionedDoc, applyEdits, sectionKey } from "../src/sections.js";
 
 let failures = 0;
 const fail = (m: string) => { console.error(m); failures++; };
@@ -59,6 +59,36 @@ const eq = (label: string, got: unknown, want: unknown) => {
   eq("two numbered sections with the same name coexist", d.titles().filter((t) => /Billing/.test(t)), ["3.1 Billing", "6.1 Billing"]);
   eq("a replacement matches the title ignoring case", d.set("business objectives", "## Business Objectives\n\ntwo"), true);
   eq("sectionKey ignores punctuation and case", sectionKey("  Open  Questions: "), "open questions");
+}
+
+{
+  // patch_section: change part of a section; each edit lands in exactly one place, all or none.
+  const sec = "## 4. Target Audience\n\n#### REQ-001\n\n**Stakeholder Type:** Branch Manager\n\n**Priority:** Not specified.\n\n#### REQ-002\n\n**Stakeholder Type:** Branch Manager\n\n**Priority:** High\n";
+  const ok = applyEdits(sec, [{ find: "**Priority:** High", replace: "**Priority:** Not specified." }]);
+  eq("one edit is applied", ok.ok && ok.text.includes("**Priority:** High"), false);
+  eq("and nothing else changes", ok.ok && ok.text.length, sec.length + "Not specified.".length - "High".length);
+  const twice = applyEdits(sec, [{ find: "**Stakeholder Type:** Branch Manager", replace: "x" }]);
+  eq("text that appears twice is refused, with the count", !twice.ok && /appears 2 times/.test(twice.error), true);
+  const missing = applyEdits(sec, [{ find: "**Priority:** Critical", replace: "x" }]);
+  eq("text that is not there is refused", !missing.ok && /not found/.test(missing.error), true);
+  const partial = applyEdits(sec, [{ find: "**Priority:** High", replace: "**Priority:** Not specified." }, { find: "no such text", replace: "y" }]);
+  eq("one bad edit applies none: the result is an error, not a half-patched section", partial.ok, false);
+  const chained = applyEdits(sec, [
+    { find: "REQ-002\n\n**Stakeholder Type:** Branch Manager", replace: "REQ-002\n\n**Stakeholder Type:** Not specified in source" },
+    { find: "Not specified in source\n\n**Priority:** High", replace: "Not specified in source\n\n**Priority:** Not specified." },
+  ]);
+  eq("a later edit sees the result of an earlier one", chained.ok && !chained.text.includes("High") && chained.text.includes("Not specified in source"), true);
+  const wrapped = applyEdits("The system shall hold a\ncredit limit for every customer.", [{ find: "hold a credit limit", replace: "hold a limit" }]);
+  eq("a line break where the agent wrote a space does not defeat the match", wrapped.ok && wrapped.text, "The system shall hold a limit for every customer.");
+  eq("an empty replacement deletes", applyEdits("keep this. drop this.", [{ find: " drop this.", replace: "" }]).ok, true);
+  eq("an empty find is refused", applyEdits("abc", [{ find: "  ", replace: "x" }]).ok, false);
+  eq("no edits is refused", applyEdits("abc", []).ok, false);
+  eq("regex characters in the text are literal", applyEdits("cost (USD) $5.00 [net]", [{ find: "(USD) $5.00 [net]", replace: "free" }]).ok, true);
+  const d = new SectionedDoc();
+  d.set("4. Target Audience", sec);
+  const patched = applyEdits(d.text("4. Target Audience")!, [{ find: "**Priority:** High", replace: "**Priority:** Not specified." }]);
+  if (patched.ok) d.set("4. Target Audience", patched.text);
+  eq("a patched section is replaced in place", d.titles(), ["4. Target Audience"]);
 }
 
 eq("an empty document composes to a single newline", new SectionedDoc().compose(), "\n");
