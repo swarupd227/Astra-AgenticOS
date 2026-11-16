@@ -950,8 +950,10 @@ async function auditProposal(
 // ---------------------------------------------------------------------------
 
 /** Every cited source the server can read: Golden items this project sees, and its input documents. */
-function citedSources(content: string, project: Project | null): Map<string, string> {
+function citedSources(content: string, project: Project | null, task = ""): Map<string, string> {
   const out = new Map<string, string>();
+  // The task prompt is a source like any other: requirements that cite it were exempt from the citation and strength checks.
+  if (task.length > 200 && /task prompt/i.test(content)) out.set(citationKey("task prompt"), task);
   const visible = new Map(golden.selectedFor(project?.golden, project?.id).map((i) => [i.id.toUpperCase(), i.id]));
   for (const m of content.matchAll(/GLD-[A-Z]+-\d+/gi)) {
     const id = visible.get(m[0].toUpperCase());
@@ -1001,7 +1003,7 @@ function documentChecks(
   if (fromDocuments) {
     const others = new Map<string, string>();
     if (task.length > 200) others.set("task prompt", task);
-    const cited = citedSources(content, project);
+    const cited = citedSources(content, project, task);
     const report = citationIssues(content, cited, others);
     const cit = formatCitationReport(report) ?? (whole ? noCheckableCitations(report, content.length) : null);
     if (cit) notes.push(cit);

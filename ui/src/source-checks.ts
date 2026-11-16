@@ -43,7 +43,7 @@ const MIN_BIGRAMS = 4;
 export const NOT_FOUND_BELOW = 0.3;
 export const WEAK_BELOW = 0.5;
 
-const CITE = /GLD-[A-Z]+-\d+(?:@\d+)?|inputs\/[^\s,;)\]*]+\.(?:md|txt)/gi;
+const CITE = /GLD-[A-Z]+-\d+(?:@\d+)?|inputs\/[^\s,;)\]*]+\.(?:md|txt)|\btask prompt(?=\s*[—–]|\s+-\s|\s*:\s*[“\"])/gi;
 
 /** `GLD-FS-001@1` and `gld-fs-001` are the same citation. */
 export function citationKey(c: string): string {
@@ -279,13 +279,14 @@ export type StrengthIssue = {
   direction?: "weakened";
 };
 
-type Sentences = { text: string; bi: Set<string> }[];
+type Sentences = { text: string; bi: Set<string>; words: Set<string> }[];
 /** Per call, never kept: the same citation id can name different text on the next save. */
 function sentencesOf(cache: Map<string, Sentences>, key: string, text: string): Sentences {
   let s = cache.get(key);
   if (!s) {
-    s = text.split(/(?<=[.!?])\s+|\n+/).map((t) => t.trim()).filter((t) => t.length > 20 && !t.includes("?"))
-      .map((t) => ({ text: t, bi: new Set(bigramList(contentWords(t))) }));
+    // "Invoice may include:" with its list on the next line is one sentence; apart, the modal and what it governs never met.
+    s = text.replace(/:[ \t]*\r?\n(?:[ \t]*\r?\n)*[ \t]*/g, ": ").split(/(?<=[.!?])\s+|\n+/).map((t) => t.trim()).filter((t) => t.length > 20 && !t.includes("?"))
+      .map((t) => ({ text: t, bi: new Set(bigramList(contentWords(t))), words: new Set(contentWords(t).map(stem)) }));
     cache.set(key, s);
   }
   return s;
@@ -312,7 +313,10 @@ export function strengthIssues(artifact: string, sources: Map<string, string>): 
       const claimLevel = strengthOf(claim);
       if (claimLevel === null) continue;
       const claimBi = bigramList(contentWords(claim));
-      if (claimBi.length < MIN_BIGRAMS) continue;
+      // Three is enough here: the match below needs every one of them in a single source sentence, and "The invoice shall include LDW charges"
+      // (three pairs) was the "may include" list of the task prompt made mandatory.
+      if (claimBi.length < 3) continue;
+      const claimStems = contentWords(claim).map(stem);
       for (const c of new Set((u.text.match(CITE) ?? []).map(citationKey))) {
         const text = sources.get(c);
         if (!text) continue;
@@ -322,7 +326,12 @@ export function strengthIssues(artifact: string, sources: Map<string, string>): 
           const ratio = s.bi.size ? shared / s.bi.size : 0;
           // A short claim inside a long source sentence is the same sentence, though little of the sentence is in the claim.
           const contained = shared / claimBi.length >= 0.7;
-          if (shared >= 3 && (ratio >= 0.5 || contained) && (!best || shared > best.shared || (shared === best.shared && ratio > best.ratio))) best = { text: s.text, shared, ratio };
+          // A lead-in with its list ("Quote may convert to: Reservation Agreement") is a few words long: a claim that merely shares them
+          // is not that sentence, so for those the claim must be inside the sentence, not the other way round.
+          // A claim of three to five words has too few pairs to prove it is the sentence; all of its words in one
+          // source sentence does ("The invoice shall include LDW charges" against a list that "may include" them).
+          const short = claimStems.length >= 4 && claimStems.length <= 5 && claimStems.every((w) => s.words.has(w));
+          if (((shared >= 3 && ((ratio >= 0.5 && !s.text.includes(": ")) || contained)) || short) && (!best || shared > best.shared || (shared === best.shared && ratio > best.ratio))) best = { text: s.text, shared, ratio };
         }
         if (!best) continue;
         const hedged = HEDGE.test(best.text) && !HEDGE.test(claim);

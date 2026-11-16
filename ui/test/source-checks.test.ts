@@ -434,6 +434,19 @@ eq("a mention nowhere near a prohibition does not count",
     strengthIssues("**Current Business Challenge:** `inputs/a.md` (Return) states: “Only when equipment comes back can the business accurately determine how long the equipment was rented, whether cleaning is required, whether damage occurred.”\n", quoted), []);
   eq("a modal outside the quotation still counts",
     strengthIssues("REQ-8 — The business is required to accurately determine how long the equipment was rented, whether cleaning is needed, whether damage occurred. Source: inputs/a.md", quoted).map((h) => [h.claimWord, h.sourceWord]), [["is required", "can"]]);
+  // The task prompt is a source like any other. A list under "may include:" that a requirement makes mandatory is a finding;
+  // before, a requirement citing "task prompt" was never compared with it.
+  const prompt = new Map([[citationKey("task prompt"), "Agreement is the invoice source.\n\nInvoice may include:\n\nRental Charges Misc Charges LDW Charges Sales Items Taxes\n\nInvoice Lifecycle:\n\nGenerate → Review → Finalize"]]);
+  const promptReq = (statement: string) => `#### REQ-1\n\n**Requirement Statement:** ${statement}\n\n**Source Reference:** task prompt — Invoice Processing: “Invoice may include: Rental Charges, Misc Charges, LDW Charges, Sales Items, Taxes.”\n\n**Priority:** Not specified.\n`;
+  eq("a 'may include' list made mandatory is found, citing the task prompt",
+    strengthIssues(promptReq("The invoice shall include LDW Charges."), prompt).map((h) => [h.citation, h.claimWord, h.sourceWord]), [["task prompt", "shall", "may"]]);
+  eq("keeping the 'may' is not a finding", strengthIssues(promptReq("The invoice may include LDW Charges."), prompt), []);
+  eq("a claim about something else that shares a few words is not matched to the list",
+    strengthIssues(promptReq("Pricing must flow forward consistently when an invoice is generated from the agreement."), prompt), []);
+  eq("a requirement citing the task prompt is checked for wording too",
+    citationIssues(promptReq("The system shall support rebilling, allowing corrected invoices to be regenerated after adjustments."), prompt).issues.map((i) => i.kind), ["not-found"]);
+  eq("prose that merely mentions the task prompt cites nothing",
+    citationIssues("Priority is applied as defined by the task prompt: the order below.", prompt).checked, 0);
   // Two requirements with no heading between them are two units, not one long claim.
   const two = make("Invoices should be emailed to the customer after approval by finance.", true) + "\n" + make(fabricated, true).replace("REQ-1", "REQ-2");
   eq("the next requirement's fields are not merged into the first", citationIssues(two, sources).issues.map((i) => i.claim.slice(0, 20)), ["The vendor portal sh"]);
