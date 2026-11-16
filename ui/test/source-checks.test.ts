@@ -428,6 +428,12 @@ eq("a mention nowhere near a prohibition does not count",
     strengthIssues(make("The system should maintain credit status values including at minimum: Approved, COD (Cash on Delivery), and Hold. Additional statuses may emerge during discovery.", true).replace("a.md", "a.md"), mixed), []);
   eq("but hardening that source's should to shall still is",
     strengthIssues(make("The system shall maintain credit status values including at minimum: Approved, COD (Cash on Delivery), and Hold. Additional statuses may emerge during discovery.", true), mixed).map((h) => [h.claimWord, h.sourceWord]), [["shall", "should"]]);
+  // Quoted words are the source's, not the claim's: a paragraph that quotes a source sentence with "required" in it is not a mandate.
+  const quoted = new Map([[citationKey("inputs/a.md"), "Only when equipment comes back can the business accurately determine how long the equipment was rented, whether cleaning is needed, whether damage occurred."]]);
+  eq("a modal inside quotation marks is not the claim's",
+    strengthIssues("**Current Business Challenge:** `inputs/a.md` (Return) states: “Only when equipment comes back can the business accurately determine how long the equipment was rented, whether cleaning is required, whether damage occurred.”\n", quoted), []);
+  eq("a modal outside the quotation still counts",
+    strengthIssues("REQ-8 — The business is required to accurately determine how long the equipment was rented, whether cleaning is needed, whether damage occurred. Source: inputs/a.md", quoted).map((h) => [h.claimWord, h.sourceWord]), [["is required", "can"]]);
   // Two requirements with no heading between them are two units, not one long claim.
   const two = make("Invoices should be emailed to the customer after approval by finance.", true) + "\n" + make(fabricated, true).replace("REQ-1", "REQ-2");
   eq("the next requirement's fields are not merged into the first", citationIssues(two, sources).issues.map((i) => i.claim.slice(0, 20)), ["The vendor portal sh"]);
@@ -458,6 +464,9 @@ eq("a mention nowhere near a prohibition does not count",
   const u = ungroundedFields(doc, src);
   eq("a value no source gives for that role is found", u.map((x) => x.entity), ["Operations Team", "Sales Group"]);
   eq("a value a source gives for that role passes, and 'not specified' passes", u.some((x) => x.entity === "Finance Team" || x.entity === "Branch Manager"), false);
+  // As a live run wrote it: italic "Not specified" (and with a trailing note) is the answer asked for, not an invented value.
+  const italic = ["### Billing Function", "**Operational Frequency:** *Not specified in source*", "- **Operational Frequency:** *Not specified in source — described as an administrative capability*", "### Sales Group", "**Operational Frequency:** *Daily*"].join("\n");
+  eq("italic 'Not specified in source' passes; an italic invented value is still found", ungroundedFields(italic, src).map((x) => x.entity), ["Sales Group"]);
 }
 {
   // Review fixes: a bare aside is not a definition, and one-letter prefixes count.

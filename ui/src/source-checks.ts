@@ -306,7 +306,9 @@ export function strengthIssues(artifact: string, sources: Map<string, string>): 
     // One claim sentence at a time. A statement that says "should maintain credit status" and then, in its own words,
     // "additional statuses may emerge" holds two strengths; comparing its strongest modal with the source sentence
     // for the second was a false finding that a live run spent six rewrites on.
-    for (const claim of u.claim.split(/(?<=[.!?])\s+/)) {
+    // Words inside quotation marks are the source's own (the quote check holds them to it), not the document's claim:
+    // "…states: “…whether cleaning is required…”" was read as a requirement made mandatory.
+    for (const claim of u.claim.replace(/[“"][^”"]{8,}[”"]/g, " ").split(/(?<=[.!?])\s+/)) {
       const claimLevel = strengthOf(claim);
       if (claimLevel === null) continue;
       const claimBi = bigramList(contentWords(claim));
@@ -945,7 +947,8 @@ export function ungroundedFields(doc: string, sourceTexts: string[]): Ungrounded
     }
     const m = FIELD_LINE.exec(line);
     if (!m || !GROUNDED_FIELDS.test(m[1].trim())) continue;
-    const value = m[2].replace(/[*_.\s]+$/g, "").trim();
+    // "*Not specified in source*" is the answer this check asks for; a leading italic marker hid it from NO_VALUE.
+    const value = m[2].replace(/^[*_\s]+|[*_.\s]+$/g, "").trim();
     if (!value || NO_VALUE.test(value) || !entityWords.length) continue;
     const terms = value.split(/\s*[,;/]\s*|\s+and\s+/i).map((t) => contentWords(t).map(stem)).filter((t) => t.length);
     const ungrounded = terms.filter((t) => !sentences.some((s) => t.every((w) => s.has(w)) && entityWords.some((e) => s.has(e))));
