@@ -79,11 +79,39 @@ function citationUnits(md: string): Unit[] {
     const line = lines[i];
     if (!line.trim() || /^#{1,6}\s/.test(line) || /^-{3,}\s*$/.test(line)) continue;
     if (labelled.test(line)) {
+      // The fields of one requirement: on adjacent lines, or — as agents write them — with a blank line between
+      // each, and the value sometimes on the line after a label that stands alone. Read line by line, the
+      // statement and its Source Reference were separate units and the statement was compared with nothing.
+      const segs: { label: string; body: string[] }[] = [];
+      let j = i;
+      for (;;) {
+        const lm = /^\s*\*\*([^*\n]+):\*\*\s*(.*)$/.exec(lines[j])!;
+        const seg = { label: lm[1].trim(), body: lm[2] ? [lm[2]] : [] };
+        if (!lm[2]) {
+          while (j + 1 < lines.length && lines[j + 1].trim() && !labelled.test(lines[j + 1]) && !/^#{1,6}\s/.test(lines[j + 1]) &&
+            !/^\s*(?:[-*+]\s|\d+[.)]\s)/.test(lines[j + 1]) && !ID_LED.test(lines[j + 1])) seg.body.push(lines[++j]);
+        }
+        segs.push(seg);
+        let k = j + 1;
+        while (k < lines.length && !lines[k].trim()) k++;
+        // A label seen twice means the next requirement has begun.
+        if (k < lines.length && labelled.test(lines[k]) && !segs.some((s) => s.label.toLowerCase() === /^\s*\*\*([^*\n]+):\*\*/.exec(lines[k])![1].trim().toLowerCase())) j = k;
+        else break;
+      }
+      const stmt = segs.find((s) => /^(?:requirement )?statement$/i.test(s.label));
+      if (stmt) {
+        i = j;
+        // Priority, Dependencies and Open Questions cite their own sources and are checked as their own lines.
+        const own = (s: { label: string }) => /priority|dependenc|open question/i.test(s.label);
+        const text = segs.filter((s) => !own(s)).map((s) => `**${s.label}:** ${s.body.join(" ")}`).join("\n");
+        units.push({ text, claim: plain(stmt.body.join(" ")) });
+        continue;
+      }
+      // Other labelled blocks (context, inputs and outputs, stakeholders) are prose a field at a time: only lines
+      // that sit together form a unit. Joining their fields made one long claim that matched nothing.
       const block = [line];
       while (i + 1 < lines.length && labelled.test(lines[i + 1])) block.push(lines[++i]);
-      const text = block.join("\n");
-      const stmt = block.find((l) => /^\s*\*\*(?:Requirement )?Statement:\*\*/i.test(l));
-      units.push({ text, claim: plain((stmt ?? block.filter((l) => !/Source|Priority|Dependenc|Open Question/i.test(l)).join(" ")).replace(/^\s*\*\*[^*]+:\*\*/, "")) });
+      units.push({ text: block.join("\n"), claim: plain(block.filter((l) => !/Source|Priority|Dependenc|Open Question/i.test(l)).join(" ").replace(/^\s*\*\*[^*]+:\*\*/, "")) });
       continue;
     }
     // `REQ-001 — statement` with its `*Source: …*` and notes on the lines below: one unit.
@@ -286,7 +314,9 @@ export function strengthIssues(artifact: string, sources: Map<string, string>): 
       for (const s of sentencesOf(cache, c, text)) {
         let shared = 0; for (const b of claimBi) if (s.bi.has(b)) shared++;
         const ratio = s.bi.size ? shared / s.bi.size : 0;
-        if (shared >= 3 && ratio >= 0.5 && (!best || shared > best.shared || (shared === best.shared && ratio > best.ratio))) best = { text: s.text, shared, ratio };
+        // A short claim inside a long source sentence is the same sentence, though little of the sentence is in the claim.
+        const contained = shared / claimBi.length >= 0.7;
+        if (shared >= 3 && (ratio >= 0.5 || contained) && (!best || shared > best.shared || (shared === best.shared && ratio > best.ratio))) best = { text: s.text, shared, ratio };
       }
       if (!best) continue;
       const hedged = HEDGE.test(best.text) && !HEDGE.test(u.claim);
@@ -810,7 +840,24 @@ export function formatOmittedDependencies(o: OmittedDependency[], max = 10): str
 
 // --- Quotes must be verbatim --------------------------------------------------------------
 
-export type QuoteIssue = { quote: string; kind: "reworded" | "not-in-any-source" };
+export type QuoteIssue = { quote: string; kind: "reworded" | "not-in-any-source" | "joined" };
+
+/**
+ * A source split into the units a quotation may sit inside: a paragraph, one list item, one heading, one table
+ * row. Lines that merely continue a paragraph (hard-wrapped prose) stay with it, so wrapping is not a boundary.
+ */
+export function sourceBlocks(text: string): string[] {
+  const blocks: string[] = [];
+  let cur = "";
+  const flush = () => { if (cur.trim()) blocks.push(cur); cur = ""; };
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) { flush(); continue; }
+    if (/^\s*(?:[-*+•]\s|\d+[.)]\s|#{1,6}\s|\|)/.test(line)) flush();
+    cur += (cur ? " " : "") + line;
+  }
+  flush();
+  return blocks;
+}
 
 /**
  * Text inside quotation marks is a promise that a source says exactly this. A live document put a
@@ -819,7 +866,16 @@ export type QuoteIssue = { quote: string; kind: "reworded" | "not-in-any-source"
  * checked one by one.
  */
 export function quoteIssues(doc: string, sourceTexts: string[]): { checked: number; issues: QuoteIssue[] } {
-  const hay = ` ${sourceTexts.map(plainKey).join(" ")} `;
+  // "|" survives in no quote key, so a match cannot run across it. Only hard boundaries get one: a heading, a table
+  // row, the end of a file. A lead-in line with its bullets, or consecutive bullets, read as one passage in order
+  // (measured on live runs: half of all quotes) and are not a defect; `whole` is the boundary-blind view.
+  const hard = (b: string) => /^\s*(?:#{1,6}\s|\|)/.test(b);
+  const hay = ` ${sourceTexts.map((t) => {
+    let out = ""; let prev = "";
+    for (const b of sourceBlocks(t)) { out += (out ? (hard(b) || hard(prev) ? " | " : " ") : "") + plainKey(b); prev = b; }
+    return out;
+  }).join(" | ")} `;
+  const whole = ` ${sourceTexts.map(plainKey).join(" ")} `;
   const hayBi = bigramSet(sourceTexts.join("\n"));
   let checked = 0;
   const issues: QuoteIssue[] = [];
@@ -832,6 +888,7 @@ export function quoteIssues(doc: string, sourceTexts: string[]): { checked: numb
       seen.add(key);
       checked++;
       if (hay.includes(` ${key} `)) continue;
+      if (whole.includes(` ${key} `)) { issues.push({ quote: f.replace(/\s+/g, " ").slice(0, 140), kind: "joined" }); continue; }
       const bg = bigramList(contentWords(f));
       const score = bg.length ? bg.filter((b) => hayBi.has(b)).length / bg.length : 0;
       issues.push({ quote: f.replace(/\s+/g, " ").slice(0, 140), kind: score >= 0.6 ? "reworded" : "not-in-any-source" });
@@ -843,12 +900,12 @@ export function quoteIssues(doc: string, sourceTexts: string[]): { checked: numb
 export function formatQuoteIssues(r: { checked: number; issues: QuoteIssue[] }, max = 15): string | null {
   if (!r.issues.length) return null;
   const lines = r.issues.slice(0, max).map(
-    (i) => `- “${i.quote}” — ${i.kind === "reworded" ? "close to a source, but not the source's words" : "no source contains this"}`
+    (i) => `- “${i.quote}” — ${i.kind === "reworded" ? "close to a source, but not the source's words" : i.kind === "joined" ? "runs across a heading, table row or document boundary of the source" : "no source contains this"}`
   );
   return (
     `⚠ **Quotation marks around text that is not verbatim — ${r.issues.length} of ${r.checked} quoted passages:**\n${lines.join("\n")}` +
     (r.issues.length > max ? `\n- …and ${r.issues.length - max} more.` : "") +
-    `\nInside quotation marks, copy the source exactly (use “…” to skip words). To summarise a list or paraphrase, drop the quotation marks and cite the source.`
+    `\nInside quotation marks, copy one passage of the source exactly, not across a heading or table row (use “…” to skip words). To summarise a list or paraphrase, drop the quotation marks and cite the source.`
   );
 }
 

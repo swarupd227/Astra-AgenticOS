@@ -384,6 +384,55 @@ eq("a mention nowhere near a prohibition does not count",
   eq("short quotes are not checked", quoteIssues("Status is “Not Specified in Source”.", src).checked, 0);
 }
 {
+  // Quotes may read across a lead-in line and its bullets, or across bullets; not across a heading, a table row or a file.
+  const src = [
+    "## Billing\n\nCredit checks should occur during:\n\n- Quote Creation\n- Reservation Creation\n- Agreement Creation\n\nThe invoice lists every charge applied.\n\n## One-Time Charges\n\nCharged once during the rental lifecycle.\n\n| Fee | Setup Fee for new sites |\n| Fee | Delivery Fee per trip |",
+    "Final invoices are issued at the end of the rental period",
+  ];
+  const doc = [
+    "REQ-1 — “Credit checks should occur during: Quote Creation, Reservation Creation, Agreement Creation”",
+    "REQ-2 — “Reservation Creation, Agreement Creation, The invoice lists every charge applied.”",
+    "REQ-3 — “One-Time Charges — Charged once during the rental lifecycle.”",
+    "REQ-4 — “Charged once during the rental lifecycle.”",
+    "REQ-5 — “Setup Fee for new sites Fee Delivery Fee per trip”",
+  ].join("\n");
+  const q = quoteIssues(doc, src);
+  const kinds = (re: RegExp) => q.issues.find((i) => re.test(i.quote))?.kind ?? null;
+  eq("a lead-in with its bullets is one passage", kinds(/^Credit checks/), null);
+  eq("consecutive bullets and a paragraph are one passage", kinds(/^Reservation Creation, Agreement/), null);
+  eq("a heading joined to its body is flagged", kinds(/^One-Time Charges —/), "joined");
+  eq("the body on its own is fine", kinds(/^Charged once/), null);
+  eq("two table rows run together are flagged", kinds(/^Setup Fee/), "joined");
+  const files = quoteIssues("REQ-9 — “the delivery record is closed and then final invoices are issued”", ["Notes: the delivery record is closed", "and then final invoices are issued"]);
+  eq("the end of one file joined to the start of the next is flagged", files.issues.map((i) => i.kind), ["joined"]);
+}
+{
+  // Agents write a requirement's fields with a blank line between each, sometimes with the value under a lone label.
+  // Read line by line, the statement and its Source Reference were separate and the statement was checked against nothing.
+  const sources = new Map([[citationKey("inputs/a.md"), "The requirement explicitly references rebilling. This suggests corrected invoices can be regenerated after adjustments are made. Invoices should be emailed to the customer after approval by finance."]]);
+  const fabricated = "The vendor portal shall expose a quantum ledger for zebras and moonbeams.";
+  const make = (statement: string, alone: boolean) =>
+    `#### REQ-1 — T\n\n**Requirement Statement:**${alone ? "\n" : " "}${statement}\n\n**Source Reference:** \`inputs/a.md\` — Rebill.\n\n**Priority:** Not specified.\n`;
+  for (const alone of [false, true]) {
+    const where = alone ? "a statement under a lone label" : "an inline statement";
+    eq(`${where}, a blank line from its source, is checked against it`, citationIssues(make(fabricated, alone), sources).issues.map((i) => i.kind), ["not-found"]);
+    eq(`${where} that the source supports passes`, citationIssues(make("Invoices should be emailed to the customer after approval by finance.", alone), sources).issues, []);
+    eq(`${where} that hardens a hedge is found`, strengthIssues(make("The system shall support rebilling, allowing corrected invoices to be regenerated after adjustments.", alone), sources).map((h) => [h.claimWord, h.sourceWord]), [["shall", "suggests"]]);
+  }
+  // A short claim is the same sentence as a long source one when most of the claim sits inside it.
+  const long = new Map([[citationKey("inputs/a.md"), "During return processing, the system should capture operational return details such as return date, meter readings, fuel level and equipment condition for every returned unit."]]);
+  eq("a short claim inside a long 'should' sentence is matched to it", strengthIssues("REQ-4 — The return process shall capture meter readings and fuel level. Source: inputs/a.md", long).map((h) => [h.claimWord, h.sourceWord]), [["shall", "should"]]);
+  // Two requirements with no heading between them are two units, not one long claim.
+  const two = make("Invoices should be emailed to the customer after approval by finance.", true) + "\n" + make(fabricated, true).replace("REQ-1", "REQ-2");
+  eq("the next requirement's fields are not merged into the first", citationIssues(two, sources).issues.map((i) => i.claim.slice(0, 20)), ["The vendor portal sh"]);
+  // An Open Question cites its own source; it is not part of the statement's evidence.
+  const withOq = make("Invoices should be emailed to the customer after approval by finance.", true) + "\n**Open Questions:**\n- Who approves? (`inputs/a.md` — approval)\n";
+  eq("open questions are not folded into the statement", citationIssues(withOq, sources).issues, []);
+  // Labelled blocks without a Requirement Statement keep their old, adjacent-lines-only grouping.
+  const prose = "**Business Problem:** Delivery is a risk.\n\n**Source Reference:** `inputs/a.md` — Rebill.\n";
+  eq("a non-requirement block is not joined to its source line", citationIssues(prose, sources).checked, 0);
+}
+{
   // A hedged source is below "may"; softening an obligation is its own finding.
   const sources = new Map([[citationKey("inputs/a.md"), "This suggests that corrected invoices can be regenerated after review. Invoices must be approved by finance before release to customers."]]);
   const hardened = strengthIssues("REQ-1 — Corrected invoices should be regenerated after review. Source: inputs/a.md", sources);
