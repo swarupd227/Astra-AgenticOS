@@ -10,7 +10,7 @@
 import {
   coverageGaps, formatCoverageGaps, danglingReferences, formatDanglingReferences, omittedDependencies, quoteIssues, requirementText, scopeLines, ungroundedFields,
   dependencyIssues, formatDependencyIssues, formatStrengthIssues, strengthIssues, strengthOf,
-  citationIssues, citationKey, constructsProhibitedBy, extractDefinitions, formatCitationReport,
+  citationIssues, citationKey, citesTaskPrompt, constructsProhibitedBy, extractDefinitions, formatCitationReport,
   formatInventedRoles, inventedRoles, noCheckableCitations, prohibitedUsed, templateDeviations, termConflicts,
   unaddressedConflicts,
 } from "../src/source-checks.js";
@@ -445,8 +445,19 @@ eq("a mention nowhere near a prohibition does not count",
     strengthIssues(promptReq("Pricing must flow forward consistently when an invoice is generated from the agreement."), prompt), []);
   eq("a requirement citing the task prompt is checked for wording too",
     citationIssues(promptReq("The system shall support rebilling, allowing corrected invoices to be regenerated after adjustments."), prompt).issues.map((i) => i.kind), ["not-found"]);
+  eq("a source reference to the task prompt is detected, in any case", ["**Source Reference:** Task Prompt — Billing", "task prompt — Billing", "task prompt: “Billing”"].map(citesTaskPrompt), [true, true, true]);
+  eq("prose that mentions the task prompt is not a citation of it", ["as defined by the task prompt:", "the task prompt says"].map(citesTaskPrompt), [false, false]);
   eq("prose that merely mentions the task prompt cites nothing",
     citationIssues("Priority is applied as defined by the task prompt: the order below.", prompt).checked, 0);
+  // A bullet list belongs to the lead-in above it: a claim naming every item is that sentence, whatever its modal.
+  const bullets = new Map([[citationKey("inputs/a.md"), "Credit Validation\n\nCredit checks should occur during:\n\n-   Quote Creation\n-   Reservation Creation\n-   Agreement Creation\n\nThe process should also support credit memos, rebills, and financial posting to Accounts Receivable."]]);
+  const bulletReq = (statement: string) => make(statement, false);
+  eq("a claim that names all the bullets and says 'must' is found",
+    strengthIssues(bulletReq("Credit checks must occur during Quote creation, Reservation creation, and Agreement creation."), bullets).map((h) => [h.claimWord, h.sourceWord]), [["must", "should"]]);
+  eq("keeping the 'should' is not a finding",
+    strengthIssues(bulletReq("Credit checks should occur during Quote creation, Reservation creation, and Agreement creation."), bullets), []);
+  eq("a very short claim is matched when all its words are in one 'should' sentence",
+    strengthIssues(bulletReq("The process must support credit memos."), bullets).map((h) => [h.claimWord, h.sourceWord]), [["must", "should"]]);
   // Two requirements with no heading between them are two units, not one long claim.
   const two = make("Invoices should be emailed to the customer after approval by finance.", true) + "\n" + make(fabricated, true).replace("REQ-1", "REQ-2");
   eq("the next requirement's fields are not merged into the first", citationIssues(two, sources).issues.map((i) => i.claim.slice(0, 20)), ["The vendor portal sh"]);

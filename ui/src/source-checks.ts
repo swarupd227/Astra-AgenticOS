@@ -45,6 +45,11 @@ export const WEAK_BELOW = 0.5;
 
 const CITE = /GLD-[A-Z]+-\d+(?:@\d+)?|inputs\/[^\s,;)\]*]+\.(?:md|txt)|\btask prompt(?=\s*[—–]|\s+-\s|\s*:\s*[“\"])/gi;
 
+/** Whether the document cites the task prompt as a source ("task prompt — …"), so it must be loaded to be checked against. */
+export function citesTaskPrompt(content: string): boolean {
+  return (content.match(CITE) ?? []).some((c) => citationKey(c) === "task prompt");
+}
+
 /** `GLD-FS-001@1` and `gld-fs-001` are the same citation. */
 export function citationKey(c: string): string {
   return /^gld-/i.test(c) ? c.replace(/@\d+$/, "").toUpperCase() : c.toLowerCase();
@@ -279,13 +284,43 @@ export type StrengthIssue = {
   direction?: "weakened";
 };
 
+const LIST_ITEM = /^\s*(?:[-*+•]\s+|\d+[.)]\s+)/;
+/**
+ * A line that ends in a colon governs what follows it: the whole bullet list, or the single line under it. Left
+ * apart, "Credit checks should occur during:" kept only its first bullet and a claim naming all three points
+ * matched nothing, so "must occur" went unflagged.
+ */
+function joinLeadIns(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+    if (/:\s*$/.test(line) && line.trim().length > 3) {
+      let j = i + 1;
+      while (j < lines.length && !lines[j].trim()) j++;
+      if (j < lines.length) {
+        if (LIST_ITEM.test(lines[j])) {
+          while (j < lines.length) {
+            if (LIST_ITEM.test(lines[j])) { line += " " + lines[j].replace(LIST_ITEM, "").trim(); j++; }
+            else if (!lines[j].trim() && j + 1 < lines.length && LIST_ITEM.test(lines[j + 1])) j++;
+            else break;
+          }
+        } else if (!/^\s*#/.test(lines[j])) { line += " " + lines[j].trim(); j++; }
+        i = j - 1;
+      }
+    }
+    out.push(line);
+  }
+  return out.join("\n");
+}
+
 type Sentences = { text: string; bi: Set<string>; words: Set<string> }[];
 /** Per call, never kept: the same citation id can name different text on the next save. */
 function sentencesOf(cache: Map<string, Sentences>, key: string, text: string): Sentences {
   let s = cache.get(key);
   if (!s) {
     // "Invoice may include:" with its list on the next line is one sentence; apart, the modal and what it governs never met.
-    s = text.replace(/:[ \t]*\r?\n(?:[ \t]*\r?\n)*[ \t]*/g, ": ").split(/(?<=[.!?])\s+|\n+/).map((t) => t.trim()).filter((t) => t.length > 20 && !t.includes("?"))
+    s = joinLeadIns(text).split(/(?<=[.!?])\s+|\n+/).map((t) => t.trim()).filter((t) => t.length > 20 && !t.includes("?"))
       .map((t) => ({ text: t, bi: new Set(bigramList(contentWords(t))), words: new Set(contentWords(t).map(stem)) }));
     cache.set(key, s);
   }
@@ -315,7 +350,8 @@ export function strengthIssues(artifact: string, sources: Map<string, string>): 
       const claimBi = bigramList(contentWords(claim));
       // Three is enough here: the match below needs every one of them in a single source sentence, and "The invoice shall include LDW charges"
       // (three pairs) was the "may include" list of the task prompt made mandatory.
-      if (claimBi.length < 3) continue;
+      // Even two: "The system must support rebilling." is the whole of a requirement whose source says "should support".
+      if (claimBi.length < 2) continue;
       const claimStems = contentWords(claim).map(stem);
       for (const c of new Set((u.text.match(CITE) ?? []).map(citationKey))) {
         const text = sources.get(c);
@@ -330,7 +366,7 @@ export function strengthIssues(artifact: string, sources: Map<string, string>): 
           // is not that sentence, so for those the claim must be inside the sentence, not the other way round.
           // A claim of three to five words has too few pairs to prove it is the sentence; all of its words in one
           // source sentence does ("The invoice shall include LDW charges" against a list that "may include" them).
-          const short = claimStems.length >= 4 && claimStems.length <= 5 && claimStems.every((w) => s.words.has(w));
+          const short = claimStems.length >= 3 && claimStems.length <= 5 && claimStems.every((w) => s.words.has(w));
           if (((shared >= 3 && ((ratio >= 0.5 && !s.text.includes(": ")) || contained)) || short) && (!best || shared > best.shared || (shared === best.shared && ratio > best.ratio))) best = { text: s.text, shared, ratio };
         }
         if (!best) continue;

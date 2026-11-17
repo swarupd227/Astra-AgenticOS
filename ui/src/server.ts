@@ -16,7 +16,7 @@ import { auditChange, formatAudit, proposalsWithoutTests } from "./audit.js";
 import { SectionedDoc, applyEdits, type Edit } from "./sections.js";
 import { contentKey, countCitations, countIds, destructiveSave, implausiblyShort } from "./guards.js";
 import {
-  citationIssues, citationKey, constructsProhibitedBy, formatCitationReport, formatConflicts, formatDeviation,
+  citationIssues, citationKey, citesTaskPrompt, constructsProhibitedBy, formatCitationReport, formatConflicts, formatDeviation,
   coverageGaps, danglingReferences, dependencyIssues, formatCoverageGaps, formatDanglingReferences, formatOmittedDependencies, formatQuoteIssues, formatUngroundedFields, omittedDependencies, quoteIssues, ungroundedFields,
    formatDependencyIssues, formatInventedRoles, formatProhibited, formatStrengthIssues, inventedRoles,
   noCheckableCitations, prohibitedUsed, strengthIssues, templateDeviations, termConflicts, unaddressedConflicts,
@@ -953,7 +953,7 @@ async function auditProposal(
 function citedSources(content: string, project: Project | null, task = ""): Map<string, string> {
   const out = new Map<string, string>();
   // The task prompt is a source like any other: requirements that cite it were exempt from the citation and strength checks.
-  if (task.length > 200 && /task prompt/i.test(content)) out.set(citationKey("task prompt"), task);
+  if (task.length > 200 && citesTaskPrompt(content)) out.set(citationKey("task prompt"), task);
   const visible = new Map(golden.selectedFor(project?.golden, project?.id).map((i) => [i.id.toUpperCase(), i.id]));
   for (const m of content.matchAll(/GLD-[A-Z]+-\d+/gi)) {
     const id = visible.get(m[0].toUpperCase());
