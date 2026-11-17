@@ -20,9 +20,9 @@ const STOP = new Set(
 );
 
 const words = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").split(" ").filter(Boolean);
-const contentWords = (s: string) => words(s).filter((w) => !STOP.has(w) && w.length >= 3);
+export const contentWords = (s: string) => words(s).filter((w) => !STOP.has(w) && w.length >= 3);
 /** Crude stemming: first five letters, so "billing" and "billed" meet. */
-const stem = (w: string) => (w.length > 5 ? w.slice(0, 5) : w);
+export const stem = (w: string) => (w.length > 5 ? w.slice(0, 5) : w);
 
 function bigramList(ws: string[]): string[] {
   const out: string[] = [];
@@ -48,6 +48,11 @@ const CITE = /GLD-[A-Z]+-\d+(?:@\d+)?|inputs\/[^\s,;)\]*]+\.(?:md|txt)|\btask pr
 /** Whether the document cites the task prompt as a source ("task prompt — …"), so it must be loaded to be checked against. */
 export function citesTaskPrompt(content: string): boolean {
   return (content.match(CITE) ?? []).some((c) => citationKey(c) === "task prompt");
+}
+
+/** The distinct sources a piece of text cites, as keys into the map of source texts. */
+export function citedKeys(text: string): string[] {
+  return [...new Set((text.match(CITE) ?? []).map(citationKey))];
 }
 
 /** `GLD-FS-001@1` and `gld-fs-001` are the same citation. */

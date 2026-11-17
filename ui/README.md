@@ -73,6 +73,10 @@ The **Requirements / BRD from Source Documents** agent is checked by the server 
 (`ui/src/source-checks.ts`): citations against the cited text (word-pair containment — it says where
 wording is found when it is not in the cited source), sections against a bound template, the task's
 prohibitions (user stories, acceptance criteria), and source conflicts it was shown by `compare_sources`.
+Three more compare a requirement with the gaps, decisions and lists its source contains (`ui/src/source-gaps.ts`):
+an Open Question that cites "Gap 2" or "Decision 3" must match an item of that number in the cited document; "None"
+as the open questions of a requirement the source lists a gap about is reported with the item; and a statement that
+names most of a source's bullet list but leaves items out is reported with the ones missing.
 These are heuristics over text and report what they compared, not whether a claim is true.
 
 A long document is built **one section at a time** with `write_section` (the server keeps the order,

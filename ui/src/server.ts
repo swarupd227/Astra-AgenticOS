@@ -22,6 +22,7 @@ import {
   noCheckableCitations, prohibitedUsed, strengthIssues, templateDeviations, termConflicts, unaddressedConflicts,
   type TermConflict,
 } from "./source-checks.js";
+import { formatGapCitations, formatHiddenGaps, formatNarrowedLists, gapCitationIssues, hiddenGaps, narrowedLists } from "./source-gaps.js";
 import { NEVER_INDEXED, unzipExcludeArgs, pruneUnindexed, countFiles } from "./workspace.js";
 import {
   unprovenClaims,
@@ -1010,6 +1011,14 @@ function documentChecks(
 
     const strength = formatStrengthIssues(strengthIssues(content, cited));
     if (strength) notes.push(strength);
+
+    // What the requirements say about the gaps, decisions and lists in their sources.
+    const gapRefs = formatGapCitations(gapCitationIssues(content, cited));
+    if (gapRefs) notes.push(gapRefs);
+    const hidden = formatHiddenGaps(hiddenGaps(content, cited));
+    if (hidden) notes.push(hidden);
+    const narrowed = formatNarrowedLists(narrowedLists(content, cited));
+    if (narrowed) notes.push(narrowed);
 
     const allSources = documentSources(project, task);
     const sourceTexts = allSources.map((s) => s.text);
