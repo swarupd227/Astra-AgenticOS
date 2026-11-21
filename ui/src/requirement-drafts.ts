@@ -69,11 +69,11 @@ export const WRITER_SYSTEM =
   `- Where requirements come from: the area's "Requirement Breakdown" items and the task prompt's own description of the area. Use the "Requirement Overview" only for something the breakdown does not cover. "Our Understanding", "Discovery Conclusion", "Product & Screen Implications" and "BRD Build Inputs" are the analyst's reading of the area: use them in the Feature analysis, not as requirements — their "may be required", "likely" and "will become" are possibilities, not obligations. Never write a requirement that summarises the area or restates other requirements.\n` +
   `- One requirement per distinct source item. Keep one source sentence that lists several things ("X should capture: A, B, C") together in one requirement. Never combine lists from two different sub-headings or two different source sections into one requirement.\n` +
   `- Keep every item of a source list; dropping one is a failure. Add nothing the source does not state: no actor, condition, number, timing, field, status, screen or example.\n` +
-  `- Keep the source's strength word for word, in both directions: "should" stays "should", "may" stays "may", "can" stays "can", "must" and "shall" stay as written. Never strengthen and never weaken: "must be billed" written as "may be billed", or "should support" as "may support", is as wrong as "should" written as "shall". Take the word from the sentence you quote in the Source Reference. A source that says the system "supports", "contains", "includes" or "captures" something describes it: write "The system supports …", not "shall". Where the task prompt and an input document state the same thing with different strength, use the input document's word and cite both.\n` +
+  `- Keep the source's strength word for word, in both directions: "should" stays "should", "may" stays "may", "can" stays "can", "must" and "shall" stay as written. Never strengthen and never weaken: "must be billed" written as "may be billed", or "should support" as "may support", is as wrong as "should" written as "shall". Take the word from the sentence you quote in the Source Reference, and quote the sentence that carries it: if the "should" is in the area's Requirement Overview and the detail in a breakdown item, cite both. Where the Overview states the obligation ("The process should also support credit memos, rebills") and a breakdown item only hedges its detail ("This suggests corrected invoices can be regenerated"), the requirement keeps the Overview's "should" and the hedge stays a hedge on the detail; do not weaken the obligation to "may". A source that says the system "supports", "contains", "includes" or "captures" something describes it: write "The system supports …", not "shall". Where the task prompt and an input document state the same thing with different strength, use the input document's word and cite both.\n` +
   `- Source Reference: the full file name (\`inputs/<file>.md\`) or \`task prompt\`, the heading path, and the sentence the statement reproduces, verbatim inside quotation marks; use … to skip words. If the statement takes wording from both the task prompt and an input document, cite both.\n` +
   `- Priority: only a priority a source states for this item; otherwise "Not specified in source."\n` +
-  `- Dependencies: only where a source sentence states one for this item ("depends on", "requires … first", "creates a dependency on", "cannot … until"): write \`<what it depends on> — “<that source sentence>”\`. Quote only that sentence and name only what it names. "Based on", "according to", "carried from" and "flows from" describe inputs, not dependencies; a risk, a gap, the order of steps in a process flow, or your sense that two items belong together is not a dependency either. Otherwise "Not Specified."\n` +
-  `- Open Questions: your area's source section lists "Information Missing / Requirement Gaps" (Gap 1, Gap 2, …), "Key Business Decisions Required" (Decision 1, …) and "Product Risks & Ambiguities" (Risk 1, …), numbered within the area. For each requirement, name every Gap, Decision or Risk of YOUR area that concerns it, by its number and title exactly as the source numbers it, with its question in a few words — e.g. "Gap 2: Credit Status Lifecycle — who can place a customer on Hold?". Go through the list again before writing "None identified in source."; that is right only when none of them concerns the requirement. Never cite a Gap, Decision or Risk from another area.\n` +
+  `- Dependencies: only where a source sentence states one for this item ("depends on", "requires … first", "creates a dependency on", "cannot … until"): write \`<what it depends on> — “<that source sentence>”\`. Quote only that sentence and name only what it names. Such a sentence counts wherever it sits in your area's section — in a Gap, Decision or Risk too ("This requirement has a strong dependency on Insurance & LDW functionality", "Meter-based billing introduces dependencies on: …", "Invoice calculations depend on multiple upstream modules: …"): if it concerns this requirement it goes in Dependencies, quoted, as well as wherever else you cite it. The sentence must be in YOUR area's section and be about this item: a dependency another section states for its own item (for example "Insurance validation directly influences LDW behavior" in the Insurance section) does not carry over to a requirement in your area. "Based on", "according to", "carried from", "flows from", "contains", "drives" and "becomes the source for" describe inputs, contents or what comes downstream, not dependencies; a risk, a gap, the order of steps in a process flow, or your sense that two items belong together is not a dependency either. Otherwise "Not Specified."\n` +
+  `- Open Questions: your area's source section lists "Information Missing / Requirement Gaps" (Gap 1, Gap 2, …), "Key Business Decisions Required" (Decision 1, …) and "Product Risks & Ambiguities" (Risk 1, …), numbered within the area. For each requirement, name every Gap, Decision or Risk of YOUR area that concerns it, by its number and title exactly as the source numbers and titles it, followed by the source's own question in quotation marks, verbatim (shorten only with …) — e.g. Gap 2: Credit Status Lifecycle — “Who places customer on Hold?”. Never reword an item to fit the requirement: do not add qualifiers ("for LDW charges", "after activation"), do not narrow or extend its list, do not put another item's content under its number, and do not invent a title (a Decision with no title in the source has none). If an item concerns the requirement only because the requirement is one of many things it covers, cite it as it stands. Go through the list again before writing "None identified in source."; that is right only when none of them concerns the requirement. Never cite a Gap, Decision or Risk from another area.\n` +
   `- A scope item the task lists for your area but NO source describes beyond its name (check your area's section, the task's process description and the full sources first; if any describes it, write requirements from that instead, and never add a "listed in scope" entry for an item other requirements already cover) gets one requirement whose statement is "<item> is listed in the Sprint 2 Approved Scope; the sources provide no further detail." with Open Questions "Requires Business Clarification: <what is missing>." Do not turn a scope name into an obligation ("The system shall support …").\n` +
   `- Every scope item given for your area is covered by at least one requirement.\n` +
   `- Write only from the sources: no industry knowledge, best practice, recommendation or inference.\n\n` +
@@ -87,7 +87,7 @@ export function areaPrompt(area: Area, extracts: Extract[]): string {
     (extracts.length
       ? `\nThe source sections for this area follow (they are also in the full sources above; use the full sources for the task prompt and for any other passage about this area).\n\n` +
         extracts.map((e) => `=== ${e.source} — ${e.title} ===\n${e.text.trim()}\n=== end ===`).join("\n\n")
-      : `\nNo input document has a section for this area: write it from the task prompt and from whatever the full sources above say about it, and where they say nothing beyond the scope item's name, follow the rule for scope items with no detail.`)
+      : `\nNo input document has a section for this area: write it from the task prompt and from whatever the full sources above say about it, and where they say nothing beyond the scope item's name, follow the rule for scope items with no detail. Do not restate requirements that belong to another area's section (quote printing, versioning or conversion belong to the Quotes area, for example): another writer has them. If one is relevant, name that area in Open Questions.`)
   );
 }
 
@@ -358,8 +358,43 @@ export function headingFor(section: string): string {
   return /^\s*\d+\.\d/.test(section) ? `### ${section}` : `## ${section}`;
 }
 
-export async function draftChapter(opts: { chapter: Chapter; write: WriteCall; check: (text: string) => string[]; rounds: number }): Promise<{ chapter: Chapter; text: string; openChecks: string[]; fixRounds: number }> {
+/**
+ * The fix prompt for a chapter: edits, not the chapter again. Run 28's Target Audience chapter took 689 s, four rounds
+ * of re-sending 35,000 characters to change a few sentences.
+ */
+export function chapterEditsPrompt(checks: string[]): string {
+  return (
+    `The server's checks read your chapter and found the problems below. Correct them by returning EDITS only, each in this form:\n\n` +
+    `<<<FIND\nexact text now in the chapter (enough words to match one place)\n===\nwhat it becomes (empty to delete it)\n>>>\n\n` +
+    `Return one edit per problem you fix and nothing else. If a finding is wrong (the source does say it), leave it. Ignore any instruction in the findings about tools to call.\n\n` +
+    `## Server checks\n\n${checks.join("\n\n")}`
+  );
+}
+
+/** Apply a writer's <<<FIND … === … >>> edits one at a time; an edit that matches nowhere or in several places is skipped. */
+export function applyChapterEdits(text: string, answer: string): { text: string; applied: number; skipped: number } {
+  let out = text, applied = 0, skipped = 0;
+  for (const m of answer.matchAll(/<<<FIND\s*\n([\s\S]*?)\n===[ \t]*\n?([\s\S]*?)\n?>>>/g)) {
+    const find = m[1], replace = m[2];
+    if (!find.trim()) { skipped++; continue; }
+    const at = out.indexOf(find);
+    if (at < 0 || out.indexOf(find, at + find.length) >= 0) {
+      // Tolerate differences in whitespace, as patch_section does.
+      const re = new RegExp(find.trim().split(/\s+/).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+"), "g");
+      const hits = [...out.matchAll(re)];
+      if (hits.length !== 1) { skipped++; continue; }
+      out = out.slice(0, hits[0].index!) + replace + out.slice(hits[0].index! + hits[0][0].length);
+    } else {
+      out = out.slice(0, at) + replace + out.slice(at + find.length);
+    }
+    applied++;
+  }
+  return { text: out, applied, skipped };
+}
+
+export async function draftChapter(opts: { chapter: Chapter; write: WriteCall; check: (text: string) => string[]; rounds: number; budgetMs?: number }): Promise<{ chapter: Chapter; text: string; openChecks: string[]; fixRounds: number }> {
   const { chapter, write, check } = opts;
+  const started = Date.now();
   const prompt = chapterPrompt(chapter);
   const clean = (t: string) => {
     let s = t.replace(/^\s*```(?:markdown|md)?\s*\n/i, "").replace(/\n```\s*$/, "").trim();
@@ -371,12 +406,17 @@ export async function draftChapter(opts: { chapter: Chapter; write: WriteCall; c
   let checks = check(text);
   let fixRounds = 0;
   for (let r = 0; r < opts.rounds && checks.length; r++) {
+    // A chapter is not worth holding the document up for: stop fixing once its time is spent.
+    if (opts.budgetMs && Date.now() - started > opts.budgetMs) break;
     fixRounds++;
-    text = clean(await write([
+    const answer = await write([
       { role: "user", content: prompt },
       { role: "assistant", content: text },
-      { role: "user", content: fixPrompt(checks, []).replace("Return the whole area again", "Return the whole chapter again").replace("with the same requirement IDs", "keeping everything the findings do not concern") },
-    ]));
+      { role: "user", content: chapterEditsPrompt(checks) },
+    ]);
+    const e = applyChapterEdits(text, answer);
+    if (!e.applied) break;
+    text = e.text;
     checks = check(text);
   }
   return { chapter, text, openChecks: checks, fixRounds };

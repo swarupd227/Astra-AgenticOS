@@ -112,14 +112,20 @@ requirements and the long chapters are written in parallel (`ui/src/requirement-
   `DRAFT_FIX_ROUNDS` (default 3) rounds of server checks + independent review + fix, each fix returning only the
   requirements it changes. The server renumbers the IDs across areas and carries what the reviewer read into the run, so
   `check_document` re-reads only what changed.
-- `draft_chapters` — business objectives, success criteria, audience, stakeholders, key features: one writer each,
-  checked and corrected twice.
+- `draft_chapters` — business objectives, success criteria, audience, stakeholders, key features (split into groups of
+  at most four features or roles): one writer each, checked and corrected with find/replace edits for up to
+  `DRAFT_CHAPTER_ROUNDS` (default 4) rounds within `DRAFT_CHAPTER_BUDGET_MS` (default 240 s).
 - Both return at once with placeholders in the document; numbered sections fall into number order whatever order they
-  are written in; `check_document` waits for them. `DRAFT_CONCURRENCY` (default 16), `DRAFT_MODEL` (default `MODEL`),
-  `DRAFT_REFIX=on` for one more fix pass by the sections' writers at `check_document` (off: it did not pay for itself).
+  are written in; `check_document` waits for them. In a drafted run `check_document` may be called at most
+  `DRAFTED_CHECK_LIMIT` (default 3) times, and the writer is told to fix fail findings and real defects, not minor ones.
+  `DRAFT_CONCURRENCY` (default 16), `DRAFT_MODEL` (default `MODEL`), `DRAFT_REFIX=on` for one more fix pass by the
+  sections' writers at `check_document` (off: it did not pay for itself).
+- Open Questions quote the source's Gap / Decision / Risk verbatim, so a reworded item is caught by the quote check;
+  a dependency stated inside the area's own Gap/Decision/Risk goes in Dependencies; the citation check skips sentences
+  that say the source is silent or label themselves as the document's inference.
 
-On the VitalEdge inputs this took a run from 22–24 minutes to about 18, and the sampled requirements from 13 pass /
-6 fail (of 30) to 16–18 pass / 1–3 fail.
+On the VitalEdge inputs this took a run from 22–24 minutes to 10–15, and the sampled requirements from 13 pass /
+6 fail (of 30) to 20–23 pass / 0–1 fail.
 
 ### Run performance
 

@@ -44,7 +44,9 @@ reader must be able to take any statement, go to the source you name, and find i
 5. **Right after it, start the long chapters with `draft_chapters`** (business objectives, success criteria,
    target audience, stakeholders, key features, and any process or context chapter the task asks for): one
    entry per numbered section, pointing to the task's own instructions for it by their heading, plus anything
-   the writer needs that the sources do not say. They are written in parallel too. Then write the short
+   the writer needs that the sources do not say. They are written in parallel too. Split a chapter made of one
+   entry per feature or role (key features above all) into several entries of at most four features or roles each,
+   numbered as sub-sections ("8.1 …", "8.2 …"), so no single writer holds up the rest. Then write the short
    sections yourself with `write_section` (document information, purpose and scope, source documents, source
    conflicts from compare_sources), numbered as planned ("1. …", "4. …"): the server places a numbered section
    in number order, whatever order you write them in. No chapter repeats the requirements' content or their
@@ -54,7 +56,8 @@ reader must be able to take any statement, go to the source you name, and find i
    `write_section` with the same title.
 7. Then call `check_document`. It waits for the drafts, puts them in the document, runs the checks that only
    make sense on the whole plus the reviewer on anything not yet read, and sends the reviewer's findings on
-   requirements back to their areas' writers once. Fix what it still reports with
+   requirements back to their areas' writers once. In a drafted document you get at most three such checks, so
+   batch every fix between them. Fix what it still reports with
    `patch_section` — one call can carry the edits of several sections (`sections`). Stop when it reports
    nothing, or when what is left is something you can explain in your answer.
 

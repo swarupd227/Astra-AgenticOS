@@ -65,6 +65,11 @@ const others = new Map([["task prompt", "Billing methods include 28 Day, Monthly
   const row = "| BR-07 | When exposure exceeds the credit limit the transaction is blocked or routed for approval | GLD-FS-001@1 |";
   eq("table row citing the wrong source", citationIssues(row, sources, others).issues.length, 1);
 }
+eq("a sentence saying the source is silent, or that it is the document's inference, is not a claim about the source",
+  [citationIssues("- This role name is not specified in the source documents. It is inferred from the activities described in GLD-FS-001@1 — Billing.", sources, others).issues.length,
+   citationIssues("- The organisation's motivation is inferred from the billing and credit sections of GLD-FS-002@1 and does not repeat them.", sources, others).issues.length,
+   citationIssues("- The billing method is selected during agreement creation and includes Calendar Month and Weekly options. *(GLD-FS-001@1 — Billing)*", sources, others).issues.length],
+  [0, 0, 1]);
 eq("too-short claims are skipped, not guessed at",
   citationIssues("- Equipment status is updated. *(GLD-FS-002@1)*", sources, others).checked, 0);
 eq("a citation to a source we cannot read is counted, not judged",
@@ -381,6 +386,14 @@ eq("a mention nowhere near a prohibition does not count",
   eq("a dropped scope item is reported", coverageGaps(dropped, [scope]).gaps.length > 0, true);
   eq("mentioning the item outside a requirement does not count", coverageGaps(dropped + "\n## Key features\nKF-04 — Multi equipment rentals", [scope]).gaps.length > 0, true);
   eq("no scope list, no claims", coverageGaps(dropped, ["Plain text with no list."]), { scopeLines: 0, gaps: [] });
+  // A scope category is covered by the heading of the section that holds its requirements.
+  const cat = "SPRINT 2 APPROVED SCOPE\n\nCredit Management & Collections Credit Limit Allocation\n\nAnything outside this list is out of scope.";
+  const area = ["## 6. Requirements", "### 6.2 Credit Management and Collections", "", "Intro.", "",
+    "#### REQ-001 — Credit limit allocation", "The system should allocate a credit limit.", "#### REQ-002 — Exposure", "Exposure is checked.",
+    "#### REQ-003 — Status", "Status is kept.", "#### REQ-004 — Holds", "Holds apply.", "#### REQ-005 — Past due", "Past due invoices count."].join("\n");
+  eq("a scope category named by the heading of its requirements' section is covered", coverageGaps(area, [cat]).gaps, []);
+  eq("the same words in a heading with no requirements under it do not count",
+    coverageGaps(area.replace("### 6.2 Credit Management and Collections", "### 6.2 Credit") + "\n## 8. Key Features — Credit Management and Collections\nText.", [cat]).gaps.length > 0, true);
   eq("requirementText keeps requirements only", requirementText("### OQ-001 — q\nQuestion text\n### REQ-001 — a\nrequirement one\n### REQ-002 — b\nrequirement two\n### REQ-003 — c\nc\n### REQ-004 — d\nd\n### REQ-005 — e\ne\n").includes("Question text"), false);
 }
 {

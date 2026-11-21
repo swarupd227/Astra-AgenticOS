@@ -153,6 +153,8 @@ function citationUnits(md: string): Unit[] {
  * `sources` are the texts the artifact may cite; `others` are labelled texts that are
  * not cited but could be (the task prompt), used only to say where wording actually came from.
  */
+const ABSENCE_OR_INFERENCE = /\b(?:(?:is|are|was|were)\s+not\s+(?:specified|stated|named|defined|provided|given|described|identified|documented)\b|not\s+specified\s+in\s+(?:the\s+)?source|no\s+source\s+(?:states|names|defines|gives|describes)|the\s+sources?\s+(?:do|does)\s+not\b|(?:is|are)\s+inferred\b|inferred\s+from\b|this\s+document\s+(?:reads|infers|interprets)\b|(?:the\s+)?document's\s+(?:own\s+)?(?:reading|interpretation|inference))/i;
+
 export function citationIssues(
   artifact: string, sources: Map<string, string>, others: Map<string, string> = new Map()
 ): CitationReport {
@@ -166,6 +168,10 @@ export function citationIssues(
   for (const u of citationUnits(artifact)) {
     const cites = [...new Set((u.text.match(CITE) ?? []).map(citationKey))];
     if (!cites.length) continue;
+    // A sentence that says the source is silent, or that labels itself as the document's own reading, attributes
+    // nothing to the source; checking its wording against the source can only fail. Run 25's writer spent 24 patches
+    // on "This role name is not specified in the source documents. It is inferred from the activities described in …".
+    if (ABSENCE_OR_INFERENCE.test(u.claim)) continue;
     const claimBigrams = bigramList(contentWords(u.claim));
     if (claimBigrams.length < MIN_BIGRAMS) continue;
 
@@ -841,7 +847,20 @@ export type CoverageGap = { scope: string; missing: string };
 export function coverageGaps(doc: string, sourceTexts: string[]): { scopeLines: number; gaps: CoverageGap[] } {
   const lines = [...new Set(sourceTexts.flatMap(scopeLines))];
   if (!lines.length) return { scopeLines: 0, gaps: [] };
-  const blocks = requirementBlocks(doc);
+  // A category of the scope ("Credit Management & Collections") is covered by a section headed with it, whose
+  // requirements are about its parts ("Credit Limit Allocation"); run 27 was told it was missing.
+  // Only a heading whose own section holds requirements counts: a Key Features heading naming the item does not.
+  const all = doc.split(/\r?\n/);
+  const isHead = (l: string) => /^#{1,6}\s/.test(l), isReq = (l: string) => /^#{1,6}\s+(?:\*\*)?[A-Z]{1,6}-\d/.test(l);
+  const headings: string[] = [];
+  all.forEach((l, i) => {
+    if (!isHead(l) || isReq(l)) return;
+    for (let k = i + 1; k < all.length; k++) {
+      if (isReq(all[k])) { headings.push(l); return; }
+      if (isHead(all[k])) return;
+    }
+  });
+  const blocks = [...requirementBlocks(doc), ...headings];
   const have = bigramSet(blocks.join("\n"));
   const blockWords = blocks.map((b) => new Set(words(b).map(stem)));
   // An item is covered if one requirement mentions all of its words, even in another order.

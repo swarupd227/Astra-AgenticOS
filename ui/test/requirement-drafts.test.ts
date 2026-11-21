@@ -138,12 +138,20 @@ const fixed = draft.replace("shall be selected", "is selected");
 
   {
     // A chapter: drafted, checked, corrected once when a check is open.
-    const { draftChapter, headingFor } = await import("../src/requirement-drafts.js");
+    const { draftChapter, headingFor, applyChapterEdits } = await import("../src/requirement-drafts.js");
     let n = 0;
-    const write: WriteCall = async (m) => { n++; return m.length === 1 ? "Sure:\n### 5.2 Success Criteria\n\nThe Branch Manager reviews it." : "### 5.2 Success Criteria\n\n*Not specified in source.*"; };
-    const r = await draftChapter({ chapter: { section: "5.2 Success Criteria", instructions: "Follow the task's 'Success Criteria' instructions." }, write, rounds: 1, check: (t) => (/Branch Manager/.test(t) ? ["Roles that appear in none of the sources: Branch Manager"] : []) });
-    eq("a chapter with an open check is corrected once, its preamble dropped", [n, r.fixRounds, r.openChecks.length, r.text.startsWith("### 5.2")], [2, 1, 0, true]);
+    const write: WriteCall = async (m) => { n++; return m.length === 1 ? "Sure:\n### 5.2 Success Criteria\n\nThe Branch Manager reviews it." : "<<<FIND\nThe Branch Manager reviews it.\n===\n*Not specified in source.*\n>>>"; };
+    const r = await draftChapter({ chapter: { section: "5.2 Success Criteria", instructions: "Follow the task's 'Success Criteria' instructions." }, write, rounds: 2, check: (t) => (/Branch Manager/.test(t) ? ["Roles that appear in none of the sources: Branch Manager"] : []) });
+    eq("a chapter's open check is fixed by an edit, its preamble dropped", [n, r.fixRounds, r.openChecks.length, r.text], [2, 1, 0, "### 5.2 Success Criteria\n\n*Not specified in source.*"]);
     eq("a chapter heading is ## and a sub-section ###", [headingFor("6. Key Features"), headingFor("5.1 Business Objectives")], ["## 6. Key Features", "### 5.1 Business Objectives"]);
+    const doc = "## 6. Key Features\n\nAlpha  beta gamma.\n\nRepeat. Repeat.\n\nDelta.";
+    const e = applyChapterEdits(doc, "<<<FIND\nAlpha beta gamma.\n===\nAlpha.\n>>>\n<<<FIND\nRepeat.\n===\nOnce.\n>>>\n<<<FIND\nNot there.\n===\nx\n>>>\n<<<FIND\nDelta.\n===\n\n>>>");
+    eq("edits apply one at a time; whitespace is tolerated; ambiguous or missing ones are skipped; an empty replacement deletes", [e.applied, e.skipped, e.text], [2, 2, "## 6. Key Features\n\nAlpha.\n\nRepeat. Repeat.\n\n"]);
+    let calls = 0;
+    const slow: WriteCall = async (m) => { calls++; return m.length === 1 ? "### 5.2 X\n\nThe Branch Manager reviews it." : "<<<FIND\nnothing\n===\nx\n>>>"; };
+    const s = await draftChapter({ chapter: { section: "5.2 X", instructions: "i" }, write: slow, rounds: 4, budgetMs: 1, check: () => ["open"] });
+    await new Promise((res) => setTimeout(res, 5));
+    eq("past its time budget a chapter is not fixed again", [calls <= 2, s.openChecks.length], [true, 1]);
   }
 
   console.log(`requirement drafts — ${failures} failure(s)`);

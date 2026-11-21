@@ -1322,6 +1322,14 @@ const DRAFT_FIX_ROUNDS = Number(process.env.DRAFT_FIX_ROUNDS ?? 3);
 // A further pass at check_document that sends what is still open back to the sections' writers. Run 24: 3 minutes
 // (129 s fixing, 61 s re-reading) and the same three failing findings afterwards as before, so it is off by default.
 const DRAFT_REFIX = (process.env.DRAFT_REFIX ?? "off") === "on";
+// Check-and-fix rounds for each chapter writer, stopping as soon as its checks are clean. Run 26's chapters had 2 and
+// still carried 31 unverified citations, which the writer of the whole document then cleared in ~50 serial patches.
+const DRAFT_CHAPTER_ROUNDS = Number(process.env.DRAFT_CHAPTER_ROUNDS ?? 4);
+// No fix round starts after this long: run 28's slowest chapter (689 s) held the whole document up.
+const DRAFT_CHAPTER_BUDGET_MS = Number(process.env.DRAFT_CHAPTER_BUDGET_MS ?? 240_000);
+// check_document calls in a run whose sections were drafted in parallel: the last one says so, later ones are refused.
+// Run 26 called it six times and hit the turn limit patching between them.
+const DRAFTED_CHECK_LIMIT = Number(process.env.DRAFTED_CHECK_LIMIT ?? 3);
 const DRAFT_MODEL = process.env.DRAFT_MODEL || "";
 const DRAFT_CALL_TIMEOUT_MS = Number(process.env.DRAFT_CALL_TIMEOUT_MS ?? 360_000);
 
@@ -1526,6 +1534,7 @@ function draftChaptersTool(): Anthropic.Tool {
     description:
       "Write several chapters of the document in parallel, each by its own writer with all the sources in front of it, then checked by the server and corrected once. Use it for the long chapters that do not need requirement IDs (business objectives, success criteria, target audience, stakeholders, key features, process and context chapters). " +
       "For each give the numbered section title and what it must contain: point to the task's own instructions for it by their heading in the task (e.g. \"Follow the task's 'Success Criteria' instructions\"), and add what the writer must know that the sources do not say (e.g. the objective IDs to align to, if another chapter defines them). " +
+      "A chapter made of one entry per feature or per role (key features, target audience, stakeholders) is written fastest as several entries of at most four features or roles each, numbered as sub-sections (\"8.1 Key Features — Billing and Credit\", \"8.2 …\"), with a short entry for the chapter heading itself if it needs an introduction. " +
       "It returns at once; the chapters are written in the background (a few minutes) and placed by their numbers. Call check_document when you are done: it waits for them.",
     input_schema: {
       type: "object",
@@ -1571,7 +1580,7 @@ async function startDraftChapters(ctx: SectionContext, input: Record<string, unk
     await warmCache(writerSystem(sources));
     const results = await pool(chapters, DRAFT_CONCURRENCY, async (chapter) => {
       try {
-        const r = await draftChapter({ chapter, write, rounds: 2, check: (text) => documentChecks(text, ctx.task, ctx.agentId, ctx.project, ctx.conflicts, true, false) });
+        const r = await draftChapter({ chapter, write, rounds: DRAFT_CHAPTER_ROUNDS, budgetMs: DRAFT_CHAPTER_BUDGET_MS, check: (text) => documentChecks(text, ctx.task, ctx.agentId, ctx.project, ctx.conflicts, true, false) });
         console.error(`[drafts] chapter ${chapter.section}: ${r.text.length} chars, ${r.fixRounds} fix round(s), ${r.openChecks.length} check(s) open, ${Math.round((Date.now() - started) / 1000)}s`);
         return r;
       } catch (e) {
@@ -2286,6 +2295,8 @@ async function runAgent(
   const draftRefused = new Set<string>();
   /** Whether check_document has sent the reviewer's findings back to the area writers yet (once a run). */
   let areasRefixed = false;
+  /** check_document calls so far (limited in a drafted run, see DRAFTED_CHECK_LIMIT). */
+  let checksDone = 0;
   const pendingJob = () => draftJobs.find((j) => !j.reported);
   /** Wait for everything still being drafted, take the document as it was left, and say what came of it (once each). */
   const settleDrafts = async (): Promise<string> => {
@@ -2451,7 +2462,7 @@ async function runAgent(
       }
       console.error(`[review] ${agent.id}: turn ended (stop=${resp.stop_reason}) doc=${isDocAgent} saved=${lastDocSaved ? (lastDocSaved as any).name : "none"} rounds=${reviewRounds}/${MAX_REVIEW_ROUNDS}`);
       // A drafted document has had its sections' own review rounds and check_document's; one more here is enough.
-      if (isDocAgent && lastDocSaved && reviewRounds < (draftJobs.length ? 1 : MAX_REVIEW_ROUNDS)) {
+      if (isDocAgent && lastDocSaved && reviewRounds < (draftJobs.length ? (checksDone >= DRAFTED_CHECK_LIMIT ? 0 : 1) : MAX_REVIEW_ROUNDS)) {
         const open = documentChecks(lastDocSaved.content, userMessage, agent.id, project, conflictsFound, true);
         // A writer who never called check_document still gets the second reader, once, on what changed.
         const second = await independentReview({ project, task: userMessage, memory: reviewMemory, emit, perf }, lastDocSaved.content, sectionOfIn(sectionDocs.get(lastDocSaved.name)));
@@ -2622,7 +2633,10 @@ async function runAgent(
               savedThisRun.add(r.saved.path);
               lastDocSaved = { name: r.saved.name, content: r.saved.content };
             }
+          } else if (tu.name === "check_document" && isDocAgent && draftJobs.length && checksDone >= DRAFTED_CHECK_LIMIT) {
+            resultText = `No more whole-document checks in this run (${DRAFTED_CHECK_LIMIT} done). Give your final answer now: say what was saved and name anything the last check reported that you did not fix.`;
           } else if (tu.name === "check_document" && isDocAgent) {
+            checksDone++;
             const drafted = await settleDrafts();
             const fixable = draftJobs.filter((j) => j.fix);
             const refixAreas = DRAFT_REFIX && fixable.length && !areasRefixed
@@ -2636,6 +2650,10 @@ async function runAgent(
             resultText = (drafted ? `${drafted}\n\n---\n\n` : "") + (await handleCheckDocument({ ...sctx, review: reviewMemory, refixAreas, drafted: draftJobs.length > 0 }, args)).text;
             const d = sectionDocs.get(String(args.artifact ?? "").trim());
             if (d) lastDocSaved = { name: String(args.artifact).trim(), content: d.compose() };
+            if (draftJobs.length && checksDone >= DRAFTED_CHECK_LIMIT)
+              resultText += `\n\n**This was the last whole-document check of this run.** Fix what you can from it in one batched patch_section call (fail findings first), then give your final answer without checking again.`;
+            else if (draftJobs.length)
+              resultText += `\n\n(Whole-document check ${checksDone} of ${DRAFTED_CHECK_LIMIT} for this run.)`;
           } else {
             resultText = await callMcpTool(ws, tu.name, args);
           }
