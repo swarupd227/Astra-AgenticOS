@@ -111,8 +111,10 @@ function citationUnits(md: string): Unit[] {
       const stmt = segs.find((s) => /^(?:requirement )?statement$/i.test(s.label));
       if (stmt) {
         i = j;
-        // Priority, Dependencies and Open Questions cite their own sources and are checked as their own lines.
-        const own = (s: { label: string }) => /priority|dependenc|open question/i.test(s.label);
+        // Priority, Dependencies and Open Questions cite their own sources and are checked as their own lines. A Source
+        // Conflict line quotes the other source on purpose (its quotes are checked verbatim by quoteIssues): counted here,
+        // the statement was "not found" in the source it is said to conflict with (held-out acme run, 2026-11-21).
+        const own = (s: { label: string }) => /priority|dependenc|open question|source conflict/i.test(s.label);
         const text = segs.filter((s) => !own(s)).map((s) => `**${s.label}:** ${s.body.join(" ")}`).join("\n");
         units.push({ text, claim: plain(stmt.body.join(" ")) });
         continue;
@@ -121,6 +123,8 @@ function citationUnits(md: string): Unit[] {
       // that sit together form a unit. Joining their fields made one long claim that matched nothing.
       const block = [line];
       while (i + 1 < lines.length && labelled.test(lines[i + 1])) block.push(lines[++i]);
+      // A Source Conflict line on its own sets two sources' words side by side: no single source holds both.
+      if (/^\s*\*\*Source Conflict/i.test(line) && block.length === 1) continue;
       units.push({ text: block.join("\n"), claim: plain(block.filter((l) => !/Source|Priority|Dependenc|Open Question/i.test(l)).join(" ").replace(/^\s*\*\*[^*]+:\*\*/, "")) });
       continue;
     }
@@ -172,6 +176,8 @@ export function citationIssues(
     // nothing to the source; checking its wording against the source can only fail. Run 25's writer spent 24 patches
     // on "This role name is not specified in the source documents. It is inferred from the activities described in …".
     if (ABSENCE_OR_INFERENCE.test(u.claim)) continue;
+    // A statement that is itself a recorded conflict quotes two sources side by side; its quotes are checked verbatim.
+    if (/^\s*source conflict identified\b/i.test(u.claim)) continue;
     const claimBigrams = bigramList(contentWords(u.claim));
     if (claimBigrams.length < MIN_BIGRAMS) continue;
 
@@ -1101,5 +1107,122 @@ export function formatUngroundedFields(u: UngroundedField[], max = 15): string |
     u.slice(0, max).map((x) => `- ${x.entity} — ${x.field}: ${x.value}`).join("\n") +
     (u.length > max ? `\n- …and ${u.length - max} more.` : "") +
     `\nWrite *Not specified in source* for any field the sources give no value for. A plausible value is still an invented one.`
+  );
+}
+
+// --- Sentences of a cited source item left out ---------------------------------------------
+
+export type OmittedItemSentence = { reqs: string[]; item: string; sentence: string };
+
+/** The source's own speculation ("This suggests…"): leaving it out is right, carrying it would read as a requirement. */
+const SOURCE_INFERENCE = /^\s*(?:this|which|that)\s+(?:suggests?|implies|indicates?|may\s+(?:suggest|imply|indicate))\b/i;
+/** The source describing its own text ("The requirement explicitly states:"): the lead-in is commentary, what follows is the content. */
+const SOURCE_COMMENTARY = /^\s*the\s+requirement\s+(?:also\s+)?(?:explicitly\s+|specifically\s+)?(?:states|mentions|references|introduces|specifies|identifies|requires)\b[^:]*:?\s*/i;
+/** Area-level text: its sentences belong to the area's introduction and to many requirements, not to one item. */
+const NOT_AN_ITEM = /\b(?:overview|summary|introduction|background|scope|purpose|context)\b/i;
+const segmentsOf = (s: string) =>
+  s.replace(/[*_`]/g, "").split(/[›>—–:“”"|;/()[\]]+|\s-\s/).map((x) => words(x).join(" ")).filter(Boolean);
+
+type SourceItem = { key: string; title: string; path: string[]; body: string };
+
+/** Every heading of a source with its own text up to the next heading, and the headings above it. */
+function sourceItems(key: string, text: string): SourceItem[] {
+  const out: SourceItem[] = [];
+  const stack: { level: number; title: string }[] = [];
+  let cur: SourceItem | null = null;
+  for (const line of text.split(/\r?\n/)) {
+    const h = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (h) {
+      const level = h[1].length, title = h[2].replace(/[*_`#]/g, "").trim();
+      while (stack.length && stack[stack.length - 1].level >= level) stack.pop();
+      cur = { key, title, path: stack.map((s) => s.title), body: "" };
+      out.push(cur);
+      stack.push({ level, title });
+    } else if (cur) cur.body += line + "\n";
+  }
+  return out;
+}
+
+/**
+ * Sentences of a cited source item that no requirement citing that item carries. A requirement names
+ * its item in its Source Reference ("… › Requirement Breakdown › Fleet Commitment: “…”"); the item's own
+ * text runs to the next heading. Every sentence of it should be in one of the requirements that cite it:
+ * graders marked four of five MINORs on run 38 for a dropped sentence of the item (a purpose sentence,
+ * the explanation under each option, a general sentence folded into an example). Advisory: a sentence
+ * whose word pairs are mostly present counts as carried, and the source's own speculation is exempt.
+ */
+export function omittedItemSentences(
+  doc: string, sources: Map<string, string>,
+  /** Filled with the cited items too long to check (over 2,500 characters), so they can be reported as unchecked, not passed. */
+  unchecked: string[] = []
+): OmittedItemSentence[] {
+  const items = [...sources].flatMap(([k, t]) => sourceItems(k, t));
+  const byItem = new Map<SourceItem, { reqs: string[]; text: string[] }>();
+  for (const block of requirementBlocks(doc)) {
+    const id = DEFINES_ID.exec(block.split("\n")[0]);
+    const ref = /\*\*Source References?:?\*\*:?([\s\S]*?)(?=\n\s*\n\s*\*\*[A-Z]|$)/.exec(block)?.[1];
+    if (!id || !ref) continue;
+    const keys = citedKeys(ref);
+    const segs = segmentsOf(ref);
+    const has = (title: string) => {
+      const ts = segmentsOf(title);
+      return ts.length > 0 && segs.some((_, i) => ts.every((t, k) => segs[i + k] === t));
+    };
+    // Each item the reference names as a whole segment; of headings with the same title, the one whose own path
+    // the reference also names ("LDW Configuration" sits in two areas). Items with no text of their own are skipped.
+    const named = items.filter((it) => keys.includes(it.key) && it.body.trim() && has(it.title));
+    const best = new Map<string, { it: SourceItem; score: number }>();
+    for (const it of named) {
+      const score = it.path.filter(has).length;
+      const k = `${it.key}\n${it.title.toLowerCase()}`;
+      if (!best.has(k) || score > best.get(k)!.score) best.set(k, { it, score });
+    }
+    for (const { it } of best.values()) {
+      const e = byItem.get(it) ?? { reqs: [], text: [] };
+      e.reqs.push(`${id[3]}-${id[4]}`);
+      e.text.push(block);
+      byItem.set(it, e);
+    }
+  }
+  const out: OmittedItemSentence[] = [];
+  for (const [it, e] of byItem) {
+    // An area-sized section is not an item: its sentences belong to many requirements.
+    if (NOT_AN_ITEM.test(it.title)) continue;
+    if (it.body.length > 2500) { unchecked.push(`${it.title} (${e.reqs.join(", ")})`); continue; }
+    const have = bigramSet(e.text.join("\n"));
+    const sentences = joinLeadIns(it.body).split(/(?<=[.!?])\s+|\n+/).map((s) => plain(s).replace(/\s+/g, " ").trim());
+    for (const raw of sentences) {
+      // Table rows, links and lead-ins that only introduce what follows are not sentences of the item.
+      if (raw.startsWith("|") || /\]\(https?:|https?:\/\//.test(raw) || /:\s*$/.test(raw)) continue;
+      // "This suggests <a conclusion>." is the source's speculation; "This suggests … may need to track: A, B, C" carries a list.
+      if (raw.includes("?") || (SOURCE_INFERENCE.test(raw) && !raw.includes(":"))) continue;
+      const s = raw.replace(SOURCE_COMMENTARY, "");
+      const bg = bigramList(contentWords(s));
+      if (bg.length < 3) continue;
+      if (bg.filter((b) => have.has(b)).length / bg.length < 0.5) out.push({ reqs: e.reqs, item: it.title, sentence: s });
+    }
+  }
+  return out;
+}
+
+/** Cited items too long to check sentence by sentence: said, so that silence does not read as "nothing left out". */
+export function formatUncheckedItems(unchecked: string[], max = 8): string | null {
+  if (!unchecked.length) return null;
+  return (
+    `ℹ **Not checked for left-out sentences: ${unchecked.length} long source item(s)** (over 2,500 characters): ` +
+    unchecked.slice(0, max).join("; ") + (unchecked.length > max ? `; …and ${unchecked.length - max} more` : "") +
+    `. Read each against the requirements that cite it.`
+  );
+}
+
+export function formatOmittedItemSentences(o: OmittedItemSentence[], max = 15): string | null {
+  if (!o.length) return null;
+  return (
+    `⚠ **Source item sentences no requirement carries — ${o.length}** (each requirement below cites the item, but none of them states this sentence):\n` +
+    o.slice(0, max).map((x) => `- ${x.reqs.join(", ")} — ${x.item}: “${x.sentence.slice(0, 220)}”`).join("\n") +
+    (o.length > max ? `\n- …and ${o.length - max} more.` : "") +
+    `\nCarry each in the requirement that cites the item, in the source's own words and strength: a purpose sentence ("This prevents…"), ` +
+    `the explanation under each option, a general statement that follows an example. Do not turn it into a new obligation. ` +
+    `If a sentence belongs to another requirement, cite the item there too.`
   );
 }

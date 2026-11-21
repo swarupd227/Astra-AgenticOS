@@ -12,7 +12,7 @@ import {
   dependencyIssues, fieldRowsAsLabels, formatDependencyIssues, formatStrengthIssues, strengthIssues, strengthOf,
   citationIssues, citationKey, citesTaskPrompt, constructsProhibitedBy, extractDefinitions, formatCitationReport,
   formatInventedRoles, inventedRoles, noCheckableCitations, prohibitedUsed, templateDeviations, termConflicts,
-  unaddressedConflicts,
+  unaddressedConflicts, omittedItemSentences, formatOmittedItemSentences, formatUncheckedItems,
 } from "../src/source-checks.js";
 
 let failures = 0;
@@ -555,6 +555,62 @@ eq("a mention nowhere near a prohibition does not count",
   const appendix = ["### REQ-001 — a", "Invoices are produced.", "## Appendix", "This creates a dependency on the LDW process."].join("\n");
   eq('a dependency quoted only outside the requirements is still omitted', omittedDependencies(appendix, src).length, 1);
   eq('a dependency inside a requirement is carried', omittedDependencies(["### REQ-001 — a", "Dependencies: LDW — This creates a dependency on the LDW process."].join("\n"), src), []);
+}
+
+{
+  // A Source Conflict line quotes the other source on purpose: it must not make the statement "not found" there.
+  const srcs = new Map([
+    [citationKey('inputs/flow.md'), 'A Reservation represents confirmed future demand held against equipment until delivery.'],
+    [citationKey('inputs/reqs.md'), 'Reservation: a time-bounded hold on availability that is not necessarily a confirmed contract.'],
+  ]);
+  const withConflict = [
+    '**Requirement Statement:** A Reservation represents confirmed future demand held against equipment until delivery.', '',
+    '**Source Reference:** `inputs/flow.md` — “A Reservation represents confirmed future demand.”', '',
+    '**Source Conflict Identified:** `inputs/flow.md` says “confirmed future demand”; `inputs/reqs.md` says “a time-bounded hold on availability”.',
+  ].join('\n');
+  eq('a conflict line adds no citation to the statement', citationIssues(withConflict, srcs).issues, []);
+  eq('a statement that is a recorded conflict is not a claim', citationIssues(
+    '**Requirement Statement:** Source Conflict Identified. inputs/flow.md says: “A Reservation represents confirmed future demand held against equipment until delivery.” inputs/reqs.md says: “a time-bounded hold on availability that is not necessarily a confirmed contract.”\n\n**Source Reference:** `inputs/flow.md`; `inputs/reqs.md`', srcs).issues, []);
+  eq('the statement is still checked against its own citation', citationIssues(withConflict.replace('A Reservation represents confirmed future demand held against equipment until delivery.', 'Invoices are issued monthly to every customer account by the finance team.'), srcs).issues.length, 1);
+}
+
+{
+  // Sentences of the cited source item: a purpose sentence left out is flagged; speculation, commentary, tables, other
+  // items with the same title elsewhere, and a sentence carried by another requirement citing the item are not.
+  const src = new Map([[citationKey('inputs/reqs.md'), [
+    '## Reservations', '### Requirement Overview', 'The client requires reservations to be managed across many branches.',
+    '### Requirement Breakdown', '#### Fleet Commitment', 'Once reserved, equipment capacity should be committed against the requested dates.',
+    'This prevents the same equipment from being promised to multiple customers.', 'This suggests a hard allocation model is needed.',
+    'This suggests the business may need to track:', '- Customer deductible amount', '- Damage responsibility thresholds',
+    '#### Proof of Delivery', 'The requirement explicitly states: Signed delivery tickets are captured at drop-off.', '| Photos | Visual proof |',
+    '#### Charge Type', 'One-time charges are charged once during the rental lifecycle.', 'Recurring charges are charged repeatedly by billing cycle.',
+    '## Returns', '### Requirement Breakdown', '#### Fleet Commitment', 'Returned units are released back to available inventory immediately.',
+  ].join('\n')]]);
+  const req = (id: string, item: string, statement: string, area = 'Reservations') =>
+    [`#### REQ-${id} — ${item}`, '', `**Requirement Statement:** ${statement}`, '',
+     `**Source Reference:** \`inputs/reqs.md\` — ${area} › Requirement Breakdown › ${item}: “${statement}”`, '', '---'].join('\n');
+  const doc = [
+    req('001', 'Fleet Commitment', 'Once reserved, equipment capacity should be committed against the requested dates.'),
+    req('002', 'Proof of Delivery', 'Signed delivery tickets are captured at drop-off.'),
+    req('003', 'Charge Type', 'One-time charges are charged once during the rental lifecycle.'),
+    req('004', 'Charge Type', 'Recurring charges are charged repeatedly by billing cycle.'),
+  ].join('\n\n');
+  const o = omittedItemSentences(doc, src);
+  eq('only the purpose sentence of the cited item is flagged', o.map((x) => `${x.reqs.join(',')}|${x.item}|${x.sentence}`),
+    ['REQ-001|Fleet Commitment|This prevents the same equipment from being promised to multiple customers.',
+     'REQ-001|Fleet Commitment|This suggests the business may need to track: Customer deductible amount Damage responsibility thresholds']);
+  eq('nothing flagged once the requirement carries it', omittedItemSentences(doc.replace(
+    'against the requested dates.”', 'against the requested dates.” This prevents the same equipment from being promised to multiple customers. ' +
+    'The business may need to track: Customer deductible amount, Damage responsibility thresholds.'), src), []);
+  eq('the report names the requirement and the sentence', (formatOmittedItemSentences(o) ?? '').includes('REQ-001 — Fleet Commitment: “This prevents'), true);
+  eq('a reference naming no heading as a whole segment flags nothing', omittedItemSentences(req('009', 'Fleet', 'Fleet is committed.'), src), []);
+  // A long item is not checked sentence by sentence, and says so rather than passing silently.
+  const longSrc = new Map([[citationKey('inputs/reqs.md'), ['## Reservations', '#### Long Item', ...Array.from({ length: 60 }, (_, k) => `Sentence number ${k} describes a separate rule for reservations in detail.`)].join('\n')]]);
+  const unchecked: string[] = [];
+  eq('a long item flags no sentences', omittedItemSentences(req('010', 'Long Item', 'Sentence number 1 describes a separate rule for reservations in detail.'), longSrc, unchecked), []);
+  eq('a long item is reported as unchecked', unchecked, ['Long Item (REQ-010)']);
+  eq('the unchecked note names it', (formatUncheckedItems(unchecked) ?? '').includes('1 long source item(s)'), true);
+  eq('nothing unchecked, no note', formatUncheckedItems([]), null);
 }
 
 console.log(`source checks — ${failures} failure(s)`);
