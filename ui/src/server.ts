@@ -1684,7 +1684,7 @@ async function startDraftChapters(ctx: SectionContext, input: Record<string, unk
  */
 async function fixAreasFromReview(
   ctx: SectionContext, jobs: DraftJob[], doc: SectionedDoc, artifact: string, report: ReviewReport | undefined
-): Promise<{ changed: number; saved?: { name: string; content: string; path: string } }> {
+): Promise<{ changed: number; saved?: { name: string; content: string; path: string }; depResets?: string[] }> {
   const sectionOf = sectionOfIn(doc);
   const work: { section: string; job: DraftJob; findings: ReviewReport["findings"]; checks: string[] }[] = [];
   const failsOnly = DRAFT_REFIX_MODE === "fail";
@@ -1709,6 +1709,7 @@ async function fixAreasFromReview(
   // area's first ID; such an ID is moved past every ID the document defines.
   const reqNo = (id: string) => Number(id.replace(/\D/g, ""));
   let next = Math.max(0, ...definedIds(doc.compose()).map(reqNo)) + 1;
+  const depResets: string[] = [];
   for (const o of out) {
     if (!o.text) continue;
     const elsewhere = doc.titles().filter((t) => sectionKey(t) !== sectionKey(o.section)).flatMap((t) => definedIds(doc.text(t) ?? ""));
@@ -1719,7 +1720,9 @@ async function fixAreasFromReview(
       console.error(`[drafts] ${o.section}: new ID(s) ${[...rn.moved.keys()].join(", ")} already used elsewhere, renumbered to ${[...rn.moved.values()].join(", ")}`);
     }
     // The Dependencies grammar, as on every other write.
-    o.text = enforceDependencies(o.text as string, normalizedSourcesFor(ctx.project, ctx.task)).text;
+    const dep = enforceDependencies(o.text as string, normalizedSourcesFor(ctx.project, ctx.task));
+    o.text = dep.text;
+    if (dep.reset.length) { depResets.push(`${o.section}: ${dep.reset.join(", ")}`); console.error(`[drafts] ${o.section}: Dependencies reset on ${dep.reset.join(", ")} in the fix pass`); }
     // The same guard a save through write_section gets: a section that comes back much shorter, or without its
     // citations or IDs, is not put in.
     const prev = doc.text(o.section) ?? "", t = o.text as string;
@@ -1730,12 +1733,12 @@ async function fixAreasFromReview(
     if (refusal) { console.error(`[drafts] ${o.section}: fix not taken — it would shrink the section or drop its citations or IDs`); o.text = null; }
   }
   const changed = out.filter((o) => o.text && o.text !== doc.text(o.section));
-  if (!changed.length) return { changed: 0 };
+  if (!changed.length) return { changed: 0, depResets };
   for (const o of changed.slice(0, -1)) doc.set(o.section, o.text!);
   const lastO = changed[changed.length - 1];
   const r = await handleWriteSection(ctx, { artifact, section: lastO.section, content: lastO.text! });
   console.error(`[drafts] findings sent back to ${byArea.size} section(s); ${changed.length} changed in ${Math.round((Date.now() - started) / 1000)}s`);
-  return { changed: changed.length, saved: r.saved };
+  return { changed: changed.length, saved: r.saved, depResets };
 }
 
 // The second reader (see source-review.ts). A model call that did not write the requirements reads each one
@@ -2775,7 +2778,8 @@ async function runAgent(
                   areasRefixed = true; // once a run: what is left after it goes to the writer of the whole document
                   const r = await fixAreasFromReview(sctx, fixable, doc, artifact, report);
                   if (r.saved) { savedThisRun.add(r.saved.path); lastDocSaved = { name: r.saved.name, content: r.saved.content }; }
-                  return r.changed ? `**${r.changed} drafted section(s) were corrected by their own writers** from the reviewer's findings and the server's checks before these checks ran; what follows is what is still open.` : null;
+                  const resets = r.depResets?.length ? ` ⚠ Dependencies reset to “Not Specified” in the fix pass (kept under Open Questions as “Dependency to confirm”): ${r.depResets.join("; ")}.` : "";
+                  return r.changed ? `**${r.changed} drafted section(s) were corrected by their own writers** from the reviewer's findings and the server's checks before these checks ran; what follows is what is still open.${resets}` : null;
                 }
               : undefined;
             resultText = (drafted ? `${drafted}\n\n---\n\n` : "") + (await handleCheckDocument({ ...sctx, review: reviewMemory, refixAreas, drafted: draftJobs.length > 0 }, args)).text;
