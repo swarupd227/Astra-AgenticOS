@@ -55,6 +55,24 @@ export function citedKeys(text: string): string[] {
   return [...new Set((text.match(CITE) ?? []).map(citationKey))];
 }
 
+/**
+ * A client document a requirements document is written from: an uploaded input, or a functional specification held in the
+ * Golden Repository (`GLD-FS-002@1 (VitalEdge Sprint 2 - Detailed Requirements)`). Takes a source name or a citation key.
+ * Standards, templates and reference items are material to cite, never documents requirements come from.
+ */
+export function isClientDocument(name: string): boolean {
+  return /^inputs\//i.test(name) || /^GLD-FS-\d+\b/i.test(name);
+}
+
+/**
+ * The task and the client's own documents among the sources: the uploaded inputs when the project has any — Golden
+ * Repository items, functional specs included, then stay reference material — otherwise its GLD-FS functional specs.
+ */
+export function ownDocuments<T extends { name: string }>(all: T[]): T[] {
+  const inputs = all.some((s) => /^inputs\//i.test(s.name));
+  return all.filter((s) => s.name === "task prompt" || (inputs ? /^inputs\//i.test(s.name) : isClientDocument(s.name)));
+}
+
 /** `GLD-FS-001@1` and `gld-fs-001` are the same citation. */
 export function citationKey(c: string): string {
   return /^gld-/i.test(c) ? c.replace(/@\d+$/, "").toUpperCase() : c.toLowerCase();
@@ -1120,6 +1138,8 @@ const SOURCE_INFERENCE = /^\s*(?:this|which|that)\s+(?:suggests?|implies|indicat
 const SOURCE_COMMENTARY = /^\s*the\s+requirement\s+(?:also\s+)?(?:explicitly\s+|specifically\s+)?(?:states|mentions|references|introduces|specifies|identifies|requires)\b[^:]*:?\s*/i;
 /** Area-level text: its sentences belong to the area's introduction and to many requirements, not to one item. */
 const NOT_AN_ITEM = /\b(?:overview|summary|introduction|background|scope|purpose|context)\b/i;
+/** A source's numbered open items: "Gap 2: …", "Decision 5", "Risk 1 – …". */
+const OPEN_ITEM = /^\s*(?:gap|decision|risk|assumption|open (?:item|question))\s*#?\d+\b/i;
 const segmentsOf = (s: string) =>
   s.replace(/[*_`]/g, "").split(/[›>—–:“”"|;/()[\]]+|\s-\s/).map((x) => words(x).join(" ")).filter(Boolean);
 
@@ -1187,7 +1207,9 @@ export function omittedItemSentences(
   const out: OmittedItemSentence[] = [];
   for (const [it, e] of byItem) {
     // An area-sized section is not an item: its sentences belong to many requirements.
-    if (NOT_AN_ITEM.test(it.title)) continue;
+    // A Gap, Decision or Risk is cited in Open Questions for what it asks, not carried sentence by sentence: on a
+    // Golden-Repository BRD they were a third of this check's flags ("Decision 5 | Examples: Any overdue invoice …").
+    if (NOT_AN_ITEM.test(it.title) || OPEN_ITEM.test(it.title)) continue;
     if (it.body.length > 2500) { unchecked.push(`${it.title} (${e.reqs.join(", ")})`); continue; }
     const have = bigramSet(e.text.join("\n"));
     const sentences = joinLeadIns(it.body).split(/(?<=[.!?])\s+|\n+/).map((s) => plain(s).replace(/\s+/g, " ").trim());

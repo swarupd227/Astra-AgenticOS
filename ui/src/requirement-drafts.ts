@@ -14,7 +14,7 @@
  *
  * The model calls are injected, so the orchestration can be tested without one.
  */
-import { requirementBlocks } from "./source-checks.js";
+import { isClientDocument, requirementBlocks } from "./source-checks.js";
 import type { ReviewIssue, ReviewMemory, ReviewReport, SourceText } from "./source-review.js";
 
 export type Area = {
@@ -62,7 +62,7 @@ export const WRITER_SYSTEM =
   `3. The requirements, each in exactly this form:\n\n` +
   `#### REQ-001 — <name of the source item; nothing added>\n\n` +
   `**Requirement Statement:** <what the source states>\n\n` +
-  `**Source Reference:** \`inputs/<file>.md\` — <area heading> › <sub-heading>: “<the source sentence the statement reproduces, verbatim>”\n\n` +
+  `**Source Reference:** \`<source>\` — <area heading> › <sub-heading>: “<the source sentence the statement reproduces, verbatim>”\n\n` +
   `**Priority:** Not specified in source.\n\n` +
   `**Dependencies:** Not Specified.\n\n` +
   `**Open Questions:** <see the rule below>\n\n` +
@@ -73,7 +73,7 @@ export const WRITER_SYSTEM =
   `- Carry every sentence of the breakdown item you cite, between your requirements: the sentence saying what it is for ("This prevents…", "This allows…"), the explanation under each option, and a general statement that follows an example stay in the source's own words and strength. A list the source introduces with a hedge ("This suggests the business may need to track: A, B, C") is content: keep every item, with the hedge.\n` +
   `- Keep every item of a source list; dropping one is a failure. Add nothing the source does not state: no actor, condition, number, timing, field, status, screen or example.\n` +
   `- Keep the source's strength word for word, in both directions: "should" stays "should", "may" stays "may", "can" stays "can", "must" and "shall" stay as written. Never strengthen and never weaken: "must be billed" written as "may be billed", or "should support" as "may support", is as wrong as "should" written as "shall". Take the word from the sentence you quote in the Source Reference, and quote the sentence that carries it: if the "should" is in the area's Requirement Overview and the detail in a breakdown item, cite both. Where the Overview states the obligation ("The process should also support credit memos, rebills") and a breakdown item only hedges its detail ("This suggests corrected invoices can be regenerated"), the requirement keeps the Overview's "should" and the hedge stays a hedge on the detail; do not weaken the obligation to "may". A source that says the system "supports", "contains", "includes" or "captures" something describes it: write "The system supports …", not "shall". Where the task prompt and an input document state the same thing with a different strength word ("Quote may convert" / "Quotes should convert"; a plain statement such as "Supported frequencies:" against "should support" is not a conflict), do not settle it: use the word of the source the task ranks higher in its own source-priority list (if it gives one; otherwise the task prompt's), cite both, and add a line right after the Source Reference: **Source Conflict Identified:** <source> says “…”; <source> says “…”. Open Questions hold only questions the sources capture, so the conflict does not go there.\n` +
-  `- Source Reference: the full file name (\`inputs/<file>.md\`) or \`task prompt\`, the heading path, and the sentence the statement reproduces, verbatim inside quotation marks; use … to skip words. If the statement takes wording from both the task prompt and an input document, cite both.\n` +
+  `- Source Reference: the source exactly as its SOURCE line names it — an uploaded file by its full name (\`inputs/<file>.md\`), a Golden Repository document by its id and version only (\`GLD-FS-002@1\`, never as a file under inputs/) — or \`task prompt\`; then the heading path, and the sentence the statement reproduces, verbatim inside quotation marks; use … to skip words. If the statement takes wording from both the task prompt and an input document, cite both.\n` +
   `- Priority: only a priority a source states for this item; otherwise "Not specified in source."\n` +
   `- Dependencies: only where a source sentence states one for this item ("depends on", "requires … first", "creates a dependency on", "cannot … until"): write \`<what it depends on> — “<that source sentence>”\`. Quote only that sentence and name only what it names. Such a sentence counts wherever it sits in your area's section — in a Gap, Decision or Risk too ("This requirement has a strong dependency on Insurance & LDW functionality", "Meter-based billing introduces dependencies on: …", "Invoice calculations depend on multiple upstream modules: …"): if it concerns this requirement it goes in Dependencies, quoted, as well as wherever else you cite it. The sentence must be in YOUR area's section and be about this item: a dependency another section states for its own item (for example "Insurance validation directly influences LDW behavior" in the Insurance section) does not carry over to a requirement in your area. "Based on", "according to", "carried from", "flows from", "contains", "drives" and "becomes the source for" describe inputs, contents or what comes downstream, not dependencies; a risk, a gap, the order of steps in a process flow, or your sense that two items belong together is not a dependency either. Otherwise "Not Specified."\n` +
   `- Open Questions: your area's source section lists "Information Missing / Requirement Gaps" (Gap 1, Gap 2, …), "Key Business Decisions Required" (Decision 1, …) and "Product Risks & Ambiguities" (Risk 1, …), numbered within the area. For each requirement, name every Gap, Decision or Risk of YOUR area that concerns it, by its number and title exactly as the source numbers and titles it, followed by the source's own question in quotation marks, verbatim (shorten only with …) — e.g. Gap 2: Credit Status Lifecycle — “Who places customer on Hold?”. Never reword an item to fit the requirement: do not add qualifiers ("for LDW charges", "after activation"), do not narrow or extend its list, do not put another item's content under its number, and do not invent a title (a Decision with no title in the source has none). If an item concerns the requirement only because the requirement is one of many things it covers, cite it as it stands. Every input document numbers its Gaps per area, so name where each comes from when the Source Reference does not already make it plain (e.g. "inputs/Detailed-Requirements-1.md › Quote Level Pricing — Gap 4: Pricing Lock Rules — “…”"). This holds for every requirement of your area, including one whose wording comes from the task prompt: it is still about your area's feature, so your area's Gaps, Decisions and Risks about that feature apply to it. Go through the list again before writing "None identified in source."; that is right only when none of them concerns the requirement. Never cite a Gap, Decision or Risk from another area.\n` +
@@ -152,7 +152,7 @@ export function headingsOf(text: string): { level: number; title: string; line: 
 /** The areas a requirements document lays out: in each input document, the headings of its second level (its first if it has no second). */
 export function areaHeadings(sources: SourceText[]): { source: string; title: string }[] {
   const out: { source: string; title: string }[] = [];
-  for (const s of sources.filter((x) => x.name.startsWith("inputs/"))) {
+  for (const s of sources.filter((x) => isClientDocument(x.name))) {
     const hs = headingsOf(s.text);
     const level = hs.some((h) => h.level === 2) ? 2 : hs.some((h) => h.level === 1) ? 1 : 0;
     if (!level) continue;
@@ -165,10 +165,10 @@ export function areaHeadings(sources: SourceText[]): { source: string; title: st
 /** The section of the sources under a heading: from it to the next heading of its level or above. Exact title first, then a title that contains it. */
 export function extractSection(sources: SourceText[], heading: string): Extract | null {
   // "inputs/Detailed-Requirements-1.md — Billing Methods" names the file too; the heading is what follows it.
-  const want = key(heading.replace(/^\s*`?inputs\/[^\s`]+`?\s*[—–:>›-]*\s*/i, ""));
+  const want = key(heading.replace(/^\s*`?(?:inputs\/[^\s`]+|GLD-FS-\d+(?:@\d+)?)`?\s*[—–:>›-]*\s*/i, ""));
   if (!want) return null;
   const cands: { s: SourceText; h: { level: number; title: string; line: number }; exact: boolean }[] = [];
-  for (const s of sources.filter((x) => x.name.startsWith("inputs/"))) {
+  for (const s of sources.filter((x) => isClientDocument(x.name))) {
     for (const h of headingsOf(s.text)) {
       const k = key(h.title);
       if (k === want) cands.push({ s, h, exact: true });
@@ -231,6 +231,7 @@ export function cleanArea(text: string, area: Area): string {
   const first = t.search(/^#{1,6}\s/m);
   if (first > 0) t = t.slice(first);
   if (!/^#{1,6}\s/.test(t)) t = `### ${area.section}\n\n${t}`;
+  // A Golden Repository document cited as "inputs/GLD-…" is corrected — and counted — when the area is saved (SectionedDoc.set).
   return t.trim();
 }
 
@@ -436,7 +437,7 @@ export type Chapter = {
 export const CHAPTER_SYSTEM =
   `You write ONE chapter of a Business Requirements Document from the source documents above. Other writers handle the other chapters and the requirements at the same time; write only yours.\n\n` +
   `- The task prompt (a source above) is authoritative about what the chapter must and must not contain. Find its instructions for your chapter and follow them.\n` +
-  `- Every statement traces to a source: name it by full file name (\`inputs/<file>.md\` and its section) or \`task prompt\`. Text in quotation marks is verbatim from that source; use … to skip words.\n` +
+  `- Every statement traces to a source: name it exactly as its SOURCE line names it (an uploaded file as \`inputs/<file>.md\`, a Golden Repository document by its id, e.g. \`GLD-FS-002@1\`), with its section, or \`task prompt\`. Text in quotation marks is verbatim from that source; use … to skip words.\n` +
   `- Do not construct what the sources lack. Roles, stakeholders, audiences, owners, engagement levels, frequencies, success measures, targets and KPIs get a value only where a source states it; otherwise write *Not specified in source* and say what needs business clarification. A plausible value is an invented one. Name people and groups only as the sources name them.\n` +
   `- Where the task asks you to infer (for example the business motivation behind discovery material), say so plainly ("This document reads the sources as …", "Inferred from …") and do not put a source citation directly after the inference as if the source said it; cite only sentences a source actually contains, and quote them. The server compares every cited sentence with the cited source.\n` +
   `- Length follows the sources. Where the sources say little about the chapter's subject (stakeholders, audiences and success measures usually), the chapter is short: say once which of the task's fields the sources do not give, and raise the questions — do not build a table of "Not specified" cells for every role or item. Aim for no more than about 8,000 characters unless the sources hold more that the chapter needs.\n` +

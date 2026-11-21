@@ -29,7 +29,10 @@ reader must be able to take any statement, go to the source you name, and find i
 1. `list_artifacts`. Every file under `inputs/` is a source document: read **each one in full** with
    `read_artifact` and `maxChars` set to `0`. A truncated read does not count, and you cannot save
    until every input has been read in full.
-2. `golden_catalog`, then `golden_read` whatever the task, a bound template, or the sources point to.
+2. `golden_catalog`, then `golden_read` whatever the task, a bound template, or the sources point to. When the
+   project has no `inputs/` and its requirement documents are functional specifications in the Golden
+   Repository (`GLD-FS-…`), those are the source documents: read each in full, and give `draft_requirements`
+   their section headings as you would an input's.
 3. Call `compare_sources`. It lists terms that different sources define in unlike words. You judge
    each: a real disagreement is written into the document as **Source Conflict Identified**, with
    both wordings quoted and their sources named, and you do not choose between them. If two wordings

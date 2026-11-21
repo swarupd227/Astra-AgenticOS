@@ -24,7 +24,7 @@ import {
   citationIssues, citationKey, citesTaskPrompt, constructsProhibitedBy, formatCitationReport, formatConflicts, formatDeviation,
   coverageGaps, danglingReferences, duplicateRequirements, formatDuplicateRequirements, fieldRowsAsLabels, dependencyIssues, formatCoverageGaps, formatDanglingReferences, formatOmittedDependencies, formatOmittedItemSentences, formatUncheckedItems, formatQuoteIssues, formatUngroundedFields, omittedDependencies, omittedItemSentences, quoteIssues, ungroundedFields,
    formatDependencyIssues, formatInventedRoles, formatProhibited, formatStrengthIssues, inventedRoles,
-  noCheckableCitations, prohibitedUsed, requirementBlocks, strengthIssues, templateDeviations, termConflicts, unaddressedConflicts,
+  isClientDocument, noCheckableCitations, ownDocuments, prohibitedUsed, requirementBlocks, strengthIssues, templateDeviations, termConflicts, unaddressedConflicts,
   type TermConflict,
 } from "./source-checks.js";
 import { REVIEW_SCHEMA, REVIEW_SYSTEM, REVIEW_TOOL, ReviewMemory, batchPrompt, coerceReview, formatReview, reviewDocument, sourcesBlock, type AskReviewer, type ReviewReport, type SourceText } from "./source-review.js";
@@ -1039,7 +1039,7 @@ function documentChecks(
     const sourceTexts = allSources.map((s) => s.text);
     // What the document must carry comes from the task and this project's own documents; reference
     // items in the Golden Repository (code conventions, other products) are material to cite, not obligations.
-    const ownTexts = allSources.filter((s) => s.name === "task prompt" || s.name.startsWith("inputs/")).map((s) => s.text);
+    const ownTexts = ownSources(allSources).map((s) => s.text);
     const deps = formatDependencyIssues(dependencyIssues(doc, sourceTexts));
     if (deps) notes.push(deps);
 
@@ -1327,6 +1327,8 @@ async function handleCheckDocument(ctx: SectionContext, input: Record<string, un
   }
   if (refixNote) notes.unshift(refixNote);
   if (second.text) notes.push(second.text);
+  if (doc.citationRewrites)
+    notes.push(`ℹ **${doc.citationRewrites} citation(s) were written as files under inputs/ (\`inputs/GLD-…\`) and corrected to the Golden Repository id.** A Golden Repository document is cited by its id, e.g. \`GLD-FS-002@1\`.`);
   // After the sections' own writers have had their rounds, the writer of the whole document fixes what matters and
   // stops: run 23 spent 68 turns (11 minutes) patching minor findings and weak citation matches one at a time.
   if (ctx.drafted || refixNote)
@@ -1408,9 +1410,16 @@ function draftRequirementsTool(): Anthropic.Tool {
   };
 }
 
-/** The sources an area writer and its reviewer read: the task and this project's input documents. */
+/**
+ * The client's own documents among the sources, with the task: the uploaded inputs, or — for a project that has none and
+ * holds its specifications in the Golden Repository — its functional specifications. A user-generated BRD from a project
+ * with only GLD-FS items had no area writers at all and was written in one pass (8 of 11 fails were merged items).
+ */
+const ownSources = ownDocuments;
+
+/** The sources an area writer and its reviewer read: the task and this project's own documents. */
 function draftSources(project: Project | null, task: string): SourceText[] {
-  return documentSources(project, task).filter((s) => s.name === "task prompt" || s.name.startsWith("inputs/"));
+  return ownSources(documentSources(project, task));
 }
 
 /** Put a system prompt in the model's prompt cache before parallel calls start, so they read it rather than each writing it. */
@@ -1846,7 +1855,9 @@ async function independentReviewReport(
 ): Promise<{ text: string | null; report?: ReviewReport }> {
   if (!SOURCE_REVIEW || !ctx.project) return { text: null };
   // Its own sources: the task, this project's documents, and the Golden items the document cites.
-  const sources = documentSources(ctx.project, ctx.task).filter((s) => s.name === "task prompt" || s.name.startsWith("inputs/") || content.includes(s.name.split(" ")[0]));
+  const all = documentSources(ctx.project, ctx.task);
+  const own = new Set(ownSources(all).map((s) => s.name));
+  const sources = all.filter((s) => own.has(s.name) || content.includes(s.name.split(" ")[0]));
   if (sources.length < 2 || requirementBlocks(content).length < 3) return { text: null };
   ctx.emit?.({ type: "notice", message: "An independent reviewer is reading the requirements against their sources…" });
   const started = Date.now();
@@ -1899,7 +1910,8 @@ function handleCompareSources(
   const sources = documentSources(project, task);
   // Only disagreements involving the task or this project's own documents matter to the
   // document being written; reference items disagreeing among themselves do not.
-  const conflicts = termConflicts(sources, 0.4, (name) => name === "task prompt" || name.startsWith("inputs/"));
+  const own = new Set(ownSources(sources).map((s) => s.name));
+  const conflicts = termConflicts(sources, 0.4, (name) => own.has(name));
   const text = `Compared ${sources.length} sources (${sources.map((s) => s.name).slice(0, 6).join("; ")}${sources.length > 6 ? "; …" : ""}).\n\n${formatConflicts(conflicts)}`;
   evidence.addObservation({
     runId, projectId: project?.id ?? "", agent: agentId, tool: "compare_sources",
@@ -2880,6 +2892,12 @@ async function runAgent(
     const summary = perf.summary();
     console.error(formatPerf(summary));
     rawEmit({ type: "perf", ...summary });
+    // Said, not silent: a corrected citation is still one the writers got wrong.
+    for (const [name, d] of sectionDocs) if (d.citationRewrites) {
+      const line = `${d.citationRewrites} citation(s) in ${name} were written as files under inputs/ (inputs/GLD-…) and rewritten to the Golden Repository id`;
+      console.error(`[citations] ${line}`);
+      rawEmit({ type: "notice", message: line });
+    }
   }
 
   // If we exhausted the turn budget mid-work (last turn still wanted tools),

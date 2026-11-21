@@ -3,7 +3,7 @@
  *
  *   npm test
  */
-import { SectionedDoc, applyEdits, sectionKey } from "../src/sections.js";
+import { SectionedDoc, applyEdits, goldenCitationsById, sectionKey } from "../src/sections.js";
 
 let failures = 0;
 const fail = (m: string) => { console.error(m); failures++; };
@@ -109,6 +109,16 @@ const eq = (label: string, got: unknown, want: unknown) => {
 }
 
 eq("an empty document composes to a single newline", new SectionedDoc().compose(), "\n");
+{
+  const d = new SectionedDoc();
+  d.set("Success Criteria", "## Success Criteria\n\nFrom `inputs/GLD-FS-002.md` — Billing, and inputs/GLD-FS-001@1. Also `inputs/brief.md`.");
+  eq("a Golden Repository document is cited by its id, an uploaded file keeps its path", d.text("Success Criteria"),
+    "## Success Criteria\n\nFrom `GLD-FS-002` — Billing, and GLD-FS-001@1. Also `inputs/brief.md`.");
+  eq("the corrections are counted, not silent", d.citationRewrites, 2);
+  d.set("Success Criteria", "## Success Criteria\n\nFrom `GLD-FS-002`.");
+  eq("a section already citing by id adds nothing", d.citationRewrites, 2);
+  eq("the helper returns text and count", goldenCitationsById("see inputs/GLD-STD-004.md"), { text: "see GLD-STD-004", count: 1 });
+}
 
 console.log(`sectioned documents — ${failures} failure(s)`);
 process.exit(failures ? 1 : 0);

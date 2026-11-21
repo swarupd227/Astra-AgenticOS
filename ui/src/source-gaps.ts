@@ -8,7 +8,7 @@
  *
  * Heuristics over text, like the rest of source-checks.ts: each reports what it compared.
  */
-import { citedKeys, contentWords, requirementBlocks, stem } from "./source-checks.js";
+import { citedKeys, contentWords, requirementBlocks, stem, isClientDocument } from "./source-checks.js";
 
 const stems = (text: string) => new Set(contentWords(text).map(stem));
 const sharedCount = (a: Set<string>, b: Set<string>) => { let n = 0; for (const w of a) if (b.has(w)) n++; return n; };
@@ -84,10 +84,10 @@ export function gapCitationIssues(doc: string, sources: Map<string, string>): { 
       for (const n of [m[2], ...(m[3].match(/\d+/g) ?? [])]) refs.push({ kind, n: Number(n) });
     }
     if (!refs.length) continue;
-    const files = citedKeys(oq).filter((k) => k.startsWith("inputs/") && sources.has(k));
+    const files = citedKeys(oq).filter((k) => isClientDocument(k) && sources.has(k));
     // A question that names a document the server does not hold cannot be checked against another one.
-    if (!files.length && citedKeys(oq).some((k) => k.startsWith("inputs/"))) continue;
-    const use = files.length ? files : r.cited.filter((k) => k.startsWith("inputs/") && sources.has(k));
+    if (!files.length && citedKeys(oq).some((k) => isClientDocument(k))) continue;
+    const use = files.length ? files : r.cited.filter((k) => isClientDocument(k) && sources.has(k));
     const items = use.flatMap((k) => { if (!itemsOf.has(k)) itemsOf.set(k, sourceItems(sources.get(k)!, k)); return itemsOf.get(k)!; });
     if (!items.length) continue;
     // The questions: the field without its source parentheses and without the references themselves.
@@ -141,7 +141,7 @@ export function hiddenGaps(doc: string, sources: Map<string, string>): HiddenGap
     // Only the requirement's own words: its statement and name. The source reference quotes more than it asserts.
     const own = stems(`${field(r, /^(?:requirement )?statement$/)} ${field(r, /^requirement name$/)}`);
     if (own.size < 3) continue;
-    const files = r.cited.filter((k) => k.startsWith("inputs/") && sources.has(k));
+    const files = r.cited.filter((k) => isClientDocument(k) && sources.has(k));
     const hits: { label: string; s: number }[] = [];
     for (const k of files) {
       if (!itemsOf.has(k)) itemsOf.set(k, sourceItems(sources.get(k)!, k));

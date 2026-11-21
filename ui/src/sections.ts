@@ -26,9 +26,22 @@ function compareNumbers(a: number[], b: number[]): number {
   return 0;
 }
 
+/**
+ * A Golden Repository document is cited by its id, not as a file under inputs/: a golden-only run's writers wrote
+ * "inputs/GLD-FS-002.md" 292 times, for a file that does not exist. Returns the corrected text and how many were
+ * corrected, so a run can report it rather than let "0 citations not found" hide that the writers cited badly.
+ */
+export function goldenCitationsById(text: string): { text: string; count: number } {
+  let count = 0;
+  const out = text.replace(/\binputs\/(GLD-[A-Z]+-\d+(?:@\d+)?)(?:\.md)?/g, (_m, id: string) => { count++; return id; });
+  return { text: out, count };
+}
+
 export class SectionedDoc {
   private order: string[] = [];
   private parts = new Map<string, { title: string; text: string }>();
+  /** Citations of Golden Repository documents written as files under inputs/ and corrected on save, over the document's life. */
+  citationRewrites = 0;
 
   has(title: string): boolean { return this.parts.has(sectionKey(title)); }
 
@@ -42,7 +55,9 @@ export class SectionedDoc {
    */
   set(title: string, content: string, after?: string): boolean {
     const key = sectionKey(title);
-    const text = (/^\s*#{1,6}\s/.test(content) ? content : `## ${title.trim()}\n\n${content}`).replace(/\s+$/, "");
+    const fixed = goldenCitationsById((/^\s*#{1,6}\s/.test(content) ? content : `## ${title.trim()}\n\n${content}`).replace(/\s+$/, ""));
+    const text = fixed.text;
+    this.citationRewrites += fixed.count;
     const existed = this.parts.has(key);
     this.parts.set(key, { title: title.trim(), text });
     if (!existed) {

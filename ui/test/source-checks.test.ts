@@ -12,7 +12,7 @@ import {
   dependencyIssues, fieldRowsAsLabels, formatDependencyIssues, formatStrengthIssues, strengthIssues, strengthOf,
   citationIssues, citationKey, citesTaskPrompt, constructsProhibitedBy, extractDefinitions, formatCitationReport,
   formatInventedRoles, inventedRoles, noCheckableCitations, prohibitedUsed, templateDeviations, termConflicts,
-  unaddressedConflicts, omittedItemSentences, formatOmittedItemSentences, formatUncheckedItems,
+  unaddressedConflicts, omittedItemSentences, formatOmittedItemSentences, formatUncheckedItems, ownDocuments, isClientDocument,
 } from "../src/source-checks.js";
 
 let failures = 0;
@@ -604,6 +604,13 @@ eq("a mention nowhere near a prohibition does not count",
     'The business may need to track: Customer deductible amount, Damage responsibility thresholds.'), src), []);
   eq('the report names the requirement and the sentence', (formatOmittedItemSentences(o) ?? '').includes('REQ-001 — Fleet Commitment: “This prevents'), true);
   eq('a reference naming no heading as a whole segment flags nothing', omittedItemSentences(req('009', 'Fleet', 'Fleet is committed.'), src), []);
+  // A numbered Gap / Decision / Risk is cited for its question, not carried sentence by sentence.
+  const gapSrc = new Map([[citationKey('inputs/reqs.md'), ['## Reservations', '#### Decision 5', 'Examples: any overdue invoice, thirty days past due, sixty days past due.'].join('\n')]]);
+  eq('a cited Decision heading flags nothing', omittedItemSentences(req('011', 'Decision 5', 'Overdue handling is a business decision.'), gapSrc), []);
+  // …but an item that merely has "Risk" or "Decision" in its name is a requirement like any other.
+  const riskSrc = new Map([[citationKey('inputs/reqs.md'), ['## Credit', '#### Credit Risk Limits', 'Credit limits should be reviewed every quarter.', 'This protects the company from accumulated exposure.'].join('\n')]]);
+  eq('an item named "Credit Risk Limits" is still checked', omittedItemSentences(req('012', 'Credit Risk Limits', 'Credit limits should be reviewed every quarter.', 'Credit'), riskSrc).map((x) => x.sentence),
+    ['This protects the company from accumulated exposure.']);
   // A long item is not checked sentence by sentence, and says so rather than passing silently.
   const longSrc = new Map([[citationKey('inputs/reqs.md'), ['## Reservations', '#### Long Item', ...Array.from({ length: 60 }, (_, k) => `Sentence number ${k} describes a separate rule for reservations in detail.`)].join('\n')]]);
   const unchecked: string[] = [];
@@ -611,6 +618,16 @@ eq("a mention nowhere near a prohibition does not count",
   eq('a long item is reported as unchecked', unchecked, ['Long Item (REQ-010)']);
   eq('the unchecked note names it', (formatUncheckedItems(unchecked) ?? '').includes('1 long source item(s)'), true);
   eq('nothing unchecked, no note', formatUncheckedItems([]), null);
+}
+
+{
+  // Which documents requirements come from: uploaded inputs when there are any, Golden Repository specs only otherwise.
+  const names = (xs: { name: string }[]) => xs.map((x) => x.name);
+  const mixed = [{ name: 'task prompt' }, { name: 'inputs/Detailed-Requirements-1.md' }, { name: 'GLD-FS-002 (Detailed Requirements)' }, { name: 'GLD-REF-001 (ERP)' }];
+  eq('with inputs, GLD-FS items stay reference material and get no area writers', names(ownDocuments(mixed)), ['task prompt', 'inputs/Detailed-Requirements-1.md']);
+  const golden = [{ name: 'task prompt' }, { name: 'GLD-FS-001 (Operations Flow)' }, { name: 'GLD-FS-002 (Detailed Requirements)' }, { name: 'GLD-STD-003 (Naming)' }];
+  eq('without inputs, the GLD-FS specs are the documents; a standard is not', names(ownDocuments(golden)), ['task prompt', 'GLD-FS-001 (Operations Flow)', 'GLD-FS-002 (Detailed Requirements)']);
+  eq('isClientDocument takes a citation key too', [isClientDocument('GLD-FS-002'), isClientDocument('inputs/a.md'), isClientDocument('GLD-REF-001')], [true, true, false]);
 }
 
 console.log(`source checks — ${failures} failure(s)`);

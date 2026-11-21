@@ -33,6 +33,15 @@ eq("the areas are the second-level headings, without markup", areaHeadings(SOURC
   const c = extractSection(SOURCES, "inputs/Detailed-Requirements-1.md — Credit Limit Allocation");
   eq("a heading given with its file name is found, and stops before the next area", [c?.title, c?.text.includes("Gap 1: Credit Limit Ownership"), c?.text.includes("Billing")], ["Credit Limit Allocation", true, false]);
   eq("a heading that is not there is not found", extractSection(SOURCES, "Insurance Master"), null);
+  // A project whose specifications are in the Golden Repository: its GLD-FS items are the documents areas come from;
+  // a standard or reference item is not.
+  const GOLDEN = [
+    { name: "task prompt", text: "BILLING METHODS" },
+    { name: "GLD-FS-002@1 (VitalEdge Sprint 2 - Detailed Requirements)", text: DR },
+    { name: "GLD-REF-001@1 (ERP practices)", text: "## Ledger Standards\nPosting rules." },
+  ];
+  eq("Golden Repository functional specs give the areas; reference items do not", areaHeadings(GOLDEN).map((a) => a.title), ["Credit Limit Allocation", "Billing Methods"]);
+  eq("a heading given with its GLD-FS id is found", extractSection(GOLDEN, "GLD-FS-002@1 — Billing Methods")?.title, "Billing Methods");
   eq("the exact heading wins over one that contains it", extractSection(SOURCES, "Requirement Overview")?.text.includes("Credit checks"), true);
   // A live input put "# Our Understanding" and "# Information Missing" at the top level inside an area.
   const odd = [{ name: "inputs/x.md", text: "# **Personalization**\n## **List Screen Personalization**\nIntro.\n# **Our Understanding**\nUsers should sort.\n# **Information Missing / Requirement Gaps**\n#### Gap 1: Limits\n\n# **Personalization**\n## **Detail Screen Personalization**\nOther." }];
