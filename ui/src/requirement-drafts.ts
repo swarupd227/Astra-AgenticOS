@@ -44,6 +44,8 @@ export type AreaResult = {
   error?: string;
   /** What happened to a fix, when it was not simply applied. */
   note?: string;
+  /** Requirements the reviewer never returned a verdict for (local IDs): not reviewed, not clean. */
+  unreviewed?: string[];
 };
 
 /** A model call: the conversation so far (user first), returning the assistant's text. */
@@ -74,7 +76,7 @@ export const WRITER_SYSTEM =
   `- Priority: only a priority a source states for this item; otherwise "Not specified in source."\n` +
   `- Dependencies: only where a source sentence states one for this item ("depends on", "requires … first", "creates a dependency on", "cannot … until"): write \`<what it depends on> — “<that source sentence>”\`. Quote only that sentence and name only what it names. Such a sentence counts wherever it sits in your area's section — in a Gap, Decision or Risk too ("This requirement has a strong dependency on Insurance & LDW functionality", "Meter-based billing introduces dependencies on: …", "Invoice calculations depend on multiple upstream modules: …"): if it concerns this requirement it goes in Dependencies, quoted, as well as wherever else you cite it. The sentence must be in YOUR area's section and be about this item: a dependency another section states for its own item (for example "Insurance validation directly influences LDW behavior" in the Insurance section) does not carry over to a requirement in your area. "Based on", "according to", "carried from", "flows from", "contains", "drives" and "becomes the source for" describe inputs, contents or what comes downstream, not dependencies; a risk, a gap, the order of steps in a process flow, or your sense that two items belong together is not a dependency either. Otherwise "Not Specified."\n` +
   `- Open Questions: your area's source section lists "Information Missing / Requirement Gaps" (Gap 1, Gap 2, …), "Key Business Decisions Required" (Decision 1, …) and "Product Risks & Ambiguities" (Risk 1, …), numbered within the area. For each requirement, name every Gap, Decision or Risk of YOUR area that concerns it, by its number and title exactly as the source numbers and titles it, followed by the source's own question in quotation marks, verbatim (shorten only with …) — e.g. Gap 2: Credit Status Lifecycle — “Who places customer on Hold?”. Never reword an item to fit the requirement: do not add qualifiers ("for LDW charges", "after activation"), do not narrow or extend its list, do not put another item's content under its number, and do not invent a title (a Decision with no title in the source has none). If an item concerns the requirement only because the requirement is one of many things it covers, cite it as it stands. Every input document numbers its Gaps per area, so name where each comes from when the Source Reference does not already make it plain (e.g. "inputs/Detailed-Requirements-1.md › Quote Level Pricing — Gap 4: Pricing Lock Rules — “…”"). Go through the list again before writing "None identified in source."; that is right only when none of them concerns the requirement. Never cite a Gap, Decision or Risk from another area.\n` +
-  `- A scope item the task lists for your area but NO source describes beyond its name (check your area's section, the task's process description and the full sources first; if any describes it, write requirements from that instead, and never add a "listed in scope" entry for an item other requirements already cover) gets one requirement whose statement is "<item> is listed in the Sprint 2 Approved Scope; the sources provide no further detail." with Open Questions "Requires Business Clarification: <what is missing>." Do not turn a scope name into an obligation ("The system shall support …").\n` +
+  `- A scope item the task lists for your area but NO source describes beyond its name (check your area's section, the task's process description and the full sources first; if any describes it, write requirements from that instead, and never add a "listed in scope" entry for an item other requirements already cover) gets one requirement whose statement is "<item> is listed in the approved scope; the sources provide no further detail." (name the scope as the task names it) with Open Questions "Requires Business Clarification: <what is missing>." Do not turn a scope name into an obligation ("The system shall support …").\n` +
   `- Every scope item given for your area is covered by at least one requirement.\n` +
   `- Write only from the sources: no industry knowledge, best practice, recommendation or inference.\n\n` +
   `Output only the Markdown of your area — no preamble, no closing remarks, no code fences.`;
@@ -264,7 +266,9 @@ export function mergeChanges(current: string, changes: string): string | null {
   for (const g of got.reqs) {
     const rest = trim(g.text).split(/\r?\n/).slice(1).join("\n").trim();
     const at = reqs.findIndex((r) => r.id === g.id);
-    if (rest === "DELETE") { if (at >= 0) reqs.splice(at, 1); continue; }
+    // "DELETE", "**DELETE**", "DELETE." and "_Delete_" all mean the same; any of them kept as text would leave a
+    // requirement whose heading still defines the ID, so the lost-ID guard would not see it go.
+    if (rest.replace(/[*_`.!\s]/g, "").toUpperCase() === "DELETE") { if (at >= 0) reqs.splice(at, 1); continue; }
     if (!rest) continue; // a bare heading changes nothing
     const text = trim(g.text);
     if (at >= 0) reqs[at] = { id: g.id, text }; else reqs.push({ id: g.id, text });
@@ -319,8 +323,12 @@ export async function draftArea(opts: {
   let note: string | undefined;
   let checks = check(text);
   let open: AreaResult["openReview"] = [];
+  let unreviewed: string[] = [];
   for (let r = 0; r < opts.rounds; r++) {
     const rep = await review(text, memory);
+    // A requirement the reviewer never answered for has not been reviewed: a failed or tool-less reviewer must not
+    // read as a clean area (the cloud's reviewer failed every call for a day and every area looked clean).
+    unreviewed = [...new Set([...unreviewed.filter((id) => !memory.roundsFor(id)), ...rep.missing])];
     const fresh = rep.findings;
     const stillOpen = open.filter((o) => rep.stillOpen.includes(o.req) && !fresh.some((f) => f.req === o.req));
     open = [...fresh, ...stillOpen];
@@ -346,7 +354,9 @@ export async function draftArea(opts: {
     // What the fix changed is read again next round; what it left alone stays as reported.
     open = open.filter((o) => { const b = requirementBlocks(text).find((x) => new RegExp(`\\b${o.req}\\b`).test(x)); return b ? !!memory.lastVerdict(o.req, b) : false; });
   }
-  return { area, text, reqs: definedIds(text).length, fixRounds, openChecks: checks, openReview: open, ...(note ? { note } : {}) };
+  const ids = new Set(definedIds(text));
+  unreviewed = unreviewed.filter((id) => ids.has(id) && !memory.roundsFor(id));
+  return { area, text, reqs: ids.size, fixRounds, openChecks: checks, openReview: open, unreviewed, ...(note ? { note } : {}) };
 }
 
 export async function pool<T, R>(items: T[], n: number, fn: (t: T, i: number) => Promise<R>): Promise<R[]> {
@@ -456,9 +466,14 @@ export function summarizeDrafts(results: AreaResult[], ranges: { first: string; 
   const rows = results.map((r, i) =>
     `- **${r.area.section}** — ${r.error ? `⚠ not drafted: ${r.error}` : `${ranges[i].count} requirement${ranges[i].count === 1 ? "" : "s"}${ranges[i].count ? ` (${ranges[i].first}–${ranges[i].last})` : ""}` +
       `${r.fixRounds ? `, fixed after review (${r.fixRounds} round${r.fixRounds > 1 ? "s" : ""})` : ""}` +
-      `${r.openReview.length ? `; reviewer findings left open on ${r.openReview.length}` : ""}${r.openChecks.length ? `; ${r.openChecks.length} server check(s) open` : ""}`}`);
+      `${r.openReview.length ? `; reviewer findings left open on ${r.openReview.length}` : ""}${r.openChecks.length ? `; ${r.openChecks.length} server check(s) open` : ""}` +
+      `${r.unreviewed?.length ? `; ⚠ NOT reviewed: ${r.unreviewed.length} requirement(s) the reviewer returned no verdict for` : ""}`}`);
+  const notReviewed = results.reduce((s, r) => s + (r.unreviewed?.length ?? 0), 0);
   return (
     `**Requirements drafted in parallel:** ${results.length} areas, ${total} requirements, in ${Math.round(ms / 1000)} s. ` +
-    `Each area was written from its own source section, checked by the server, read by the independent reviewer and corrected by its writer.\n\n${rows.join("\n")}`
+    (notReviewed
+      ? `Each area was written from its own source section and checked by the server; ⚠ the independent reviewer returned no verdict for ${notReviewed} requirement(s), so those are NOT reviewed — say so in your answer.`
+      : `Each area was written from its own source section, checked by the server, read by the independent reviewer and corrected by its writer.`) +
+    `\n\n${rows.join("\n")}`
   );
 }

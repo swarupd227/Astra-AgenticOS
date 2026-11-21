@@ -1656,6 +1656,29 @@ async function fixAreasFromReview(
     } catch (e) { console.error(`[drafts] fix of ${section} failed: ${(e as Error).message}`); return { section, text: null }; }
   });
   const byArea = { size: work.length };
+  // IDs are global by now. A fix may add a requirement "with the next unused ID" as its area sees it, which is the next
+  // area's first ID; such an ID is moved past every ID the document defines.
+  const reqNo = (id: string) => Number(id.replace(/\D/g, ""));
+  let next = Math.max(0, ...definedIds(doc.compose()).map(reqNo)) + 1;
+  for (const o of out) {
+    if (!o.text) continue;
+    const own = new Set(definedIds(doc.text(o.section) ?? ""));
+    const elsewhere = new Set(doc.titles().filter((t) => sectionKey(t) !== sectionKey(o.section)).flatMap((t) => definedIds(doc.text(t) ?? "")));
+    const clash = definedIds(o.text).filter((id) => !own.has(id) && elsewhere.has(id));
+    if (clash.length) {
+      const map = new Map(clash.map((id) => [id, `REQ-${String(next++).padStart(3, "0")}`]));
+      o.text = o.text.replace(/\bREQ-\d{1,4}\b/g, (m) => map.get(m) ?? m);
+      console.error(`[drafts] ${o.section}: new ID(s) ${clash.join(", ")} already used elsewhere, renumbered to ${[...map.values()].join(", ")}`);
+    }
+    // The same guard a save through write_section gets: a section that comes back much shorter, or without its
+    // citations or IDs, is not put in.
+    const prev = doc.text(o.section) ?? "";
+    const refusal = destructiveSave({
+      kind: "section", newLen: o.text.length, prevLen: prev.length, name: `${artifact} § ${o.section}`,
+      prevCitations: countCitations(prev), newCitations: countCitations(o.text), prevIds: countIds(prev), newIds: countIds(o.text),
+    });
+    if (refusal) { console.error(`[drafts] ${o.section}: fix not taken — it would shrink the section or drop its citations or IDs`); o.text = null; }
+  }
   const changed = out.filter((o) => o.text && o.text !== doc.text(o.section));
   if (!changed.length) return { changed: 0 };
   for (const o of changed.slice(0, -1)) doc.set(o.section, o.text!);
@@ -1751,8 +1774,14 @@ async function independentReviewReport(
   });
   ctx.perf?.reviewRound(Date.now() - started);
   console.error(`[review] independent reviewer: read ${report.read}/${report.total}, ${report.findings.length} with findings (${report.findings.filter((f) => f.verdict === "fail").length} failing), ${report.droppedClaims} unverifiable claim(s) dropped, ${report.missing.length} unreturned, ${Math.round((Date.now() - started) / 1000)}s`);
+  // An unreturned requirement was not reviewed. Saying nothing would read as "clean" (the cloud's reviewer failed
+  // every call for a day and nobody was told).
+  const unreturned = report.missing.length
+    ? `⚠ **Independent review incomplete — the reviewer returned no verdict for ${report.missing.length} requirement(s)** (${report.missing.slice(0, 12).join(", ")}${report.missing.length > 12 ? ", …" : ""}). They are not reviewed; say so in your answer.`
+    : "";
   const text = formatReview(report, sectionOf);
-  if (text) return { text, report };
+  if (text) return { text: unreturned ? `${text}\n\n${unreturned}` : text, report };
+  if (unreturned) return { text: unreturned, report };
   return { text: report.read ? `✓ An independent reviewer read ${report.read} requirement${report.read === 1 ? "" : "s"} against the sources and found nothing to change.` : null, report };
 }
 

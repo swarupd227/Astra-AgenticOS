@@ -82,6 +82,7 @@ eq("text with no heading at all gets the area's", cleanArea("Nothing here.", are
   const f = mergeChanges(area3, "**Feature analysis**\n\n| Aspect | From the sources |\n|---|---|\n| Trigger | new |")!;
   eq("a returned Feature analysis replaces the area's, under the same heading", [f.startsWith("### 6.1 Billing"), f.includes("| Trigger | new |"), f.includes("| Trigger | old |"), definedIds(f).length], [true, true, false, 3]);
   eq("an answer with nothing usable is not a merge", mergeChanges(area3, "I agree with the findings."), null);
+  eq("DELETE in markup or with punctuation still deletes", ["**DELETE**", "DELETE.", "_Delete_"].map((d) => definedIds(mergeChanges(area3, `#### REQ-003 — C\n\n${d}`)!)), [["REQ-001", "REQ-002"], ["REQ-001", "REQ-002"], ["REQ-001", "REQ-002"]]);
 }
 
 // --- one area, start to finish -------------------------------------------------------------------------------
@@ -139,6 +140,20 @@ const fixed = draft.replace("shall be selected", "is selected");
       ({ read: 2, total: 2, findings: [{ req: "REQ-002", verdict: "fail", issues: [{ kind: "invented", field: "Requirement Statement", problem: "no source states this" }] }], stillOpen: [], droppedClaims: 0, missing: [] });
     const r = await draftArea({ area, extracts: [], write, check: () => [], review, memory: new ReviewMemory(), rounds: 1 });
     eq("a fix may remove a requirement a finding named", [r.reqs, /removed REQ-002/.test(r.note ?? "")], [1, true]);
+  }
+  {
+    // A reviewer that answers for nothing (an outage, or a reply with no tool call) leaves the area NOT reviewed, not clean.
+    const { summarizeDrafts } = await import("../src/requirement-drafts.js");
+    const write: WriteCall = async () => draft;
+    const silent = async (text: string): Promise<ReviewReport> => {
+      const { requirementBlocks } = await import("../src/source-checks.js");
+      const ids = requirementBlocks(text).map((b) => /REQ-\d+/.exec(b)![0]);
+      return { read: 0, total: ids.length, findings: [], stillOpen: [], droppedClaims: 0, missing: ids };
+    };
+    const r = await draftArea({ area, extracts: [], write, check: () => [], review: silent, memory: new ReviewMemory(), rounds: 2 });
+    eq("requirements the reviewer never answered for are reported as unreviewed", r.unreviewed, ["REQ-001", "REQ-002"]);
+    const s = summarizeDrafts([r], [{ first: "REQ-001", last: "REQ-002", count: 2 }], 1000);
+    eq("and the summary says so instead of 'read by the independent reviewer'", [/NOT reviewed/.test(s), /read by the independent reviewer/.test(s)], [true, false]);
   }
   {
     // Server checks alone are enough to ask for a fix; with no review rounds nothing is asked.
