@@ -17,7 +17,7 @@ import { auditChange, formatAudit, proposalsWithoutTests } from "./audit.js";
 import { SectionedDoc, applyEdits, sectionKey, type Edit } from "./sections.js";
 import {
   CHAPTER_SYSTEM, WRITER_SYSTEM, areaHeadings, areaPrompt, carryReview, chapterPrompt, cleanArea, definedIds, draftArea, draftChapter, extractSection, fixPrompt,
-  fixChangesPrompt, headingFor, mergeChanges, pool, renumber, splitAreas, summarizeDrafts, type Area, type AreaResult, type Chapter, type WriteCall,
+  fixChangesPrompt, headingFor, mergeChanges, pool, renumber, renumberNewIds, splitAreas, summarizeDrafts, type Area, type AreaResult, type Chapter, type WriteCall,
 } from "./requirement-drafts.js";
 import { contentKey, countCitations, countIds, destructiveSave, implausiblyShort } from "./guards.js";
 import {
@@ -1662,20 +1662,19 @@ async function fixAreasFromReview(
   let next = Math.max(0, ...definedIds(doc.compose()).map(reqNo)) + 1;
   for (const o of out) {
     if (!o.text) continue;
-    const own = new Set(definedIds(doc.text(o.section) ?? ""));
-    const elsewhere = new Set(doc.titles().filter((t) => sectionKey(t) !== sectionKey(o.section)).flatMap((t) => definedIds(doc.text(t) ?? "")));
-    const clash = definedIds(o.text).filter((id) => !own.has(id) && elsewhere.has(id));
-    if (clash.length) {
-      const map = new Map(clash.map((id) => [id, `REQ-${String(next++).padStart(3, "0")}`]));
-      o.text = o.text.replace(/\bREQ-\d{1,4}\b/g, (m) => map.get(m) ?? m);
-      console.error(`[drafts] ${o.section}: new ID(s) ${clash.join(", ")} already used elsewhere, renumbered to ${[...map.values()].join(", ")}`);
+    const elsewhere = doc.titles().filter((t) => sectionKey(t) !== sectionKey(o.section)).flatMap((t) => definedIds(doc.text(t) ?? ""));
+    const rn = renumberNewIds(o.text, definedIds(doc.text(o.section) ?? ""), elsewhere, next);
+    next = rn.next;
+    if (rn.moved.size) {
+      o.text = rn.text;
+      console.error(`[drafts] ${o.section}: new ID(s) ${[...rn.moved.keys()].join(", ")} already used elsewhere, renumbered to ${[...rn.moved.values()].join(", ")}`);
     }
     // The same guard a save through write_section gets: a section that comes back much shorter, or without its
     // citations or IDs, is not put in.
-    const prev = doc.text(o.section) ?? "";
+    const prev = doc.text(o.section) ?? "", t = o.text as string;
     const refusal = destructiveSave({
-      kind: "section", newLen: o.text.length, prevLen: prev.length, name: `${artifact} § ${o.section}`,
-      prevCitations: countCitations(prev), newCitations: countCitations(o.text), prevIds: countIds(prev), newIds: countIds(o.text),
+      kind: "section", newLen: t.length, prevLen: prev.length, name: `${artifact} § ${o.section}`,
+      prevCitations: countCitations(prev), newCitations: countCitations(t), prevIds: countIds(prev), newIds: countIds(t),
     });
     if (refusal) { console.error(`[drafts] ${o.section}: fix not taken — it would shrink the section or drop its citations or IDs`); o.text = null; }
   }

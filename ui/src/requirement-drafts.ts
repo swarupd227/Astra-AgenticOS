@@ -298,6 +298,19 @@ export function renumber(texts: string[], start = 1): { texts: string[]; ranges:
   return { texts: out, ranges };
 }
 
+/**
+ * A fix at check_document runs after the IDs are global. A new requirement the writer numbers "next unused" in its
+ * own area is another area's ID: move each new ID that another section defines past every ID in use, starting at
+ * `next`. Returns the text, what was moved, and the next free number.
+ */
+export function renumberNewIds(text: string, ownBefore: Iterable<string>, elsewhere: Iterable<string>, next: number): { text: string; moved: Map<string, string>; next: number } {
+  const own = new Set(ownBefore), other = new Set(elsewhere);
+  const clash = [...new Set(definedIds(text))].filter((id) => !own.has(id) && other.has(id));
+  const moved = new Map<string, string>();
+  for (const id of clash) moved.set(id, `REQ-${String(next++).padStart(3, "0")}`);
+  return { text: moved.size ? text.replace(/\bREQ-\d{1,4}\b/g, (m) => moved.get(m) ?? m) : text, moved, next };
+}
+
 /** Record what an area's reviewer read into the run's memory under the renumbered IDs, so it is not read again unchanged. */
 export function carryReview(local: string, global: string, from: ReviewMemory, to: ReviewMemory) {
   const a = requirementBlocks(local), b = requirementBlocks(global);

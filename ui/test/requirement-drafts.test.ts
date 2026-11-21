@@ -85,6 +85,24 @@ eq("text with no heading at all gets the area's", cleanArea("Nothing here.", are
   eq("DELETE in markup or with punctuation still deletes", ["**DELETE**", "DELETE.", "_Delete_"].map((d) => definedIds(mergeChanges(area3, `#### REQ-003 — C\n\n${d}`)!)), [["REQ-001", "REQ-002"], ["REQ-001", "REQ-002"], ["REQ-001", "REQ-002"]]);
 }
 
+// --- a fix at check_document, after the IDs are global -------------------------------------------------------
+{
+  const { renumberNewIds } = await import("../src/requirement-drafts.js");
+  const { destructiveSave, countCitations, countIds } = await import("../src/guards.js");
+  // Area B holds REQ-040..REQ-041; area C starts at REQ-042. B's writer adds "the next unused ID", REQ-042.
+  const before = "### 6.2 B\n\n#### REQ-040 — x\n\nSee REQ-041.\n\n#### REQ-041 — y\n";
+  const fixed = before + "\n#### REQ-042 — new item\n\nRelated to REQ-042 itself and REQ-040.\n";
+  const r = renumberNewIds(fixed, ["REQ-040", "REQ-041"], ["REQ-001", "REQ-042", "REQ-043"], 44);
+  eq("a new ID another area defines is moved past every ID in use, everywhere in the section", [[...r.moved.entries()], definedIds(r.text), /REQ-042/.test(r.text), r.next], [[["REQ-042", "REQ-044"]], ["REQ-040", "REQ-041", "REQ-044"], false, 45]);
+  eq("the section's own IDs and its references to them are left alone", /See REQ-041\./.test(r.text) && /REQ-040\.\n$/.test(r.text), true);
+  const free = renumberNewIds(before + "\n#### REQ-050 — new\n", ["REQ-040", "REQ-041"], ["REQ-042"], 44);
+  eq("a new ID no one else uses is kept", [free.moved.size, free.next], [0, 44]);
+  // The guard a fixed section passes before it replaces the old text.
+  const longArea = Array.from({ length: 12 }, (_, i) => `#### REQ-0${10 + i} — item\n\n**Source Reference:** \`inputs/x.md\` — Area: “a sentence quoted from the source number ${i}”\n`).join("\n");
+  const guard = (next: string) => destructiveSave({ kind: "section", newLen: next.length, prevLen: longArea.length, name: "doc § area", prevCitations: countCitations(longArea), newCitations: countCitations(next), prevIds: countIds(longArea), newIds: countIds(next) });
+  eq("a fix that shrinks the section and drops its citations is refused; an equal-size fix is not", [guard(longArea.slice(0, 200)) !== null, guard(longArea.replace("number 3", "number three")) === null], [true, true]);
+}
+
 // --- one area, start to finish -------------------------------------------------------------------------------
 const reqBlock = (id: string, statement: string) => `#### ${id} — Billing Method Selection\n\n**Requirement Statement:** ${statement}\n\n**Source Reference:** \`inputs/Detailed-Requirements-1.md\` — Billing Methods.\n\n**Priority:** Not specified in source.\n\n**Dependencies:** Not Specified.\n\n**Open Questions:** None identified in source.\n`;
 const draft = `### 6.2 Billing Methods\n\n${reqBlock("REQ-001", "Billing Method shall be selected during Agreement creation.")}\n${reqBlock("REQ-002", "Invoices are generated according to the schedule.")}`;
