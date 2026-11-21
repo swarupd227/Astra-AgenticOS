@@ -9,7 +9,7 @@
  */
 import {
   coverageGaps, formatCoverageGaps, danglingReferences, formatDanglingReferences, omittedDependencies, quoteIssues, requirementText, scopeLines, ungroundedFields,
-  dependencyIssues, formatDependencyIssues, formatStrengthIssues, strengthIssues, strengthOf,
+  dependencyIssues, fieldRowsAsLabels, formatDependencyIssues, formatStrengthIssues, strengthIssues, strengthOf,
   citationIssues, citationKey, citesTaskPrompt, constructsProhibitedBy, extractDefinitions, formatCitationReport,
   formatInventedRoles, inventedRoles, noCheckableCitations, prohibitedUsed, templateDeviations, termConflicts,
   unaddressedConflicts,
@@ -118,6 +118,25 @@ eq("a clean artifact produces no report", formatCitationReport(citationIssues("N
     dependencyIssues('REQ-1 — x.\nDependencies: REQ-0 — “Delivery cannot be planned … until an Agreement exists.”', texts).issues.length, 0);
   eq("a quote of fewer than four words proves nothing",
     dependencyIssues("**Dependencies:** REQ-0 — “Agreement exists soon”", texts).issues.length, 1);
+  eq("'Not specified' in italics is no dependency (it was flagged 60 times in one live document)",
+    dependencyIssues("**Dependencies:** *Not specified in source.*\n\n**Dependencies:** _None identified_", texts).checked, 0);
+  // A requirement written as a table is read like one written as labelled lines.
+  const table = [
+    "#### REQ-020 — Pricing", "",
+    "| Field | Detail |", "|---|---|",
+    "| Requirement ID | REQ-020 |",
+    "| Dependencies | REQ-044 — Not stated as explicit dependency in source. |",
+    "| Priority | Not specified in source |", "",
+    "#### REQ-021 — Tax", "",
+    "| Field | Detail |", "|---|---|",
+    "| Dependencies | Not specified in source |",
+    "| Dependencies | REQ-0 — “Delivery cannot be planned … until an Agreement exists.” |",
+  ].join("\n");
+  eq("a table row is not a dependency check target as written", dependencyIssues(table, texts).checked, 0);
+  const rows = fieldRowsAsLabels(table);
+  const t = dependencyIssues(rows, texts);
+  eq("as labelled lines, an unquoted dependency in a table is flagged and the quoted one passes", [t.checked, t.issues.map((i) => `${i.requirement}:${i.reason}`)], [2, ["REQ-020:no-quote"]]);
+  eq("a table of something else is left alone", fieldRowsAsLabels("| Field | Detail |\n|---|---|\n| Version | 1.0 |\n"), "| Field | Detail |\n|---|---|\n| Version | 1.0 |\n");
   const note = formatDependencyIssues(r) ?? "";
   if (!note.includes("Not specified") || !note.includes("REQ-008")) fail("the dependency note should name the requirement and the way out");
   eq("no issues, no note", formatDependencyIssues({ checked: 2, issues: [] }), null);
@@ -342,6 +361,9 @@ eq("a mention nowhere near a prohibition does not count",
   eq("a document without numbered headings has no section claims", danglingReferences("Text. See Section 7.").sections, []);
   eq("a clean document reports nothing", formatDanglingReferences(danglingReferences("## 1. A\n- REQ-001 x\nSee Section 1 and REQ-001.")), null);
   if (!(formatDanglingReferences(d) ?? "").includes("Section 7")) fail("the report should name the missing section");
+  // Run 20's layout: a bold ID on its own line, then a field table with a "Requirement ID" row.
+  const bold = ["## 6. Requirements", "**REQ-004**", "", "| Field | Value |", "|---|---|", "| Requirement ID | REQ-004 |", "| Requirement Name | Credit |", "", "**REQ-005**", "", "See REQ-004 and REQ-005 and REQ-006."].join("\n");
+  eq("a bold ID on its own line, or a Requirement ID row, defines the requirement", danglingReferences(bold).ids, ["REQ-006"]);
 }
 
 

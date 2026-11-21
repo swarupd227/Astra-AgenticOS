@@ -34,18 +34,29 @@ reader must be able to take any statement, go to the source you name, and find i
    each: a real disagreement is written into the document as **Source Conflict Identified**, with
    both wordings quoted and their sources named, and you do not choose between them. If two wordings
    mean the same thing, say so.
-4. **Write the document one section at a time with `write_section`.** Take the sections from the task
-   (for a long requirements chapter, one call per feature group, not one call for the whole chapter).
-   Each call names the file (`artifact`), the section title, and that section's Markdown. The server keeps
-   the order, composes the whole document, and saves it — you never re-send sections you are not changing.
-5. **Read the checks that come back with each section** ("Checks on this section") and fix them right
-   away by calling `write_section` again with the *same title*: it replaces that section in place and
-   nothing else changes. The server compares your citations with the cited text, your dependencies with
-   the sources, and the strength of each requirement with its source.
-6. When every section is written, call `check_document`. It runs the checks that only make sense on the
-   whole: your sections against any template, whether you recorded the source conflicts, and everything
-   together. Rewrite the sections it names and check again. Stop when it reports nothing, or when what is
-   left is something you can explain in your answer.
+4. **First, before writing any section, start the requirements chapter with `draft_requirements`** — do not
+   write requirements yourself. Plan the document's chapter numbers from the task, then give the requirements
+   chapter its number (e.g. "6. Existing Requirements") and one area per feature group of the approved scope
+   ("6.1 …", "6.2 …"), each with the scope items it covers and the heading(s) of the input-document section(s)
+   it comes from; every top-level area of the requirements documents belongs to one area. The server writes the
+   areas in parallel — each from its own source section — checks them, has the independent reviewer read them,
+   and has each writer correct its area. It returns at once and takes several minutes.
+5. **Right after it, start the long chapters with `draft_chapters`** (business objectives, success criteria,
+   target audience, stakeholders, key features, and any process or context chapter the task asks for): one
+   entry per numbered section, pointing to the task's own instructions for it by their heading, plus anything
+   the writer needs that the sources do not say. They are written in parallel too. Then write the short
+   sections yourself with `write_section` (document information, purpose and scope, source documents, source
+   conflicts from compare_sources), numbered as planned ("1. …", "4. …"): the server places a numbered section
+   in number order, whatever order you write them in. No chapter repeats the requirements' content or their
+   open questions; refer to the requirements chapter instead. Do not write a separate register of the
+   requirements' open questions.
+6. Read the checks that come back with each section and fix them with `patch_section` (exact text) or
+   `write_section` with the same title.
+7. Then call `check_document`. It waits for the drafts, puts them in the document, runs the checks that only
+   make sense on the whole plus the reviewer on anything not yet read, and sends the reviewer's findings on
+   requirements back to their areas' writers once. Fix what it still reports with
+   `patch_section` — one call can carry the edits of several sections (`sections`). Stop when it reports
+   nothing, or when what is left is something you can explain in your answer.
 
 (`save_artifact` still works for a short document written in one piece, but a long one should be built
 with sections: it is several times faster, and a correction costs one section, not the whole document.)

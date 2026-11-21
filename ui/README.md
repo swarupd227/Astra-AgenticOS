@@ -87,6 +87,46 @@ rewrites a section when most of it changes. So the model generates about one cop
 rather than one per correction, and each section is checked the moment it is written. Whole-document
 checks (template structure, conflicts recorded) run in `check_document` and again when the run ends.
 
+### Independent review
+
+The text checks cannot judge what a requirement means, and reviewers of live runs kept finding the same drift after
+they passed: two source items merged into one requirement, list items dropped, a Gap number that raises another
+question, "Not specified" followed by a dependency, a condition no source states. So `check_document` (and the end of
+the run, if the agent never called it) also has a **second reader** (`ui/src/source-review.ts`): a separate model call
+that did not write the requirements reads each one against the task prompt and input documents and reports what
+differs, with the source wording and a replacement. The server discards any finding whose quoted source wording is not
+in the sources, reads a requirement again only when its text has changed (at most twice), and hands the findings to the
+writer, who fixes them with `patch_section`. Set `SOURCE_REVIEW=off` to disable it, `REVIEW_MODEL` to use another model
+for the reader (default: `MODEL`), `REVIEW_BATCH` for requirements per call (default 8), `REVIEW_CONCURRENCY` for calls
+side by side (default 5). The reader returns only the requirements with problems and lists the IDs that passed.
+
+### Parallel drafting
+
+One writer producing ~100 requirements one after another, then fixing them one patch per turn, took 22–38 minutes and
+made the same mistakes run after run (Gap numbers from the wrong area, invented dependencies, merged lists). So the
+requirements and the long chapters are written in parallel (`ui/src/requirement-drafts.ts`):
+
+- `draft_requirements` — the agent maps each feature group of the scope to the heading(s) of the input-document
+  section it comes from. One writer per area gets that section in front of it (all writers share one cached copy of the
+  full sources), writes the area in a fixed form, and then, side by side with the other areas, goes through up to
+  `DRAFT_FIX_ROUNDS` (default 3) rounds of server checks + independent review + fix, each fix returning only the
+  requirements it changes. The server renumbers the IDs across areas and carries what the reviewer read into the run, so
+  `check_document` re-reads only what changed.
+- `draft_chapters` — business objectives, success criteria, audience, stakeholders, key features: one writer each,
+  checked and corrected twice.
+- Both return at once with placeholders in the document; numbered sections fall into number order whatever order they
+  are written in; `check_document` waits for them. `DRAFT_CONCURRENCY` (default 16), `DRAFT_MODEL` (default `MODEL`),
+  `DRAFT_REFIX=on` for one more fix pass by the sections' writers at `check_document` (off: it did not pay for itself).
+
+On the VitalEdge inputs this took a run from 22–24 minutes to about 18, and the sampled requirements from 13 pass /
+6 fail (of 30) to 16–18 pass / 1–3 fail.
+
+### Run performance
+
+Each run logs a `[perf]` line (and emits `turn`, `tool_time` and `perf` events): model time and turns, tool time by
+tool, tokens, and the reviewer's and drafters' calls. A model stream that sends nothing for `STREAM_IDLE_MS` (default
+90 s) is cut and retried; reviewer calls time out after `REVIEW_CALL_TIMEOUT_MS` (default 240 s).
+
 ## Evaluating changes
 
 `npm run eval` runs fixed cases against a live server (it costs model calls) and scores them against

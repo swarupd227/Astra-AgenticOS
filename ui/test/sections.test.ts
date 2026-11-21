@@ -41,6 +41,17 @@ const eq = (label: string, got: unknown, want: unknown) => {
 }
 
 {
+  // The requirements chapter is started first; the chapters numbered before it are written afterwards.
+  const d = new SectionedDoc();
+  d.set("1. Document Information", "x");
+  d.set("6. Existing Requirements", "r"); d.set("6.1 Billing", "b", "6. Existing Requirements"); d.set("6.2 Credit", "c", "6.1 Billing");
+  d.set("5. Business Understanding", "u"); d.set("5.1 Business Objectives", "o"); d.set("7. Open Questions", "q"); d.set("Appendix", "a");
+  eq("a numbered section goes before the first section numbered after it", d.titles(), ["1. Document Information", "5. Business Understanding", "5.1 Business Objectives", "6. Existing Requirements", "6.1 Billing", "6.2 Credit", "7. Open Questions", "Appendix"]);
+  d.set("4.10 Late", "l");
+  eq("numbers compare as numbers, not text", d.titles().indexOf("4.10 Late"), 1);
+}
+
+{
   const d = new SectionedDoc();
   d.set("3.1 Billing Methods", "REQ-001 Weekly, Monthly and 28 Day billing.");
   eq("content without a heading gets one from the title", d.text("3.1 Billing Methods"), "## 3.1 Billing Methods\n\nREQ-001 Weekly, Monthly and 28 Day billing.");

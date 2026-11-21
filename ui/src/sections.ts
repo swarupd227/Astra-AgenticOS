@@ -13,6 +13,19 @@
 /** Sections are matched by title, ignoring case and punctuation but keeping numbering. */
 export const sectionKey = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
+/** The leading number of a section title ("6.2 Billing" → [6, 2]), or null. */
+export function sectionNumber(title: string): number[] | null {
+  const m = /^\s*(?:section\s+|chapter\s+)?(\d+(?:\.\d+)*)\.?(?:\s|$)/i.exec(title);
+  return m ? m[1].split(".").map(Number) : null;
+}
+function compareNumbers(a: number[], b: number[]): number {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? -1, y = b[i] ?? -1;
+    if (x !== y) return x - y;
+  }
+  return 0;
+}
+
 export class SectionedDoc {
   private order: string[] = [];
   private parts = new Map<string, { title: string; text: string }>();
@@ -34,7 +47,12 @@ export class SectionedDoc {
     this.parts.set(key, { title: title.trim(), text });
     if (!existed) {
       const anchor = after ? this.order.indexOf(sectionKey(after)) : -1;
+      // A numbered section with no anchor goes before the first section numbered after it, so chapters can be
+      // written in any order (the requirements chapter is started first and drafted while "5.1" is written).
+      const num = sectionNumber(title);
+      const later = anchor < 0 && num ? this.order.findIndex((k) => { const n = sectionNumber(this.parts.get(k)!.title); return !!n && compareNumbers(n, num) > 0; }) : -1;
       if (anchor >= 0) this.order.splice(anchor + 1, 0, key);
+      else if (later >= 0) this.order.splice(later, 0, key);
       else this.order.push(key);
     }
     return existed;

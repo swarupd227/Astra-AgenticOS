@@ -8,20 +8,26 @@ import crypto from "node:crypto";
 import matter from "gray-matter";
 import { GoldenStore, catalogBlock, CATALOG_CAP, type ProjectGoldenSelection, type GoldenKind } from "./golden.js";
 import { GoldenUsageStore } from "./golden-usage.js";
+import { RunPerf, formatPerf, usageOf, type Usage } from "./perf.js";
 import {
   EvidenceStore, claimStatus, evidenceFilesFor, freshnessOf, isErrorResult, isEvidenceTool,
   safeJoin, sha256, snapshotFiles, summarizeArgs, unknownEvidenceCitations, type Freshness, type Risk,
 } from "./evidence.js";
 import { auditChange, formatAudit, proposalsWithoutTests } from "./audit.js";
-import { SectionedDoc, applyEdits, type Edit } from "./sections.js";
+import { SectionedDoc, applyEdits, sectionKey, type Edit } from "./sections.js";
+import {
+  CHAPTER_SYSTEM, WRITER_SYSTEM, areaHeadings, areaPrompt, carryReview, chapterPrompt, cleanArea, definedIds, draftArea, draftChapter, extractSection, fixPrompt,
+  headingFor, pool, renumber, summarizeDrafts, type Area, type AreaResult, type Chapter, type WriteCall,
+} from "./requirement-drafts.js";
 import { contentKey, countCitations, countIds, destructiveSave, implausiblyShort } from "./guards.js";
 import {
   citationIssues, citationKey, citesTaskPrompt, constructsProhibitedBy, formatCitationReport, formatConflicts, formatDeviation,
-  coverageGaps, danglingReferences, dependencyIssues, formatCoverageGaps, formatDanglingReferences, formatOmittedDependencies, formatQuoteIssues, formatUngroundedFields, omittedDependencies, quoteIssues, ungroundedFields,
+  coverageGaps, danglingReferences, fieldRowsAsLabels, dependencyIssues, formatCoverageGaps, formatDanglingReferences, formatOmittedDependencies, formatQuoteIssues, formatUngroundedFields, omittedDependencies, quoteIssues, ungroundedFields,
    formatDependencyIssues, formatInventedRoles, formatProhibited, formatStrengthIssues, inventedRoles,
-  noCheckableCitations, prohibitedUsed, strengthIssues, templateDeviations, termConflicts, unaddressedConflicts,
+  noCheckableCitations, prohibitedUsed, requirementBlocks, strengthIssues, templateDeviations, termConflicts, unaddressedConflicts,
   type TermConflict,
 } from "./source-checks.js";
+import { REVIEW_SYSTEM, REVIEW_TOOL, ReviewMemory, batchPrompt, coerceReview, formatReview, reviewDocument, sourcesBlock, type AskReviewer, type ReviewReport, type SourceText } from "./source-review.js";
 import { formatGapCitations, formatHiddenGaps, formatNarrowedLists, gapCitationIssues, hiddenGaps, narrowedLists } from "./source-gaps.js";
 import { NEVER_INDEXED, unzipExcludeArgs, pruneUnindexed, countFiles } from "./workspace.js";
 import {
@@ -1002,22 +1008,24 @@ function documentChecks(
   }
 
   if (fromDocuments) {
+    // Requirements written as `| Field | Detail |` tables are read as labelled lines.
+    const doc = fieldRowsAsLabels(content);
     const others = new Map<string, string>();
     if (task.length > 200) others.set("task prompt", task);
     const cited = citedSources(content, project, task);
-    const report = citationIssues(content, cited, others);
+    const report = citationIssues(doc, cited, others);
     const cit = formatCitationReport(report) ?? (whole ? noCheckableCitations(report, content.length) : null);
     if (cit) notes.push(cit);
 
-    const strength = formatStrengthIssues(strengthIssues(content, cited));
+    const strength = formatStrengthIssues(strengthIssues(doc, cited));
     if (strength) notes.push(strength);
 
     // What the requirements say about the gaps, decisions and lists in their sources.
-    const gapRefs = formatGapCitations(gapCitationIssues(content, cited));
+    const gapRefs = formatGapCitations(gapCitationIssues(doc, cited));
     if (gapRefs) notes.push(gapRefs);
-    const hidden = formatHiddenGaps(hiddenGaps(content, cited));
+    const hidden = formatHiddenGaps(hiddenGaps(doc, cited));
     if (hidden) notes.push(hidden);
-    const narrowed = formatNarrowedLists(narrowedLists(content, cited));
+    const narrowed = formatNarrowedLists(narrowedLists(doc, cited));
     if (narrowed) notes.push(narrowed);
 
     const allSources = documentSources(project, task);
@@ -1025,29 +1033,29 @@ function documentChecks(
     // What the document must carry comes from the task and this project's own documents; reference
     // items in the Golden Repository (code conventions, other products) are material to cite, not obligations.
     const ownTexts = allSources.filter((s) => s.name === "task prompt" || s.name.startsWith("inputs/")).map((s) => s.text);
-    const deps = formatDependencyIssues(dependencyIssues(content, sourceTexts));
+    const deps = formatDependencyIssues(dependencyIssues(doc, sourceTexts));
     if (deps) notes.push(deps);
 
     // Pointers into parts of the document that do not exist only make sense to judge on the whole document.
     if (whole) {
-      const dangling = formatDanglingReferences(danglingReferences(content, sourceTexts));
+      const dangling = formatDanglingReferences(danglingReferences(doc, sourceTexts));
       if (dangling) notes.push(dangling);
     }
 
-    const roles = formatInventedRoles(inventedRoles(content, sourceTexts));
+    const roles = formatInventedRoles(inventedRoles(doc, sourceTexts));
     if (roles) notes.push(roles);
 
-    const quotes = formatQuoteIssues(quoteIssues(content, sourceTexts));
+    const quotes = formatQuoteIssues(quoteIssues(doc, sourceTexts));
     if (quotes) notes.push(quotes);
 
-    const fields = formatUngroundedFields(ungroundedFields(content, sourceTexts));
+    const fields = formatUngroundedFields(ungroundedFields(doc, sourceTexts));
     if (fields) notes.push(fields);
 
     // What is missing can only be judged on the whole document.
     if (whole) {
-      const gaps = formatCoverageGaps(coverageGaps(content, ownTexts), 12, content.length);
+      const gaps = formatCoverageGaps(coverageGaps(doc, ownTexts), 12, content.length);
       if (gaps) notes.push(gaps);
-      const omitted = formatOmittedDependencies(omittedDependencies(content, ownTexts));
+      const omitted = formatOmittedDependencies(omittedDependencies(doc, ownTexts));
       if (omitted) notes.push(omitted);
     }
   }
@@ -1094,30 +1102,41 @@ function writeSectionTool(): Anthropic.Tool {
   };
 }
 
+const PATCH_EDITS = {
+  type: "array",
+  items: {
+    type: "object",
+    properties: {
+      find: { type: "string", description: "Exact text now in the section. It must appear once." },
+      replace: { type: "string", description: "What it becomes." },
+    },
+    required: ["find", "replace"],
+  },
+} as const;
+
 function patchSectionTool(): Anthropic.Tool {
   return {
     name: "patch_section",
     description:
-      "Change part of a section you already wrote with write_section, without sending the rest of it. To fix a finding, give the exact text to change (`find`) and what it becomes (`replace`); a few edits can go in one call. Each `find` must match exactly one place in the section, so include enough surrounding words to be unique. Use this instead of rewriting the section whenever the fix is a sentence, a field or a requirement — it costs a fraction of a rewrite. All edits apply or none do. Use write_section when the section needs restructuring or most of it changes.",
+      "Change part of a section you already wrote with write_section, without sending the rest of it. To fix a finding, give the exact text to change (`find`) and what it becomes (`replace`); a few edits can go in one call. Each `find` must match exactly one place in the section, so include enough surrounding words to be unique. Use this instead of rewriting the section whenever the fix is a sentence, a field or a requirement — it costs a fraction of a rewrite. All the edits of one section apply or none do. Use write_section when the section needs restructuring or most of it changes. " +
+      "To fix several sections, send them in ONE call with `sections` (each with its own `section` and `edits`) instead of one call per section: every call is a round trip that re-reads the whole conversation.",
     input_schema: {
       type: "object",
       properties: {
         artifact: { type: "string", description: "File name of the document, ending in .md." },
-        section: { type: "string", description: "Title of the section to change, as it was written." },
-        edits: {
+        section: { type: "string", description: "Title of the section to change, as it was written. Use with `edits` for a single section." },
+        edits: { ...PATCH_EDITS, description: "The changes to that section, applied in order. An empty `replace` deletes the text." },
+        sections: {
           type: "array",
-          description: "The changes, applied in order. An empty `replace` deletes the text.",
+          description: "Several sections in one call: each has its own `section` title and `edits`. Use this instead of `section` and `edits` when more than one section needs a fix.",
           items: {
             type: "object",
-            properties: {
-              find: { type: "string", description: "Exact text now in the section. It must appear once." },
-              replace: { type: "string", description: "What it becomes." },
-            },
-            required: ["find", "replace"],
+            properties: { section: { type: "string", description: "Title of the section to change." }, edits: PATCH_EDITS },
+            required: ["section", "edits"],
           },
         },
       },
-      required: ["artifact", "section", "edits"],
+      required: ["artifact"],
     } as Anthropic.Tool.InputSchema,
   };
 }
@@ -1141,6 +1160,14 @@ type SectionContext = {
   refused: Set<string>;
   /** Where each document was first saved this run; later writes overwrite it in place. */
   paths: Map<string, string>;
+  /** What the independent reviewer has read this run (only check_document uses it). */
+  review?: ReviewMemory;
+  emit?: (e: any) => void;
+  perf?: RunPerf;
+  /** check_document only: send the reviewer's findings back to the drafted areas' writers; returns a note when areas changed. */
+  refixAreas?: (artifact: string, doc: SectionedDoc, report: ReviewReport | undefined) => Promise<string | null>;
+  /** check_document only: the document was drafted in parallel, so the writer of the whole is told what still needs fixing. */
+  drafted?: boolean;
 };
 
 /** An artifact already on disk, or null when there is none. */
@@ -1215,34 +1242,479 @@ async function handleWriteSection(
   };
 }
 
-async function handlePatchSection(
-  ctx: SectionContext, input: Record<string, unknown>
-): Promise<{ text: string; saved?: { name: string; content: string; path: string }; isError?: boolean }> {
+type SectionResult = { text: string; saved?: { name: string; content: string; path: string }; isError?: boolean };
+
+/** One call may patch one section (`section`, `edits`) or several (`sections`); each section is applied and checked on its own. */
+async function handlePatchSection(ctx: SectionContext, input: Record<string, unknown>): Promise<SectionResult> {
   const name = String(input.artifact ?? "").trim();
-  const section = String(input.section ?? "").trim();
+  if (!Array.isArray(input.sections)) return patchOneSection(ctx, name, String(input.section ?? "").trim(), input.edits);
+  const parts = (input.sections as { section?: unknown; edits?: unknown }[]).filter((p) => p && typeof p === "object");
+  if (!parts.length) return { isError: true, text: "Nothing to patch: `sections` is empty." };
+  const out: string[] = [];
+  let saved: SectionResult["saved"];
+  let applied = 0;
+  for (const p of parts) {
+    const title = String(p.section ?? "").trim();
+    const r = await patchOneSection(ctx, name, title, p.edits);
+    if (!r.isError) applied++;
+    if (r.saved) saved = r.saved; // each save composes the whole document, so the last one is the latest
+    out.push(`**${title || "(no title)"}** — ${r.text}`);
+  }
+  return { text: `${applied} of ${parts.length} sections patched.\n\n${out.join("\n\n")}`, saved, isError: applied === 0 };
+}
+
+async function patchOneSection(ctx: SectionContext, name: string, section: string, rawEdits: unknown): Promise<SectionResult> {
   const doc = ctx.docs.get(name);
   const current = doc?.text(section) ?? null;
   if (current === null)
     return { isError: true, text: `Nothing to patch: no section “${section}” of ${name || "(none)"} has been written with write_section in this run. Write it with write_section first${doc ? ` (sections so far: ${doc.titles().join(" · ")})` : ""}.` };
-  const edits = Array.isArray(input.edits) ? (input.edits as Edit[]) : [];
+  const edits = Array.isArray(rawEdits) ? (rawEdits as Edit[]) : [];
   const patched = applyEdits(current, edits);
   if (!patched.ok) return { isError: true, text: `Not patched — ${patched.error} The section is unchanged.` };
   const r = await handleWriteSection(ctx, { artifact: name, section, content: patched.text });
   return { ...r, text: r.isError ? r.text : `Patched “${section}” (${patched.changes} edit${patched.changes > 1 ? "s" : ""}). ${r.text.replace(/^Section “[^”]*” replaced\.\s*/, "")}` };
 }
 
-function handleCheckDocument(ctx: SectionContext, input: Record<string, unknown>): { text: string; isError?: boolean } {
+async function handleCheckDocument(ctx: SectionContext, input: Record<string, unknown>): Promise<{ text: string; isError?: boolean }> {
   const name = String(input.artifact ?? "").trim();
   const doc = ctx.docs.get(name);
   if (!doc) return { isError: true, text: `No document named ${name || "(none)"} has been built with write_section in this run.` };
-  const composed = doc.compose();
-  const notes = documentChecks(composed, ctx.task, ctx.agentId, ctx.project, ctx.conflicts, true, true);
+  let composed = doc.compose();
+  let notes = documentChecks(composed, ctx.task, ctx.agentId, ctx.project, ctx.conflicts, true, true);
+  // The second reader: a separate model call that did not write the requirements.
+  const rctx = { project: ctx.project, task: ctx.task, memory: ctx.review ?? new ReviewMemory(), emit: ctx.emit, perf: ctx.perf };
+  let second = await independentReviewReport(rctx, composed, sectionOfIn(doc));
+  // Findings on drafted areas go back to their writers, side by side; what they change is read again, and only what is
+  // still open reaches the writer of the whole document.
+  let refixNote = "";
+  if (ctx.refixAreas) {
+    const r = await ctx.refixAreas(name, doc, second.report);
+    if (r) {
+      refixNote = r;
+      composed = doc.compose();
+      notes = documentChecks(composed, ctx.task, ctx.agentId, ctx.project, ctx.conflicts, true, true);
+      second = await independentReviewReport(rctx, composed, sectionOfIn(doc));
+    }
+  }
+  if (refixNote) notes.unshift(refixNote);
+  if (second.text) notes.push(second.text);
+  // After the sections' own writers have had their rounds, the writer of the whole document fixes what matters and
+  // stops: run 23 spent 68 turns (11 minutes) patching minor findings and weak citation matches one at a time.
+  if (ctx.drafted || refixNote)
+    notes.push(
+      `**What to fix now:** every "fail" finding, scope items not covered, references to things the document does not contain, invented roles, and unrecorded source conflicts — batched into as few patch_section calls as you can (one call can carry several sections). ` +
+      `"Minor" findings and citations that "only weakly match" are for information: fix one only if it is a single small patch. Then give your final answer.`
+    );
   const size = `${doc.titles().length} sections, ${composed.length.toLocaleString("en-US")} characters`;
   return {
     text: notes.length
       ? `**Whole-document checks on ${name}** (${size}) — fix each with patch_section (or rewrite the section with write_section if most of it changes), then check again:\n\n${notes.join("\n\n")}`
       : `The server's whole-document checks found nothing to report on ${name} (${size}). They are heuristics over text, not a judgment that every statement is true.`,
   };
+}
+
+// The requirements chapter, written area by area in parallel (see requirement-drafts.ts).
+// All the areas of a typical requirements document at once (14 in the VitalEdge inputs): one wave of about 3–4 minutes.
+const DRAFT_CONCURRENCY = Number(process.env.DRAFT_CONCURRENCY ?? 16);
+// Review-and-fix rounds inside each area, run side by side with no barrier between areas. Run 23 had 2, and its writer
+// of the whole document then spent 11 minutes patching what was left.
+const DRAFT_FIX_ROUNDS = Number(process.env.DRAFT_FIX_ROUNDS ?? 3);
+// A further pass at check_document that sends what is still open back to the sections' writers. Run 24: 3 minutes
+// (129 s fixing, 61 s re-reading) and the same three failing findings afterwards as before, so it is off by default.
+const DRAFT_REFIX = (process.env.DRAFT_REFIX ?? "off") === "on";
+const DRAFT_MODEL = process.env.DRAFT_MODEL || "";
+const DRAFT_CALL_TIMEOUT_MS = Number(process.env.DRAFT_CALL_TIMEOUT_MS ?? 360_000);
+
+function draftRequirementsTool(): Anthropic.Tool {
+  return {
+    name: "draft_requirements",
+    description:
+      "Write the whole requirements chapter in parallel: one writer per area of the sources, each given its area's source section, then checked by the server, read by the independent reviewer and corrected by its writer — all areas side by side. " +
+      "Use it instead of writing requirements yourself. Give one area per feature group of the approved scope, each mapped to the heading(s) of the input-document section(s) it comes from (every top-level area of the requirements documents should belong to one area). " +
+      "Call it FIRST, right after reading the sources and compare_sources, before writing any other section, so the areas are drafted while you write the rest. " +
+      "It returns at once and runs in the background for several minutes; placeholders are inserted into the document where the areas will go. Meanwhile write the document's other chapters with write_section, numbered (\"5.1 …\", \"7. …\"): numbered sections are placed in number order around the requirements chapter. " +
+      "Each area is written as: its heading, a Feature analysis table, then requirements in the fixed form (#### REQ-nnn — Name, Requirement Statement, Source Reference, Priority, Dependencies, Open Questions); IDs are numbered across the document by the server. " +
+      "Call check_document when your other chapters are done: it waits for the areas and checks the whole document.",
+    input_schema: {
+      type: "object",
+      properties: {
+        artifact: { type: "string", description: "File name of the document, ending in .md (the same one you write the other sections to)." },
+        chapter: { type: "string", description: "Title of the requirements chapter, e.g. \"6. Existing Requirements\". A short chapter heading section is created with it." },
+        intro: { type: "string", description: "Optional: one or two sentences under the chapter heading (how requirements are organised, the format). No requirements here." },
+        after: { type: "string", description: "Optional: the title of an existing section to place the chapter after. Omit to place it at the end of what is written so far." },
+        areas: {
+          type: "array",
+          description: "The areas, in document order.",
+          items: {
+            type: "object",
+            properties: {
+              section: { type: "string", description: "Section title, numbered under the chapter, e.g. \"6.1 Billing Methods\"." },
+              scope: { type: "string", description: "The approved-scope items this area covers, as the task names them." },
+              source_headings: { type: "array", items: { type: "string" }, description: "Heading(s) in the input documents whose sections this area is written from, as they appear there (e.g. \"Billing Methods\"). Empty for a scope item no input document describes (it is written from the task prompt) — do not leave such an item out." },
+              task_section: { type: "string", description: "Optional: the heading of the task prompt's own description of this area (e.g. \"BILLING METHODS\")." },
+            },
+            required: ["section", "scope", "source_headings"],
+          },
+        },
+      },
+      required: ["artifact", "chapter", "areas"],
+    } as Anthropic.Tool.InputSchema,
+  };
+}
+
+/** The sources an area writer and its reviewer read: the task and this project's input documents. */
+function draftSources(project: Project | null, task: string): SourceText[] {
+  return documentSources(project, task).filter((s) => s.name === "task prompt" || s.name.startsWith("inputs/"));
+}
+
+/** Put a system prompt in the model's prompt cache before parallel calls start, so they read it rather than each writing it. */
+async function warmCache(system: any[], tools?: any[]): Promise<void> {
+  try {
+    await anthropic.messages.create({
+      model: DRAFT_MODEL || MODEL, max_tokens: 1, system, ...(tools ? { tools } : {}),
+      messages: [{ role: "user", content: "Reply with OK." }],
+    }, { timeout: 120_000, maxRetries: 1 });
+  } catch (e) { console.error(`[drafts] cache warm-up failed (continuing): ${(e as Error).message}`); }
+}
+
+/**
+ * A writer: the sources first, cached, then its brief. Area writers and chapter writers have different briefs but the
+ * same cached prefix (no tools, the same sources block), so one warm-up serves every parallel writer.
+ */
+function writerSystem(sources: SourceText[], rules?: string): any[] {
+  return [
+    { type: "text", text: sourcesBlock(sources), cache_control: { type: "ephemeral" } },
+    ...(rules ? [{ type: "text", text: rules }] : []),
+  ];
+}
+function makeWriter(sources: SourceText[], rules: string, perf?: RunPerf): { system: any[]; write: WriteCall } {
+  const system = writerSystem(sources, rules);
+  const write: WriteCall = async (messages) => {
+    const t0 = Date.now();
+    const resp = await anthropic.messages.create({
+      model: DRAFT_MODEL || MODEL, max_tokens: 16000, system: system as any, messages,
+    }, { timeout: DRAFT_CALL_TIMEOUT_MS, maxRetries: 2 });
+    perf?.draftCall(Date.now() - t0, usageOf(resp.usage));
+    if (resp.stop_reason === "max_tokens") console.error(`[drafts] an area writer hit the output limit`);
+    return resp.content.filter((b) => b.type === "text").map((b: any) => b.text).join("");
+  };
+  return { system, write };
+}
+
+type DraftJob = {
+  kind: "requirements" | "chapters";
+  artifact: string; sections: Set<string>;
+  promise: Promise<{ summary: string; saved?: { name: string; content: string; path: string } }>;
+  reported: boolean; done: boolean;
+  /** Requirements only: correct one area from findings, returning its new text, or null when the fix is unusable. */
+  fix?: (section: string, current: string, findings: ReviewReport["findings"], checks: string[]) => Promise<string | null>;
+};
+
+/**
+ * Validate the areas, put placeholders in the document, and start the areas in the background. Returns the text for the
+ * calling agent and the job, or an error.
+ */
+async function startDraftRequirements(
+  ctx: SectionContext & { memory: ReviewMemory }, input: Record<string, unknown>, refusedOnce: Set<string>
+): Promise<{ text: string; isError?: boolean; job?: DraftJob }> {
+  const artifact = String(input.artifact ?? "").trim();
+  const chapter = String(input.chapter ?? "").trim();
+  if (!/\.md$/i.test(artifact)) return { isError: true, text: "Refused: `artifact` must be a Markdown file name ending in .md." };
+  if (!chapter) return { isError: true, text: "Refused: give the requirements chapter a title (`chapter`)." };
+  const raw = Array.isArray(input.areas) ? (input.areas as any[]) : [];
+  const areas: Area[] = raw.filter((a) => a && typeof a === "object").map((a) => ({
+    section: String(a.section ?? "").trim(),
+    scope: String(a.scope ?? "").trim(),
+    sourceHeadings: (Array.isArray(a.source_headings) ? a.source_headings : [a.source_headings]).map((h: unknown) => String(h ?? "").trim()).filter(Boolean),
+    taskSection: a.task_section ? String(a.task_section).trim() : undefined,
+  })).filter((a) => a.section);
+  if (!areas.length) return { isError: true, text: "Refused: `areas` is empty." };
+
+  const sources = draftSources(ctx.project, ctx.task);
+  const available = areaHeadings(sources);
+  const extracts = areas.map((a) => a.sourceHeadings.map((h) => ({ h, e: extractSection(sources, h) })));
+  const unknown = extracts.flatMap((xs, i) => xs.filter((x) => !x.e).map((x) => `“${x.h}” (area ${areas[i].section})`));
+  if (unknown.length)
+    return { isError: true, text: `Refused: no heading in the input documents matches ${unknown.join(", ")}. Use the headings as they appear in the sources. A scope item that no input document describes (only the task names it) is still an area: give it \`source_headings: []\` and it is written from the task prompt. The main areas of the input documents are:\n${available.map((a) => `- ${a.title} (${a.source})`).join("\n")}` };
+  const used = new Set(extracts.flat().map((x) => sectionKey(x.e!.title)));
+  const unassigned = available.filter((a) => !used.has(sectionKey(a.title)));
+  const key = `draft:${artifact}:${unassigned.map((u) => u.title).join("|")}`;
+  if (unassigned.length && !refusedOnce.has(key)) {
+    refusedOnce.add(key);
+    return { isError: true, text: `Not started: these areas of the input documents belong to no area, so their requirements would be missing:\n${unassigned.map((a) => `- ${a.title} (${a.source})`).join("\n")}\n\nAdd them to an area (or a new one). If one is genuinely out of the approved scope, send the same call again and it will start; say so in your answer.` };
+  }
+
+  // Placeholders, so the chapter has its place and the other chapters can be written around it.
+  let doc = ctx.docs.get(artifact);
+  if (!doc) { doc = new SectionedDoc(); ctx.docs.set(artifact, doc); }
+  const intro = String(input.intro ?? "").trim();
+  const after = String(input.after ?? "").trim() || undefined;
+  doc.set(chapter, `## ${chapter}${intro ? `\n\n${intro}` : ""}`, after && doc.has(after) ? after : undefined);
+  let prev = chapter;
+  for (const a of areas.slice(0, -1)) { doc.set(a.section, `### ${a.section}\n\n_Being drafted…_`, prev); prev = a.section; }
+  const last = areas[areas.length - 1];
+  const first = await handleWriteSection(ctx, { artifact, section: last.section, content: `### ${last.section}\n\n_Being drafted…_`, after: prev });
+  if (first.isError) return { isError: true, text: first.text };
+
+  ctx.emit?.({ type: "notice", message: `Drafting ${areas.length} requirement areas in parallel…` });
+  const started = Date.now();
+  const { write } = makeWriter(sources, WRITER_SYSTEM, ctx.perf);
+  const promise = (async () => {
+    const reviewerSystem = [{ type: "text", text: REVIEW_SYSTEM }, { type: "text", text: sourcesBlock(sources), cache_control: { type: "ephemeral" } }];
+    await Promise.all([warmCache(writerSystem(sources)), SOURCE_REVIEW ? warmCache(reviewerSystem, [REVIEW_TOOL]) : Promise.resolve()]);
+    const ask = makeReviewer(sources, (ms, u) => ctx.perf?.reviewCall(ms, u));
+    const memories = areas.map(() => new ReviewMemory());
+    const results = await pool(areas, DRAFT_CONCURRENCY, async (area, i) => {
+      try {
+        const r = await draftArea({
+          area, extracts: extracts[i].map((x) => x.e!), write, memory: memories[i], rounds: SOURCE_REVIEW ? DRAFT_FIX_ROUNDS : 0,
+          check: (text) => documentChecks(text, ctx.task, ctx.agentId, ctx.project, ctx.conflicts, true, false),
+          review: (text, memory) => reviewDocument({ doc: text, sources, memory, ask, batchSize: 6, concurrency: 3, firstAlone: false }),
+        });
+        ctx.emit?.({ type: "notice", message: `Requirements drafted: ${area.section} (${r.reqs})` });
+        console.error(`[drafts] ${area.section}: ${r.reqs} requirements, ${r.fixRounds} fix round(s), ${r.openReview.length} review finding(s) open, ${r.openChecks.length} check(s) open, ${Math.round((Date.now() - started) / 1000)}s${r.note ? ` — ${r.note}` : ""}`);
+        if (process.env.DRAFT_DEBUG && ctx.project) {
+          try { fs.writeFileSync(path.join(ctx.project.artifactsDir, `draft-${i + 1}.json`), JSON.stringify({ area: r.area, note: r.note, openChecks: r.openChecks, openReview: r.openReview, text: r.text }, null, 1)); } catch { /* debug only */ }
+        }
+        return r;
+      } catch (e) {
+        console.error(`[drafts] ${area.section} failed: ${(e as Error).message}`);
+        return { area, text: `### ${area.section}\n\n_Not drafted: ${(e as Error).message}_`, reqs: 0, fixRounds: 0, openChecks: [], openReview: [], error: (e as Error).message } as AreaResult;
+      }
+    });
+    const { texts, ranges } = renumber(results.map((r) => r.text));
+    results.forEach((r, i) => carryReview(r.text, texts[i], memories[i], ctx.memory));
+    for (let i = 0; i < areas.length - 1; i++) doc!.set(areas[i].section, texts[i]);
+    const saved = await handleWriteSection(ctx, { artifact, section: last.section, content: texts[texts.length - 1] });
+    const ms = Date.now() - started;
+    ctx.perf?.draftPhase(areas.length, ms);
+    console.error(`[drafts] ${areas.length} areas, ${ranges.reduce((s, r) => s + r.count, 0)} requirements in ${Math.round(ms / 1000)}s`);
+    ctx.emit?.({ type: "notice", message: `All ${areas.length} requirement areas are in the document.` });
+    return { summary: summarizeDrafts(results, ranges, ms), saved: saved.saved };
+  })();
+  // At check_document, what the reviewer still finds in an area goes back to a writer for that area, all areas at once,
+  // rather than to the writer of the whole document one patch per turn (run 22: 35 patch turns, 9 minutes).
+  const byKey = new Map(areas.map((a, i) => [sectionKey(a.section), { area: a, extracts: extracts[i].map((x) => x.e!) }]));
+  const fix: DraftJob["fix"] = async (section, current, findings, checks) => {
+    const a = byKey.get(sectionKey(section));
+    if (!a) return null;
+    const out = cleanArea(await write([
+      { role: "user", content: areaPrompt(a.area, a.extracts) + `\n\n(The requirement IDs in this area are already numbered for the whole document; keep them exactly as they are.)` },
+      { role: "assistant", content: current },
+      { role: "user", content: fixPrompt(checks, findings) },
+    ]), a.area);
+    const before = definedIds(current), after = new Set(definedIds(out));
+    const named = new Set(findings.map((f) => f.req));
+    if (!after.size || before.some((id) => !after.has(id) && !named.has(id))) return null;
+    return out;
+  };
+  const job: DraftJob = { kind: "requirements", artifact, sections: new Set(areas.map((a) => sectionKey(a.section))), promise, reported: false, done: false, fix };
+  promise.finally(() => { job.done = true; }).catch(() => {});
+  return {
+    job,
+    text:
+      `Started: ${areas.length} areas are being written in parallel, each from its own source section, then checked, reviewed and corrected (several minutes). ` +
+      `Placeholders are in \`${artifact}\` under “${chapter}”.\n\n` +
+      `While they run, write the document's other chapters — with draft_chapters for the long ones, write_section for short ones — numbered so they fall into place around the requirements chapter. Do not write requirements for these areas yourself, and do not write or patch the placeholder sections. ` +
+      `When the other chapters are done, call check_document: it waits for the areas, puts them in the document, and checks the whole.`,
+  };
+}
+
+function draftChaptersTool(): Anthropic.Tool {
+  return {
+    name: "draft_chapters",
+    description:
+      "Write several chapters of the document in parallel, each by its own writer with all the sources in front of it, then checked by the server and corrected once. Use it for the long chapters that do not need requirement IDs (business objectives, success criteria, target audience, stakeholders, key features, process and context chapters). " +
+      "For each give the numbered section title and what it must contain: point to the task's own instructions for it by their heading in the task (e.g. \"Follow the task's 'Success Criteria' instructions\"), and add what the writer must know that the sources do not say (e.g. the objective IDs to align to, if another chapter defines them). " +
+      "It returns at once; the chapters are written in the background (a few minutes) and placed by their numbers. Call check_document when you are done: it waits for them.",
+    input_schema: {
+      type: "object",
+      properties: {
+        artifact: { type: "string", description: "File name of the document, ending in .md." },
+        chapters: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              section: { type: "string", description: "Numbered section title, e.g. \"5.2 Success Criteria\" or \"6. Key Features\"." },
+              instructions: { type: "string", description: "What the chapter must contain, by reference to the task's instructions for it, plus anything the writer needs that is not in the sources." },
+            },
+            required: ["section", "instructions"],
+          },
+        },
+      },
+      required: ["artifact", "chapters"],
+    } as Anthropic.Tool.InputSchema,
+  };
+}
+
+async function startDraftChapters(ctx: SectionContext, input: Record<string, unknown>): Promise<{ text: string; isError?: boolean; job?: DraftJob }> {
+  const artifact = String(input.artifact ?? "").trim();
+  if (!/\.md$/i.test(artifact)) return { isError: true, text: "Refused: `artifact` must be a Markdown file name ending in .md." };
+  const chapters: Chapter[] = (Array.isArray(input.chapters) ? (input.chapters as any[]) : [])
+    .filter((c) => c && typeof c === "object")
+    .map((c) => ({ section: String(c.section ?? "").trim(), instructions: String(c.instructions ?? "").trim() }))
+    .filter((c) => c.section && c.instructions);
+  if (!chapters.length) return { isError: true, text: "Refused: `chapters` is empty (each needs a section title and instructions)." };
+  let doc = ctx.docs.get(artifact);
+  if (!doc) { doc = new SectionedDoc(); ctx.docs.set(artifact, doc); }
+  for (const c of chapters.slice(0, -1)) doc.set(c.section, `${headingFor(c.section)}\n\n_Being drafted…_`);
+  const last = chapters[chapters.length - 1];
+  const first = await handleWriteSection(ctx, { artifact, section: last.section, content: `${headingFor(last.section)}\n\n_Being drafted…_` });
+  if (first.isError) return { isError: true, text: first.text };
+
+  const sources = draftSources(ctx.project, ctx.task);
+  const { write } = makeWriter(sources, CHAPTER_SYSTEM, ctx.perf);
+  const started = Date.now();
+  ctx.emit?.({ type: "notice", message: `Drafting ${chapters.length} chapters in parallel…` });
+  const promise = (async () => {
+    await warmCache(writerSystem(sources));
+    const results = await pool(chapters, DRAFT_CONCURRENCY, async (chapter) => {
+      try {
+        const r = await draftChapter({ chapter, write, rounds: 2, check: (text) => documentChecks(text, ctx.task, ctx.agentId, ctx.project, ctx.conflicts, true, false) });
+        console.error(`[drafts] chapter ${chapter.section}: ${r.text.length} chars, ${r.fixRounds} fix round(s), ${r.openChecks.length} check(s) open, ${Math.round((Date.now() - started) / 1000)}s`);
+        return r;
+      } catch (e) {
+        console.error(`[drafts] chapter ${chapter.section} failed: ${(e as Error).message}`);
+        return { chapter, text: `${headingFor(chapter.section)}\n\n_Not drafted: ${(e as Error).message}_`, openChecks: [] as string[], fixRounds: 0 };
+      }
+    });
+    for (const r of results.slice(0, -1)) doc!.set(r.chapter.section, r.text);
+    const lastR = results[results.length - 1];
+    const saved = await handleWriteSection(ctx, { artifact, section: lastR.chapter.section, content: lastR.text });
+    const ms = Date.now() - started;
+    ctx.perf?.draftPhase(0, ms);
+    ctx.emit?.({ type: "notice", message: `All ${chapters.length} chapters are in the document.` });
+    const rows = results.map((r) => `- **${r.chapter.section}** — ${r.text.length.toLocaleString("en-US")} characters${r.openChecks.length ? `; ${r.openChecks.length} server check(s) still open (check_document lists them)` : ""}`);
+    return { summary: `**Chapters drafted in parallel:** ${results.length}, in ${Math.round(ms / 1000)} s.\n\n${rows.join("\n")}`, saved: saved.saved };
+  })();
+  const byKey = new Map(chapters.map((c) => [sectionKey(c.section), c]));
+  const fix: DraftJob["fix"] = async (section, current, _findings, checks) => {
+    const c = byKey.get(sectionKey(section));
+    if (!c || !checks.length) return null;
+    const out = await write([
+      { role: "user", content: chapterPrompt(c) },
+      { role: "assistant", content: current },
+      { role: "user", content: fixPrompt(checks, []).replace("Return the whole area again", "Return the whole chapter again").replace("with the same requirement IDs", "keeping everything the findings do not concern") },
+    ]);
+    const s = out.replace(/^\s*```(?:markdown|md)?\s*\n/i, "").replace(/\n```\s*$/, "").trim();
+    const first = s.search(/^#{1,6}\s/m);
+    const text = first > 0 ? s.slice(first) : s;
+    return /^#{1,6}\s/.test(text) ? text : null;
+  };
+  const job: DraftJob = { kind: "chapters", artifact, sections: new Set(chapters.map((c) => sectionKey(c.section))), promise, reported: false, done: false, fix };
+  promise.finally(() => { job.done = true; }).catch(() => {});
+  return { job, text: `Started: ${chapters.length} chapters are being written in parallel (a few minutes) and will be placed by their numbers in \`${artifact}\`. Do not write or patch them meanwhile. Write anything else that is left, then call check_document: it waits for them.` };
+}
+
+/**
+ * Hand the reviewer's findings on requirements back to their areas' writers, all areas at once, and put the corrected
+ * areas in the document. Returns how many areas were changed.
+ */
+async function fixAreasFromReview(
+  ctx: SectionContext, jobs: DraftJob[], doc: SectionedDoc, artifact: string, report: ReviewReport | undefined
+): Promise<{ changed: number; saved?: { name: string; content: string; path: string } }> {
+  const sectionOf = sectionOfIn(doc);
+  const work: { section: string; job: DraftJob; findings: ReviewReport["findings"]; checks: string[] }[] = [];
+  for (const job of jobs.filter((j) => j.fix)) {
+    for (const title of doc.titles().filter((t) => job.sections.has(sectionKey(t)))) {
+      const current = doc.text(title) ?? "";
+      const findings = job.kind === "requirements" ? (report?.findings ?? []).filter((f) => sectionKey(sectionOf(f.req)) === sectionKey(title)) : [];
+      const checks = documentChecks(current, ctx.task, ctx.agentId, ctx.project, ctx.conflicts, true, false);
+      if (findings.length || checks.length) work.push({ section: title, job, findings, checks });
+    }
+  }
+  if (!work.length) return { changed: 0 };
+  ctx.emit?.({ type: "notice", message: `Sending what the checks and the reviewer found back to ${work.length} section writer(s)…` });
+  const started = Date.now();
+  const out = await pool(work, DRAFT_CONCURRENCY, async ({ section, job, findings, checks }) => {
+    try {
+      return { section, text: await job.fix!(section, doc.text(section) ?? "", findings, checks) };
+    } catch (e) { console.error(`[drafts] fix of ${section} failed: ${(e as Error).message}`); return { section, text: null }; }
+  });
+  const byArea = { size: work.length };
+  const changed = out.filter((o) => o.text && o.text !== doc.text(o.section));
+  if (!changed.length) return { changed: 0 };
+  for (const o of changed.slice(0, -1)) doc.set(o.section, o.text!);
+  const lastO = changed[changed.length - 1];
+  const r = await handleWriteSection(ctx, { artifact, section: lastO.section, content: lastO.text! });
+  console.error(`[drafts] findings sent back to ${byArea.size} section(s); ${changed.length} changed in ${Math.round((Date.now() - started) / 1000)}s`);
+  return { changed: changed.length, saved: r.saved };
+}
+
+// The second reader (see source-review.ts). A model call that did not write the requirements reads each one
+// against the sources; the server drops any finding whose quoted source wording is not in them.
+const SOURCE_REVIEW = (process.env.SOURCE_REVIEW ?? "on") !== "off";
+const REVIEW_MODEL = process.env.REVIEW_MODEL || "";
+const REVIEW_BATCH = Number(process.env.REVIEW_BATCH ?? 8);
+// Batches read side by side after the first, which goes alone so the sources are in the prompt cache.
+const REVIEW_CONCURRENCY = Number(process.env.REVIEW_CONCURRENCY ?? 5);
+
+/** The section of a document built with write_section that holds a requirement. */
+function sectionOfIn(doc: SectionedDoc | undefined): (req: string) => string {
+  return (req) => {
+    if (!doc) return "";
+    const re = new RegExp(`^#{1,6}\\s+${req.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "m");
+    return doc.titles().find((t) => re.test(doc.text(t) ?? "")) ?? "";
+  };
+}
+
+const REVIEW_CALL_TIMEOUT_MS = Number(process.env.REVIEW_CALL_TIMEOUT_MS ?? 240_000);
+const STREAM_IDLE_MS = Number(process.env.STREAM_IDLE_MS ?? 90_000);
+function makeReviewer(sources: SourceText[], onCall?: (ms: number, u: Usage) => void): AskReviewer {
+  const system = [
+    { type: "text", text: REVIEW_SYSTEM },
+    // The same text for every batch, so the model's prompt cache holds it after the first call.
+    { type: "text", text: sourcesBlock(sources), cache_control: { type: "ephemeral" } },
+  ];
+  return async (batch) => {
+    try {
+      const t0 = Date.now();
+      const resp = await anthropic.messages.create({
+        model: REVIEW_MODEL || MODEL,
+        max_tokens: 12000,
+        system: system as any,
+        tools: [REVIEW_TOOL as any],
+        tool_choice: { type: "tool", name: REVIEW_TOOL.name },
+        messages: [{ role: "user", content: batchPrompt(batch) }],
+      }, { timeout: REVIEW_CALL_TIMEOUT_MS, maxRetries: 2 }); // a batch takes 1–3 minutes; run 20's one stuck call took 18
+      onCall?.(Date.now() - t0, usageOf(resp.usage));
+      const tu = resp.content.find((b) => b.type === "tool_use") as any;
+      return coerceReview(tu?.input);
+    } catch (e) {
+      console.error(`[review] independent reviewer call failed: ${(e as Error).message}`);
+      return [];
+    }
+  };
+}
+
+/** What the second reader found in a document, worded for the writer; null when there is nothing to say or it is switched off. */
+async function independentReview(
+  ctx: { project: Project | null; task: string; memory: ReviewMemory; emit?: (e: any) => void; perf?: RunPerf },
+  content: string, sectionOf: (req: string) => string
+): Promise<string | null> {
+  return (await independentReviewReport(ctx, content, sectionOf)).text;
+}
+
+async function independentReviewReport(
+  ctx: { project: Project | null; task: string; memory: ReviewMemory; emit?: (e: any) => void; perf?: RunPerf },
+  content: string, sectionOf: (req: string) => string
+): Promise<{ text: string | null; report?: ReviewReport }> {
+  if (!SOURCE_REVIEW || !ctx.project) return { text: null };
+  // Its own sources: the task, this project's documents, and the Golden items the document cites.
+  const sources = documentSources(ctx.project, ctx.task).filter((s) => s.name === "task prompt" || s.name.startsWith("inputs/") || content.includes(s.name.split(" ")[0]));
+  if (sources.length < 2 || requirementBlocks(content).length < 3) return { text: null };
+  ctx.emit?.({ type: "notice", message: "An independent reviewer is reading the requirements against their sources…" });
+  const started = Date.now();
+  const report = await reviewDocument({
+    doc: content, sources, memory: ctx.memory, batchSize: REVIEW_BATCH, concurrency: REVIEW_CONCURRENCY,
+    ask: makeReviewer(sources, (ms, u) => ctx.perf?.reviewCall(ms, u)),
+  });
+  ctx.perf?.reviewRound(Date.now() - started);
+  console.error(`[review] independent reviewer: read ${report.read}/${report.total}, ${report.findings.length} with findings (${report.findings.filter((f) => f.verdict === "fail").length} failing), ${report.droppedClaims} unverifiable claim(s) dropped, ${report.missing.length} unreturned, ${Math.round((Date.now() - started) / 1000)}s`);
+  const text = formatReview(report, sectionOf);
+  if (text) return { text, report };
+  return { text: report.read ? `✓ An independent reviewer read ${report.read} requirement${report.read === 1 ? "" : "s"} against the sources and found nothing to change.` : null, report };
 }
 
 // Synthetic tool: terms the sources define differently. Handled here because it needs the
@@ -1753,6 +2225,19 @@ async function runAgent(
 ): Promise<string> {
   const { project, ws } = run;
   const mcpTools = ws.tools;
+  // Time and tokens, recorded as they happen (see perf.ts). A tool's time is from the start of its turn's tool loop
+  // to its result, which is when it is emitted; a delegate's nested events carry delegateId and are timed by their own run.
+  const perf = new RunPerf();
+  let toolT0 = Date.now();
+  const rawEmit = emit;
+  emit = (e: any) => {
+    if (e?.type === "tool_result" && !e.delegateId) {
+      const ms = Date.now() - toolT0;
+      perf.tool(String(e.name), ms);
+      rawEmit({ type: "tool_time", id: e.id, name: e.name, ms });
+    }
+    rawEmit(e);
+  };
   let outText = ""; // this agent's own streamed answer (returned so it can be persisted)
   // Golden items this run has actually read — the evidence the template gate checks.
   const goldenReadThisRun = new Set<string>();
@@ -1786,14 +2271,39 @@ async function runAgent(
   // Agents that write from source documents declare compare_sources; they also get the
   // stricter rules below (every input document read, citations checked against the text).
   const isDocAgent = agent.tools.includes("compare_sources");
-  if (isDocAgent) tools = [...tools, compareSourcesTool(), writeSectionTool(), patchSectionTool(), checkDocumentTool()];
+  if (isDocAgent) tools = [...tools, compareSourcesTool(), writeSectionTool(), patchSectionTool(), checkDocumentTool(), draftRequirementsTool(), draftChaptersTool()];
   let conflictsFound: TermConflict[] = [];
   const sectionDocs = new Map<string, SectionedDoc>();
   const sectionPaths = new Map<string, string>();
   let reviewRounds = 0;
+  /** Which requirements the independent reviewer has read, so a requirement is read again only when it changes. */
+  const reviewMemory = new ReviewMemory();
   /** Saves refused once as destructive; the same content sent again is allowed. */
   const refusedSaves = new Set<string>();
   let lastDocSaved: { name: string; content: string } | null = null;
+  /** Requirement areas and chapters being written in parallel (draft_requirements, draft_chapters). */
+  const draftJobs: DraftJob[] = [];
+  const draftRefused = new Set<string>();
+  /** Whether check_document has sent the reviewer's findings back to the area writers yet (once a run). */
+  let areasRefixed = false;
+  const pendingJob = () => draftJobs.find((j) => !j.reported);
+  /** Wait for everything still being drafted, take the document as it was left, and say what came of it (once each). */
+  const settleDrafts = async (): Promise<string> => {
+    const out: string[] = [];
+    for (const job of draftJobs.filter((j) => !j.reported)) {
+      job.reported = true;
+      try {
+        const r = await job.promise;
+        const d = sectionDocs.get(job.artifact);
+        if (r.saved) savedThisRun.add(r.saved.path);
+        if (d && r.saved) lastDocSaved = { name: job.artifact, content: d.compose() };
+        out.push(r.summary);
+      } catch (e) {
+        out.push(`⚠ Parallel drafting (${job.kind}) failed: ${(e as Error).message}. Write the missing sections with write_section.`);
+      }
+    }
+    return out.join("\n\n");
+  };
   // Captured now: the identity global is replaced by the next run that starts.
   const runId = currentRun?.runId ?? "";
   const commit = currentRun?.commit ?? "";
@@ -1823,9 +2333,12 @@ async function runAgent(
     // attempt can only have produced partial *text* — we tell the client to discard
     // that partial block ("text_reset") before re-streaming, so nothing duplicates.
     let resp: Anthropic.Message | undefined;
+    const turnT0 = Date.now();
     for (let attempt = 0; ; attempt++) {
       let emittedThisAttempt = 0;
       let attemptText = "";
+      let idleAborted = false;
+      let idleTimer: ReturnType<typeof setInterval> | undefined;
       try {
         const stream = anthropic.messages.stream({
           model: MODEL,
@@ -1854,11 +2367,20 @@ async function runAgent(
           attemptText += delta;
           emit({ type: "text_delta", text: delta });
         });
+        // A connection that goes quiet is not an error the SDK notices: run 20 lost 38 minutes on one turn to
+        // retries that each waited out the 10-minute default. A live stream sends something every few seconds
+        // (tool input arrives as events too), so silence for STREAM_IDLE_MS means it is dead; cut it and retry.
+        let lastEvent = Date.now();
+        stream.on("streamEvent", () => { lastEvent = Date.now(); });
+        idleTimer = setInterval(() => {
+          if (Date.now() - lastEvent > STREAM_IDLE_MS) { idleAborted = true; stream.abort(); }
+        }, 5000);
         resp = await stream.finalMessage();
         outText += attemptText; // commit only once the turn actually succeeded
         break;
       } catch (e) {
-        if (attempt < 3 && isRetryable(e)) {
+        if (idleAborted) (e as Error).message = `no data from the model for ${STREAM_IDLE_MS / 1000}s; connection dropped`;
+        if (attempt < 3 && (idleAborted || isRetryable(e))) {
           console.error(`[agent] transient error, retry ${attempt + 1}:`, (e as Error).message);
           if (emittedThisAttempt > 0) emit({ type: "text_reset" });
           emit({ type: "notice", message: "Reconnecting to the model…" });
@@ -1866,10 +2388,17 @@ async function runAgent(
           continue;
         }
         throw e;
+      } finally {
+        if (idleTimer) clearInterval(idleTimer);
       }
     }
     if (!resp) break;
     lastStop = resp.stop_reason;
+    {
+      const ms = Date.now() - turnT0, tu = usageOf(resp.usage);
+      perf.turn(ms, tu);
+      emit({ type: "turn", n: turn + 1, ms, ...tu, stop: resp.stop_reason, tools: resp.content.filter((b) => b.type === "tool_use").map((b: any) => b.name) });
+    }
 
     // Cache hit rate is invisible unless measured — a silent invalidator looks
     // exactly like working code. Zero reads across turns means it isn't working.
@@ -1910,9 +2439,23 @@ async function runAgent(
       // and fix what it reports; in a live run it never did, and finished with invented roles
       // the per-section feedback had already named. Run the whole-document checks for it and,
       // if anything is open, hand them back once or twice before the answer stands.
+      // Areas still being drafted, or drafted and never shown to the writer: wait, show them, and let it check the whole.
+      if (pendingJob()) {
+        emit({ type: "notice", message: "Waiting for the sections being drafted…" });
+        const summary = await settleDrafts();
+        messages.push({
+          role: "user",
+          content: [{ type: "text", text: `What you started with draft_requirements / draft_chapters is now in the document.\n\n${summary}\n\nCall check_document, fix what it reports, then give your final answer.` }],
+        });
+        continue;
+      }
       console.error(`[review] ${agent.id}: turn ended (stop=${resp.stop_reason}) doc=${isDocAgent} saved=${lastDocSaved ? (lastDocSaved as any).name : "none"} rounds=${reviewRounds}/${MAX_REVIEW_ROUNDS}`);
-      if (isDocAgent && lastDocSaved && reviewRounds < MAX_REVIEW_ROUNDS) {
+      // A drafted document has had its sections' own review rounds and check_document's; one more here is enough.
+      if (isDocAgent && lastDocSaved && reviewRounds < (draftJobs.length ? 1 : MAX_REVIEW_ROUNDS)) {
         const open = documentChecks(lastDocSaved.content, userMessage, agent.id, project, conflictsFound, true);
+        // A writer who never called check_document still gets the second reader, once, on what changed.
+        const second = await independentReview({ project, task: userMessage, memory: reviewMemory, emit, perf }, lastDocSaved.content, sectionOfIn(sectionDocs.get(lastDocSaved.name)));
+        if (second) open.push(second);
         console.error(`[review] ${agent.id}: ${open.length} whole-document check(s) open`);
         if (open.length) {
           reviewRounds++;
@@ -1936,6 +2479,7 @@ async function runAgent(
     // Execute tools / delegations and stream results back as each completes.
     const results: Anthropic.ToolResultBlockParam[] = [];
     for (const tu of toolUses) {
+      toolT0 = Date.now();
       let resultText: string;
       if (tu.name === "delegate") {
         const subId = String((tu.input as any)?.agent || "");
@@ -1985,15 +2529,31 @@ async function runAgent(
             : required;
         // A document-sourced deliverable must rest on every input document, not whichever
         // the agent got to: in a live run the agent read both, but nothing made it.
-        if ((tu.name === "save_artifact" || tu.name === "write_section") && isDocAgent && project) {
+        if ((tu.name === "save_artifact" || tu.name === "write_section" || tu.name === "draft_requirements") && isDocAgent && project) {
           const inputs = walkFiles(inputsDirOf(project), project.artifactsDir).map((f) => f.path);
           effectiveRequired = [...new Set([...effectiveRequired, ...inputs])];
         }
+        // Drafting requirements writes the deliverable too, so it is held to the same gates as write_section.
+        const gateName = tu.name === "draft_requirements" ? "write_section" : tu.name;
         const gate =
-          templateGate(agent.id, tu.name, goldenReadThisRun, project) ??
-          prerequisiteGate(tu.name, effectiveRequired, readOk, failedArtifactReads);
+          templateGate(agent.id, gateName, goldenReadThisRun, project) ??
+          prerequisiteGate(gateName, effectiveRequired, readOk, failedArtifactReads);
         if (gate) {
           resultText = gate;
+          emit({ type: "tool_result", id: tu.id, name: tu.name, result: resultText });
+          results.push({ type: "tool_result", tool_use_id: tu.id, content: resultText, is_error: true });
+          continue;
+        }
+        // A document built with write_section is already saved, composed and checked after every section. A live
+        // run re-sent its whole 144K-character document with save_artifact "to save the final version": 10.8 minutes
+        // of output (28% of the run) for what the server already holds, and later patches then composed from the
+        // sections, not from that copy. Refused, with the way to what was wanted.
+        if (tu.name === "save_artifact" && isDocAgent && sectionDocs.has(String((tu.input as any)?.name ?? "").trim())) {
+          const sName = String((tu.input as any)?.name ?? "").trim();
+          resultText =
+            `Refused: \`${sName}\` is being built with write_section, and the server has already saved it in full after your last section (${sectionDocs.get(sName)!.compose().length.toLocaleString("en-US")} characters). ` +
+            `Re-sending the whole document costs minutes and changes nothing. To change something, use patch_section (exact text) or write_section for one section; call check_document to run the whole-document checks; then give your final answer.`;
+          console.error(`[guard] ${agent.id}: refused save_artifact of ${sName} — it is built with write_section`);
           emit({ type: "tool_result", id: tu.id, name: tu.name, result: resultText });
           results.push({ type: "tool_result", tool_use_id: tu.id, content: resultText, is_error: true });
           continue;
@@ -2028,7 +2588,27 @@ async function runAgent(
           if (tu.name === "save_artifact" && currentRun && stampable(String(args.name ?? ""))) {
             args.content = `${String(args.content ?? "")}${identityFooter(currentRun)}`;
           }
-          if (tu.name === "write_section" && isDocAgent) {
+          // A section an area writer is still drafting belongs to it until the areas are in.
+          const running = draftJobs.filter((j) => !j.done);
+          const touches = (tu.name === "write_section" || tu.name === "patch_section") && running.length
+            ? [String(args.section ?? ""), ...(Array.isArray(args.sections) ? (args.sections as any[]).map((s) => String(s?.section ?? "")) : [])].filter((s) => s && running.some((j) => j.sections.has(sectionKey(s))))
+            : [];
+          const sctx = { ws, project, agentId: agent.id, task: userMessage, conflicts: conflictsFound, docs: sectionDocs, refused: refusedSaves, paths: sectionPaths, emit, perf };
+          if (touches.length) {
+            resultText = `Refused: “${touches[0]}” is being drafted in parallel and will be replaced when it is done. Write the other chapters now; call check_document when they are done (it waits for the drafts), then patch what it reports.`;
+          } else if (tu.name === "draft_requirements" && isDocAgent) {
+            if (running.some((j) => j.kind === "requirements")) {
+              resultText = "Refused: requirement areas are already being drafted. Write the other chapters, then call check_document.";
+            } else {
+              const r = await startDraftRequirements({ ...sctx, memory: reviewMemory }, args, draftRefused);
+              resultText = r.text;
+              if (r.job) draftJobs.push(r.job);
+            }
+          } else if (tu.name === "draft_chapters" && isDocAgent) {
+            const r = await startDraftChapters(sctx, args);
+            resultText = r.text;
+            if (r.job) draftJobs.push(r.job);
+          } else if (tu.name === "write_section" && isDocAgent) {
             const r = await handleWriteSection({ ws, project, agentId: agent.id, task: userMessage, conflicts: conflictsFound, docs: sectionDocs, refused: refusedSaves, paths: sectionPaths }, args);
             resultText = r.text;
             if (r.saved) {
@@ -2043,7 +2623,19 @@ async function runAgent(
               lastDocSaved = { name: r.saved.name, content: r.saved.content };
             }
           } else if (tu.name === "check_document" && isDocAgent) {
-            resultText = handleCheckDocument({ ws, project, agentId: agent.id, task: userMessage, conflicts: conflictsFound, docs: sectionDocs, refused: refusedSaves, paths: sectionPaths }, args).text;
+            const drafted = await settleDrafts();
+            const fixable = draftJobs.filter((j) => j.fix);
+            const refixAreas = DRAFT_REFIX && fixable.length && !areasRefixed
+              ? async (artifact: string, doc: SectionedDoc, report: ReviewReport | undefined) => {
+                  areasRefixed = true; // once a run: what is left after it goes to the writer of the whole document
+                  const r = await fixAreasFromReview(sctx, fixable, doc, artifact, report);
+                  if (r.saved) { savedThisRun.add(r.saved.path); lastDocSaved = { name: r.saved.name, content: r.saved.content }; }
+                  return r.changed ? `**${r.changed} drafted section(s) were corrected by their own writers** from the reviewer's findings and the server's checks before these checks ran; what follows is what is still open.` : null;
+                }
+              : undefined;
+            resultText = (drafted ? `${drafted}\n\n---\n\n` : "") + (await handleCheckDocument({ ...sctx, review: reviewMemory, refixAreas, drafted: draftJobs.length > 0 }, args)).text;
+            const d = sectionDocs.get(String(args.artifact ?? "").trim());
+            if (d) lastDocSaved = { name: String(args.artifact).trim(), content: d.compose() };
           } else {
             resultText = await callMcpTool(ws, tu.name, args);
           }
@@ -2119,6 +2711,15 @@ async function runAgent(
       results.push({ type: "tool_result", tool_use_id: tu.id, content: resultText });
     }
     messages.push({ role: "user", content: results });
+  }
+
+  // A run cut off by the turn limit must not leave areas writing into the document behind it.
+  if (pendingJob()) await settleDrafts();
+
+  if (depth === 0) {
+    const summary = perf.summary();
+    console.error(formatPerf(summary));
+    rawEmit({ type: "perf", ...summary });
   }
 
   // If we exhausted the turn budget mid-work (last turn still wanted tools),

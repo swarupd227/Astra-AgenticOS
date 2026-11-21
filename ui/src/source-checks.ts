@@ -211,6 +211,26 @@ export function formatCitationReport(r: CitationReport, max = 40): string | null
   );
 }
 
+// --- 0. A requirement written as a table is read like one written as labelled lines --------------
+
+const FIELD_LABEL = /^(?:requirement (?:id|name|statement|description)|statement|description|source(?: reference)?s?|priority|dependenc(?:y|ies)|open questions?|rationale|notes?)$/i;
+
+/**
+ * Requirement fields in a two-column table (`| Dependencies | REQ-044 — … |`) become labelled lines
+ * (`**Dependencies:** REQ-044 — …`), which is what every check below reads. A live run wrote all 95
+ * requirements as `| Field | Detail |` tables: the dependency, citation and strength checks found nothing
+ * to look at, passed, and 17 dependencies no source states went into the document. Only rows whose first
+ * cell is a requirement field are converted, so other tables are left as they are.
+ */
+export function fieldRowsAsLabels(md: string): string {
+  if (!/^\s*\|\s*(?:requirement statement|source reference|dependenc(?:y|ies))\s*\|/im.test(md)) return md;
+  return md.split("\n").map((line) => {
+    const m = /^\s*\|\s*\**([^|*]{2,30}?)\**\s*\|\s*(.*?)\s*\|?\s*$/.exec(line);
+    if (!m || !FIELD_LABEL.test(m[1].trim()) || /^:?-{2,}/.test(m[2])) return line;
+    return `**${m[1].trim()}:** ${m[2]}\n`;
+  }).join("\n");
+}
+
 // --- 1a. Dependencies must quote a source ------------------------------------------------
 
 export type DependencyIssue = { requirement: string; value: string; reason: "no-quote" | "quote-not-found" };
@@ -239,7 +259,8 @@ export function dependencyIssues(artifact: string, sourceTexts: string[]): { che
     if (/^#{1,6}\s/.test(line) || ID_LED.test(line)) current = line.match(REQUIREMENT_ID)?.[1] ?? current;
     const m = line.match(DEPENDENCY_LINE);
     if (!m) continue;
-    const value = m[1].replace(/[*_\s]+$/g, "").trim();
+    // "*Not specified in source.*" is italic more often than not; the opening marker made it read as a dependency.
+    const value = m[1].replace(/^[*_\s]+|[*_\s]+$/g, "").trim();
     if (!value || NO_DEPENDENCY.test(value)) continue;
     checked++;
     const quotes = [...value.matchAll(/[“"]([^”"]{15,500})[”"]/g)].map((q) => q[1]);
@@ -422,6 +443,12 @@ export function danglingReferences(doc: string, sourceTexts: string[] = []): Dan
     const lead = /^\s*(?:#{1,6}\s+|[-*+]\s+|\|\s*|\d+\.\s+)?(?:\*\*|__)?\s*([A-Z]{1,6}-\d{1,4})(?:\*\*|__)?\s*(?:[—–:.|-]\s*)?(?![(\[])(\S.*)?$/.exec(l);
     if (lead && (lead[2] ?? "").trim().length >= 3) defined.add(lead[1]);
     else if (lead && /^\s*(?:#{1,6}\s+|\|)/.test(l)) defined.add(lead[1]); // a bare heading or table cell is a definition
+    else {
+      // Run 20's writer opened each requirement with a bold ID on a line of its own and an "| Requirement ID | REQ-004 |"
+      // row under it; both define the ID, and without them 66 requirements were reported as "never defined".
+      const own = /^\s*(?:\*\*|__)([A-Z]{1,6}-\d{1,4})(?:\*\*|__)\s*:?\s*$/.exec(l) ?? /^\s*\|\s*(?:\*\*|__)?(?:[A-Za-z]+\s+)?ID(?:\*\*|__)?\s*\|\s*(?:\*\*|__)?([A-Z]{1,6}-\d{1,4})(?:\*\*|__)?\s*\|/i.exec(l);
+      if (own) defined.add(own[1]);
+    }
   }
   for (const m of doc.matchAll(/\b([A-Z]{1,6})-(\d{1,4})\b/g)) {
     if (m[1] === "GLD" || fromSources.has(m[0])) continue;
