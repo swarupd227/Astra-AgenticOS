@@ -117,15 +117,20 @@ requirements and the long chapters are written in parallel (`ui/src/requirement-
   `DRAFT_CHAPTER_ROUNDS` (default 4) rounds within `DRAFT_CHAPTER_BUDGET_MS` (default 240 s).
 - Both return at once with placeholders in the document; numbered sections fall into number order whatever order they
   are written in; `check_document` waits for them. In a drafted run `check_document` may be called at most
-  `DRAFTED_CHECK_LIMIT` (default 3) times, and the writer is told to fix fail findings and real defects, not minor ones.
-  `DRAFT_CONCURRENCY` (default 16), `DRAFT_MODEL` (default `MODEL`), `DRAFT_REFIX=on` for one more fix pass by the
-  sections' writers at `check_document` (off: it did not pay for itself).
+  `DRAFTED_CHECK_LIMIT` (default 2) times, and the writer is told to fix fail findings and real defects, not minor ones.
+  At `check_document`, the reviewer's *fail* findings go back to their areas' writers as changes, in parallel
+  (`DRAFT_REFIX`: `fail` default, `on` for every finding and chapter check too, `off`). An area the agent gives several
+  of the sources' own areas is split into one writer per source area. `DRAFT_CONCURRENCY` (default 16), `DRAFT_MODEL`
+  (default `MODEL`).
+- Models: Sonnet 5.5 and Opus 5.5 reject a forced `tool_choice`; the reviewer then asks for its tool by name instead.
+  Measured on VitalEdge (30 sampled requirements): Sonnet 5.5 throughout 26/4/0 pass/minor/fail in 5.5 min; Opus 5.5 as
+  `REVIEW_MODEL` 26/4/0 in 8.2 min; Haiku 5.5 as `REVIEW_MODEL` 24/5/1 in 7.5 min. Keep the reviewer on `MODEL`.
 - Open Questions quote the source's Gap / Decision / Risk verbatim, so a reworded item is caught by the quote check;
   a dependency stated inside the area's own Gap/Decision/Risk goes in Dependencies; the citation check skips sentences
   that say the source is silent or label themselves as the document's inference.
 
-On the VitalEdge inputs this took a run from 22–24 minutes to 10–15, and the sampled requirements from 13 pass /
-6 fail (of 30) to 20–23 pass / 0–1 fail.
+On the VitalEdge inputs this took a run from 22–24 minutes to 5.5–8 (Sonnet 5.5) or 10–15 (Sonnet 4.6), and the
+sampled requirements from 13 pass / 6 fail (of 30) to 23–26 pass / 0 fail.
 
 ### Run performance
 

@@ -40,6 +40,22 @@ eq("the areas are the second-level headings, without markup", areaHeadings(SOURC
   eq("an area runs to the next area heading, over top-level headings inside it, without the next area's category line", [l?.text.includes("Gap 1: Limits"), l?.text.includes("Detail Screen"), /Personalization\*\*\s*$/.test(l?.text ?? "")], [true, false, false]);
 }
 
+// --- one writer per source area ------------------------------------------------------------------------------
+{
+  const { splitAreas } = await import("../src/requirement-drafts.js");
+  const ex = (title: string) => ({ source: "inputs/x.md", title, text: `## ${title}\n…` });
+  const areas = [
+    { section: "6.1 Billing", scope: "Billing", sourceHeadings: ["Billing Methods"] },
+    { section: "6.12 Personalization", scope: "List Screen, Detail Screen, Conditional Validation", sourceHeadings: ["Personalization", "List Screen Personalization", "Detail Screen Personalization", "Conditional Validation"] },
+    { section: "6.13 Forms", scope: "Forms", sourceHeadings: [] },
+  ];
+  const r = splitAreas(areas, [[ex("Billing Methods")], [ex("Personalization"), ex("List Screen Personalization"), ex("Detail Screen Personalization"), ex("Conditional Validation")], []],
+    [{ title: "Billing Methods" }, { title: "List Screen Personalization" }, { title: "Detail Screen Personalization" }, { title: "Conditional Validation" }]);
+  eq("an area given several source areas becomes one per source area, sub-numbered, the category heading dropped",
+    r.areas.map((a) => a.section), ["6.1 Billing", "6.12.1 Personalization — List Screen Personalization", "6.12.2 Personalization — Detail Screen Personalization", "6.12.3 Personalization — Conditional Validation", "6.13 Forms"]);
+  eq("each part gets its own section and is told it is one part", [r.extracts[2].map((e) => e.title), /one part of "6.12 Personalization"/.test(r.areas[2].scope), r.split], [["Detail Screen Personalization"], true, ["6.12 Personalization"]]);
+}
+
 // --- the writer's output -----------------------------------------------------------------------------------
 const area: Area = { section: "6.2 Billing Methods", scope: "Billing Methods", sourceHeadings: ["Billing Methods"] };
 eq("a preamble and code fence are dropped", cleanArea("Here is the area:\n```markdown\n### 6.2 Billing Methods\n\n#### REQ-001 — A\n```", area), "### 6.2 Billing Methods\n\n#### REQ-001 — A");

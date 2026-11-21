@@ -17,7 +17,7 @@ import { auditChange, formatAudit, proposalsWithoutTests } from "./audit.js";
 import { SectionedDoc, applyEdits, sectionKey, type Edit } from "./sections.js";
 import {
   CHAPTER_SYSTEM, WRITER_SYSTEM, areaHeadings, areaPrompt, carryReview, chapterPrompt, cleanArea, definedIds, draftArea, draftChapter, extractSection, fixPrompt,
-  headingFor, pool, renumber, summarizeDrafts, type Area, type AreaResult, type Chapter, type WriteCall,
+  fixChangesPrompt, headingFor, mergeChanges, pool, renumber, splitAreas, summarizeDrafts, type Area, type AreaResult, type Chapter, type WriteCall,
 } from "./requirement-drafts.js";
 import { contentKey, countCitations, countIds, destructiveSave, implausiblyShort } from "./guards.js";
 import {
@@ -1321,7 +1321,11 @@ const DRAFT_CONCURRENCY = Number(process.env.DRAFT_CONCURRENCY ?? 16);
 const DRAFT_FIX_ROUNDS = Number(process.env.DRAFT_FIX_ROUNDS ?? 3);
 // A further pass at check_document that sends what is still open back to the sections' writers. Run 24: 3 minutes
 // (129 s fixing, 61 s re-reading) and the same three failing findings afterwards as before, so it is off by default.
-const DRAFT_REFIX = (process.env.DRAFT_REFIX ?? "off") === "on";
+// "fail" (default): only the reviewer's fail findings go back to their areas' writers, as changes, in parallel, so the
+// writer of the whole document is left the defects only it can fix. "on": every finding and check, chapters too
+// (run 24: 3 minutes, no fewer failures). "off": none.
+const DRAFT_REFIX_MODE = (process.env.DRAFT_REFIX ?? "fail") as "off" | "fail" | "on";
+const DRAFT_REFIX = DRAFT_REFIX_MODE !== "off";
 // Check-and-fix rounds for each chapter writer, stopping as soon as its checks are clean. Run 26's chapters had 2 and
 // still carried 31 unverified citations, which the writer of the whole document then cleared in ~50 serial patches.
 const DRAFT_CHAPTER_ROUNDS = Number(process.env.DRAFT_CHAPTER_ROUNDS ?? 4);
@@ -1329,7 +1333,7 @@ const DRAFT_CHAPTER_ROUNDS = Number(process.env.DRAFT_CHAPTER_ROUNDS ?? 4);
 const DRAFT_CHAPTER_BUDGET_MS = Number(process.env.DRAFT_CHAPTER_BUDGET_MS ?? 240_000);
 // check_document calls in a run whose sections were drafted in parallel: the last one says so, later ones are refused.
 // Run 26 called it six times and hit the turn limit patching between them.
-const DRAFTED_CHECK_LIMIT = Number(process.env.DRAFTED_CHECK_LIMIT ?? 3);
+const DRAFTED_CHECK_LIMIT = Number(process.env.DRAFTED_CHECK_LIMIT ?? 2);
 const DRAFT_MODEL = process.env.DRAFT_MODEL || "";
 const DRAFT_CALL_TIMEOUT_MS = Number(process.env.DRAFT_CALL_TIMEOUT_MS ?? 360_000);
 
@@ -1430,7 +1434,7 @@ async function startDraftRequirements(
   if (!/\.md$/i.test(artifact)) return { isError: true, text: "Refused: `artifact` must be a Markdown file name ending in .md." };
   if (!chapter) return { isError: true, text: "Refused: give the requirements chapter a title (`chapter`)." };
   const raw = Array.isArray(input.areas) ? (input.areas as any[]) : [];
-  const areas: Area[] = raw.filter((a) => a && typeof a === "object").map((a) => ({
+  let areas: Area[] = raw.filter((a) => a && typeof a === "object").map((a) => ({
     section: String(a.section ?? "").trim(),
     scope: String(a.scope ?? "").trim(),
     sourceHeadings: (Array.isArray(a.source_headings) ? a.source_headings : [a.source_headings]).map((h: unknown) => String(h ?? "").trim()).filter(Boolean),
@@ -1451,6 +1455,11 @@ async function startDraftRequirements(
     refusedOnce.add(key);
     return { isError: true, text: `Not started: these areas of the input documents belong to no area, so their requirements would be missing:\n${unassigned.map((a) => `- ${a.title} (${a.source})`).join("\n")}\n\nAdd them to an area (or a new one). If one is genuinely out of the approved scope, send the same call again and it will start; say so in your answer.` };
   }
+  // One writer per source area: an area given several is split, so no single writer becomes the slowest chain.
+  const parts = splitAreas(areas, extracts.map((xs) => xs.map((x) => x.e!)), available);
+  if (parts.split.length) console.error(`[drafts] split into one writer per source area: ${parts.split.join("; ")}`);
+  areas = parts.areas;
+  const areaExtracts = parts.extracts;
 
   // Placeholders, so the chapter has its place and the other chapters can be written around it.
   let doc = ctx.docs.get(artifact);
@@ -1475,7 +1484,7 @@ async function startDraftRequirements(
     const results = await pool(areas, DRAFT_CONCURRENCY, async (area, i) => {
       try {
         const r = await draftArea({
-          area, extracts: extracts[i].map((x) => x.e!), write, memory: memories[i], rounds: SOURCE_REVIEW ? DRAFT_FIX_ROUNDS : 0,
+          area, extracts: areaExtracts[i], write, memory: memories[i], rounds: SOURCE_REVIEW ? DRAFT_FIX_ROUNDS : 0,
           check: (text) => documentChecks(text, ctx.task, ctx.agentId, ctx.project, ctx.conflicts, true, false),
           review: (text, memory) => reviewDocument({ doc: text, sources, memory, ask, batchSize: 6, concurrency: 3, firstAlone: false }),
         });
@@ -1502,15 +1511,19 @@ async function startDraftRequirements(
   })();
   // At check_document, what the reviewer still finds in an area goes back to a writer for that area, all areas at once,
   // rather than to the writer of the whole document one patch per turn (run 22: 35 patch turns, 9 minutes).
-  const byKey = new Map(areas.map((a, i) => [sectionKey(a.section), { area: a, extracts: extracts[i].map((x) => x.e!) }]));
+  const byKey = new Map(areas.map((a, i) => [sectionKey(a.section), { area: a, extracts: areaExtracts[i] }]));
   const fix: DraftJob["fix"] = async (section, current, findings, checks) => {
     const a = byKey.get(sectionKey(section));
     if (!a) return null;
-    const out = cleanArea(await write([
+    // Only the changed requirements come back, as in the areas' own rounds.
+    const answer = await write([
       { role: "user", content: areaPrompt(a.area, a.extracts) + `\n\n(The requirement IDs in this area are already numbered for the whole document; keep them exactly as they are.)` },
       { role: "assistant", content: current },
-      { role: "user", content: fixPrompt(checks, findings) },
-    ]), a.area);
+      { role: "user", content: fixChangesPrompt(checks, findings) },
+    ]);
+    const merged = mergeChanges(current, answer);
+    if (!merged) return null;
+    const out = cleanArea(merged, a.area);
     const before = definedIds(current), after = new Set(definedIds(out));
     const named = new Set(findings.map((f) => f.req));
     if (!after.size || before.some((id) => !after.has(id) && !named.has(id))) return null;
@@ -1625,11 +1638,12 @@ async function fixAreasFromReview(
 ): Promise<{ changed: number; saved?: { name: string; content: string; path: string } }> {
   const sectionOf = sectionOfIn(doc);
   const work: { section: string; job: DraftJob; findings: ReviewReport["findings"]; checks: string[] }[] = [];
-  for (const job of jobs.filter((j) => j.fix)) {
+  const failsOnly = DRAFT_REFIX_MODE === "fail";
+  for (const job of jobs.filter((j) => j.fix && (!failsOnly || j.kind === "requirements"))) {
     for (const title of doc.titles().filter((t) => job.sections.has(sectionKey(t)))) {
       const current = doc.text(title) ?? "";
-      const findings = job.kind === "requirements" ? (report?.findings ?? []).filter((f) => sectionKey(sectionOf(f.req)) === sectionKey(title)) : [];
-      const checks = documentChecks(current, ctx.task, ctx.agentId, ctx.project, ctx.conflicts, true, false);
+      const findings = job.kind === "requirements" ? (report?.findings ?? []).filter((f) => sectionKey(sectionOf(f.req)) === sectionKey(title) && (!failsOnly || f.verdict === "fail")) : [];
+      const checks = failsOnly ? [] : documentChecks(current, ctx.task, ctx.agentId, ctx.project, ctx.conflicts, true, false);
       if (findings.length || checks.length) work.push({ section: title, job, findings, checks });
     }
   }
@@ -1670,6 +1684,8 @@ function sectionOfIn(doc: SectionedDoc | undefined): (req: string) => string {
 
 const REVIEW_CALL_TIMEOUT_MS = Number(process.env.REVIEW_CALL_TIMEOUT_MS ?? 240_000);
 const STREAM_IDLE_MS = Number(process.env.STREAM_IDLE_MS ?? 90_000);
+/** Models that answered a forced tool choice with a 400, so the reviewer asks them by name. */
+const NO_FORCED_TOOL = new Set<string>();
 function makeReviewer(sources: SourceText[], onCall?: (ms: number, u: Usage) => void): AskReviewer {
   const system = [
     { type: "text", text: REVIEW_SYSTEM },
@@ -1679,14 +1695,28 @@ function makeReviewer(sources: SourceText[], onCall?: (ms: number, u: Usage) => 
   return async (batch) => {
     try {
       const t0 = Date.now();
-      const resp = await anthropic.messages.create({
-        model: REVIEW_MODEL || MODEL,
+      const model = REVIEW_MODEL || MODEL;
+      const call = (forced: boolean) => anthropic.messages.create({
+        model,
         max_tokens: 12000,
         system: system as any,
         tools: [REVIEW_TOOL as any],
-        tool_choice: { type: "tool", name: REVIEW_TOOL.name },
-        messages: [{ role: "user", content: batchPrompt(batch) }],
+        // Newer models (Sonnet 5.5, Opus 5.5, Fable 5.1+) reject a forced tool choice with a 400; the cloud app runs
+        // Sonnet 5.5 and every review call failed there until this. Ask by name instead and let the model choose.
+        tool_choice: forced ? { type: "tool", name: REVIEW_TOOL.name } : { type: "auto" },
+        messages: [{ role: "user", content: forced ? batchPrompt(batch) : `${batchPrompt(batch)}\n\nAnswer only by calling the ${REVIEW_TOOL.name} tool.` }],
       }, { timeout: REVIEW_CALL_TIMEOUT_MS, maxRetries: 2 }); // a batch takes 1–3 minutes; run 20's one stuck call took 18
+      let resp: Anthropic.Message;
+      if (NO_FORCED_TOOL.has(model)) resp = await call(false);
+      else {
+        try { resp = await call(true); }
+        catch (e) {
+          if ((e as any)?.status !== 400 || !/tool_choice/i.test(String((e as Error).message))) throw e;
+          NO_FORCED_TOOL.add(model);
+          console.error(`[review] ${model} does not accept a forced tool choice; asking by name instead`);
+          resp = await call(false);
+        }
+      }
       onCall?.(Date.now() - t0, usageOf(resp.usage));
       const tu = resp.content.find((b) => b.type === "tool_use") as any;
       return coerceReview(tu?.input);

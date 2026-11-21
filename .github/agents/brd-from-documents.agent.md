@@ -56,8 +56,8 @@ reader must be able to take any statement, go to the source you name, and find i
    `write_section` with the same title.
 7. Then call `check_document`. It waits for the drafts, puts them in the document, runs the checks that only
    make sense on the whole plus the reviewer on anything not yet read, and sends the reviewer's findings on
-   requirements back to their areas' writers once. In a drafted document you get at most three such checks, so
-   batch every fix between them. Fix what it still reports with
+   requirements back to their areas' writers once. In a drafted document you get at most two such checks, so
+   batch every fix between them into as few patch_section calls as you can. Fix what it still reports with
    `patch_section` — one call can carry the edits of several sections (`sections`). Stop when it reports
    nothing, or when what is left is something you can explain in your answer.
 
