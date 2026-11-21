@@ -57,7 +57,7 @@ export function citedKeys(text: string): string[] {
 
 /**
  * A client document a requirements document is written from: an uploaded input, or a functional specification held in the
- * Golden Repository (`GLD-FS-002@1 (VitalEdge Sprint 2 - Detailed Requirements)`). Takes a source name or a citation key.
+ * Golden Repository (`GLD-FS-002@1 (Client Sprint 2 - Detailed Requirements)`). Takes a source name or a citation key.
  * Standards, templates and reference items are material to cite, never documents requirements come from.
  */
 export function isClientDocument(name: string): boolean {

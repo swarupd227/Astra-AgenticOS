@@ -37,7 +37,7 @@ eq("the areas are the second-level headings, without markup", areaHeadings(SOURC
   // a standard or reference item is not.
   const GOLDEN = [
     { name: "task prompt", text: "BILLING METHODS" },
-    { name: "GLD-FS-002@1 (VitalEdge Sprint 2 - Detailed Requirements)", text: DR },
+    { name: "GLD-FS-002@1 (Client Sprint 2 - Detailed Requirements)", text: DR },
     { name: "GLD-REF-001@1 (ERP practices)", text: "## Ledger Standards\nPosting rules." },
   ];
   eq("Golden Repository functional specs give the areas; reference items do not", areaHeadings(GOLDEN).map((a) => a.title), ["Credit Limit Allocation", "Billing Methods"]);

@@ -1345,7 +1345,7 @@ async function handleCheckDocument(ctx: SectionContext, input: Record<string, un
 }
 
 // The requirements chapter, written area by area in parallel (see requirement-drafts.ts).
-// All the areas of a typical requirements document at once (14 in the VitalEdge inputs): one wave of about 3–4 minutes.
+// All the areas of a typical requirements document at once (14 in one client's inputs): one wave of about 3–4 minutes.
 const DRAFT_CONCURRENCY = Number(process.env.DRAFT_CONCURRENCY ?? 16);
 // Review-and-fix rounds inside each area, run side by side with no barrier between areas. Run 23 had 2, and its writer
 // of the whole document then spent 11 minutes patching what was left.
