@@ -95,6 +95,7 @@ eq("text with no heading at all gets the area's", cleanArea("Nothing here.", are
   const r = enforceDependencies(area, src);
   eq("an unquoted or invented dependency is reset; Not Specified and a verbatim one stay", r.reset, ["REQ-003", "REQ-004"]);
   eq("the reset reads Not Specified, the rest of the requirement and the area are kept", [/REQ-003 — x[\s\S]*?\*\*Dependencies:\*\* Not Specified\.\n\n\*\*Open Questions:\*\*/.test(r.text), /dependency on the LDW process/.test(r.text), definedIds(r.text).length, r.text.startsWith("### 6.1 A")], [true, true, 5, true]);
+  eq("the reset claim is kept as an open question, not lost", [/REQ-003 — x[\s\S]*?\*\*Open Questions:\*\* Dependency to confirm \(no source sentence states it as written\): REQ-001 — not stated/.test(r.text), /REQ-004[\s\S]*?Dependency to confirm[^\n]*payment gateway/.test(r.text)], [true, true]);
   eq("nothing to reset leaves the text exactly as it was", enforceDependencies(block("REQ-009", "Not Specified."), src).text, block("REQ-009", "Not Specified."));
 }
 

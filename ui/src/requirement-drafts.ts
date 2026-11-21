@@ -323,7 +323,18 @@ export function enforceDependencies(text: string, normalizedSources: string): { 
     const quotes = [...value.matchAll(/[“"]([^”"]{12,})[”"]/g)].map((x) => x[1]);
     if (quotes.length && quotes.every(inSources)) return r;
     reset.push(r.id);
-    return { ...r, text: r.text.slice(0, m.index) + `${m[1]}Not Specified.` + r.text.slice(m.index + m[0].length) };
+    let t = r.text.slice(0, m.index) + `${m[1]}Not Specified.` + r.text.slice(m.index + m[0].length);
+    // The claim is not thrown away: a real dependency whose quote is slightly off would vanish silently. It becomes
+    // an open question a person can settle.
+    const claim = value.replace(/\s+/g, " ").slice(0, 300);
+    const oq = /(\*\*Open Questions:\*\*[ \t]*)([\s\S]*?)(?=\n\s*\n\s*\*\*[A-Z][^*\n]*:\*\*|\n\s*\n\s*-{3,}|\s*$)/.exec(t);
+    const note = `Dependency to confirm (no source sentence states it as written): ${claim}`;
+    if (oq) {
+      const cur = oq[2].trim();
+      const none = !cur || /^none\b/i.test(cur.replace(/^[*_\s]+/, ""));
+      t = t.slice(0, oq.index) + oq[1] + (none ? note : `${cur}\n- ${note}`) + t.slice(oq.index + oq[0].length);
+    } else t = `${t.trimEnd()}\n\n**Open Questions:** ${note}`;
+    return { ...r, text: t };
   });
   if (!reset.length) return { text, reset };
   return { text: [out.head.replace(/(\n\s*-{3,}\s*)+$/, "").trim(), ...reqs.map((r) => r.text.replace(/(\n\s*-{3,}\s*)+$/, "").trim())].join("\n\n---\n\n"), reset };

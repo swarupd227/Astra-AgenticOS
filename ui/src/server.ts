@@ -1185,6 +1185,19 @@ function existingArtifact(project: Project | null, name: string): { length: numb
   } catch { return null; }
 }
 
+/** The sources, lowercased with punctuation runs as single spaces, for checking quoted sentences; kept per project and task. */
+const normalizedSourcesCache = new Map<string, string>();
+function normalizedSourcesFor(project: Project | null, task: string): string {
+  const k = `${project?.id ?? ""}\u0000${task.length}\u0000${task.slice(0, 200)}`;
+  let v = normalizedSourcesCache.get(k);
+  if (v === undefined) {
+    v = sourcesBlock(draftSources(project, task)).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    if (normalizedSourcesCache.size > 20) normalizedSourcesCache.clear();
+    normalizedSourcesCache.set(k, v);
+  }
+  return v;
+}
+
 async function handleWriteSection(
   ctx: SectionContext, input: Record<string, unknown>
 ): Promise<{ text: string; saved?: { name: string; content: string; path: string }; isError?: boolean }> {
@@ -1212,7 +1225,10 @@ async function handleWriteSection(
     return { isError: true, text: refusal };
   }
 
-  const replaced = doc.set(section, content, String(input.after ?? "") || undefined);
+  // Every write of a requirement goes through the Dependencies grammar, not only first drafts: a later patch or fix
+  // must not bring back a dependency no source sentence states. A reset claim is kept as an open question.
+  const dep = /\*\*Dependencies:\*\*/.test(content) ? enforceDependencies(content, normalizedSourcesFor(ctx.project, ctx.task)) : { text: content, reset: [] as string[] };
+  const replaced = doc.set(section, dep.text, String(input.after ?? "") || undefined);
   const composed = doc.compose();
 
   // The first write of a document this run goes through the normal save, so a version from an
@@ -1239,6 +1255,9 @@ async function handleWriteSection(
       `Section “${section}” ${replaced ? "replaced" : "added"}. The document now has ${titles.length} section${titles.length > 1 ? "s" : ""} ` +
       `(${composed.length.toLocaleString("en-US")} characters), saved to \`${where[1]}\`.\n` +
       `Sections so far: ${titles.join(" · ")}.` +
+      (dep.reset.length
+        ? `\n\n⚠ **Dependencies reset to “Not Specified” on ${dep.reset.join(", ")}:** no source sentence states them as written. Each claim was kept under Open Questions as “Dependency to confirm”. If a source does state it, put it back with the sentence quoted word for word.`
+        : "") +
       (notes.length
         ? `\n\n**Checks on this section** — fix these with patch_section (the exact text to change) — or write_section with the same title if most of the section changes:\n\n${notes.join("\n\n")}`
         : ""),
@@ -1513,10 +1532,12 @@ async function startDraftRequirements(
     });
     // Dependencies: "Not Specified", or a dependency with its verbatim source sentence. Nothing else goes in.
     const normalizedSources = sourcesBlock(sources).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const depResets: string[] = [];
     for (const r of results) {
       const d = enforceDependencies(r.text, normalizedSources);
       if (d.reset.length) {
         r.text = d.text;
+        depResets.push(`${r.area.section} (${d.reset.length})`);
         console.error(`[drafts] ${r.area.section}: Dependencies reset to "Not Specified" on ${d.reset.join(", ")} (no verbatim source sentence)`);
       }
     }
@@ -1528,7 +1549,12 @@ async function startDraftRequirements(
     ctx.perf?.draftPhase(areas.length, ms);
     console.error(`[drafts] ${areas.length} areas, ${ranges.reduce((s, r) => s + r.count, 0)} requirements in ${Math.round(ms / 1000)}s`);
     ctx.emit?.({ type: "notice", message: `All ${areas.length} requirement areas are in the document.` });
-    return { summary: summarizeDrafts(results, ranges, ms), saved: saved.saved };
+    const resetNote = depResets.length
+      ? `
+
+⚠ **Dependencies reset to “Not Specified”** where no source sentence states them as written: ${depResets.join(", ")}. Each claim is kept under that requirement's Open Questions as “Dependency to confirm”; restore one only with its source sentence quoted word for word.`
+      : "";
+    return { summary: summarizeDrafts(results, ranges, ms) + resetNote, saved: saved.saved };
   })();
   // At check_document, what the reviewer still finds in an area goes back to a writer for that area, all areas at once,
   // rather than to the writer of the whole document one patch per turn (run 22: 35 patch turns, 9 minutes).
@@ -1692,6 +1718,8 @@ async function fixAreasFromReview(
       o.text = rn.text;
       console.error(`[drafts] ${o.section}: new ID(s) ${[...rn.moved.keys()].join(", ")} already used elsewhere, renumbered to ${[...rn.moved.values()].join(", ")}`);
     }
+    // The Dependencies grammar, as on every other write.
+    o.text = enforceDependencies(o.text as string, normalizedSourcesFor(ctx.project, ctx.task)).text;
     // The same guard a save through write_section gets: a section that comes back much shorter, or without its
     // citations or IDs, is not put in.
     const prev = doc.text(o.section) ?? "", t = o.text as string;
