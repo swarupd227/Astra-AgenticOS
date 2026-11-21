@@ -12,7 +12,7 @@ import {
   dependencyIssues, fieldRowsAsLabels, formatDependencyIssues, formatStrengthIssues, strengthIssues, strengthOf,
   citationIssues, citationKey, citesTaskPrompt, constructsProhibitedBy, extractDefinitions, formatCitationReport,
   formatInventedRoles, inventedRoles, noCheckableCitations, prohibitedUsed, templateDeviations, termConflicts,
-  unaddressedConflicts, omittedItemSentences, formatOmittedItemSentences, formatUncheckedItems, ownDocuments, isClientDocument,
+  unaddressedConflicts, formatOmittedDependencies, omittedItemSentences, formatOmittedItemSentences, formatUncheckedItems, ownDocuments, isClientDocument,
 } from "../src/source-checks.js";
 
 let failures = 0;
@@ -555,6 +555,16 @@ eq("a mention nowhere near a prohibition does not count",
   const appendix = ["### REQ-001 — a", "Invoices are produced.", "## Appendix", "This creates a dependency on the LDW process."].join("\n");
   eq('a dependency quoted only outside the requirements is still omitted', omittedDependencies(appendix, src).length, 1);
   eq('a dependency inside a requirement is carried', omittedDependencies(["### REQ-001 — a", "Dependencies: LDW — This creates a dependency on the LDW process."].join("\n"), src), []);
+  // A dependency quoted only under Open Questions, with Dependencies "Not Specified", is not carried (REQ-021/026).
+  const hedged = ['Recurring charges may become tightly coupled with billing. This creates dependency on other sprint capabilities.'];
+  const inOq = ['#### REQ-021 — Charge Type', '', '**Requirement Statement:** Charges may be billed as one-time or recurring.', '',
+    '**Dependencies:** Not Specified.', '', '**Open Questions:** Risk 2 — “This creates dependency on other sprint capabilities.”'].join('\n');
+  eq('quoted only under Open Questions, the dependency is still omitted', omittedDependencies(inOq, hedged).length, 1);
+  eq('as a Dependency to confirm, it is carried', omittedDependencies(inOq.replace('**Dependencies:** Not Specified.',
+    '**Dependencies:** Dependency to confirm: billing — “This creates dependency on other sprint capabilities.”'), hedged), []);
+  eq('"Not Specified" followed by the quote in brackets still carries nothing', omittedDependencies(inOq.replace('**Dependencies:** Not Specified.',
+    '**Dependencies:** Not Specified. (Recorded as a risk: “This creates dependency on other sprint capabilities.”)'), hedged).length, 1);
+  eq('the report names the Dependency to confirm form', (formatOmittedDependencies(omittedDependencies(inOq, hedged)) ?? '').includes('Dependency to confirm:'), true);
 }
 
 {

@@ -973,8 +973,14 @@ const INSTRUCTION = /\b(?:do not|don't|must not|never|only (?:if|where|when|incl
 
 /** Source sentences that state a dependency which appears nowhere in the document. */
 export function omittedDependencies(doc: string, sourceTexts: string[]): OmittedDependency[] {
-  // Carried means held by a requirement: a sentence quoted only in an appendix does not count.
-  const have = bigramSet(requirementBlocks(doc).join("\n"));
+  // Carried means held by a requirement's Dependencies field: a sentence quoted only in an appendix, or only under
+  // Open Questions (graders marked "Not Specified" beside a quoted "This creates dependency on …" as a miss), does not count.
+  // The field, bold or plain, runs to the next labelled field, a rule or the end of the block.
+  const depField = /(?:\*\*)?Dependencies(?:\*\*)?\s*:(?:\*\*)?([\s\S]*?)(?=\n\s*\n\s*(?:\*\*)?[A-Z][A-Za-z ]{2,40}(?:\*\*)?\s*:|\n\s*-{3,}|$)/;
+  // A field that opens "Not Specified" carries nothing, whatever it quotes after: a live run wrote "Not Specified.
+  // (Recorded as a risk, not as a dependency: … “This creates dependency on …”)".
+  const carried = (b: string) => { const v = (depField.exec(b)?.[1] ?? "").trim(); return /^[*_\s]*not specified/i.test(v) ? "" : v; };
+  const have = bigramSet(requirementBlocks(doc).map(carried).join("\n"));
   const out: OmittedDependency[] = [];
   const seen = new Set<string>();
   for (const t of sourceTexts) {
@@ -1001,7 +1007,7 @@ export function formatOmittedDependencies(o: OmittedDependency[], max = 10): str
     `⚠ **Dependencies the sources state that the document does not carry — ${o.length}:**\n` +
     o.slice(0, max).map((x) => `- “${x.sentence.slice(0, 200)}”`).join("\n") +
     (o.length > max ? `\n- …and ${o.length - max} more.` : "") +
-    `\nPut each on the requirement it concerns, quoting the sentence: \`Dependencies: REQ-nnn — “the quoted sentence”\`. Leaving "Not specified" is right only where no source says so. ` +
+    `\nPut each in the Dependencies field of the requirement it concerns, quoting the sentence: \`<what it depends on> — “the quoted sentence”\`, or \`Dependency to confirm: <what> — “the quoted sentence”\` where the source states it only tentatively or as a risk. Quoting it under Open Questions alone does not carry it. Leaving "Not specified" is right only where no source says so. ` +
     `(This list covers sentences that use the word "dependency"; a source that says "requires X first" or "relies on" is not found, so read the sources for those too.)`
   );
 }
