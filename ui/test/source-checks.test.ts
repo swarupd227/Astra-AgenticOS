@@ -70,6 +70,16 @@ eq("a sentence saying the source is silent, or that it is the document's inferen
    citationIssues("- The organisation's motivation is inferred from the billing and credit sections of GLD-FS-002@1 and does not repeat them.", sources, others).issues.length,
    citationIssues("- The billing method is selected during agreement creation and includes Calendar Month and Weekly options. *(GLD-FS-001@1 — Billing)*", sources, others).issues.length],
   [0, 0, 1]);
+{
+  const { duplicateRequirements, formatDuplicateRequirements } = await import("../src/source-checks.js");
+  const req = (id: string, s: string) => `#### ${id} — x\n\n**Requirement Statement:** ${s}\n\n**Priority:** Not specified in source.\n`;
+  const doc = ["## 6. Requirements", "### 6.1 Quotes", req("REQ-001", "Quotes should convert into Reservation or Rental Agreement while retaining previously approved pricing."), req("REQ-002", "Charges may be applied."),
+    "### 6.5 Agreements", req("REQ-010", "Quotes should convert into: Reservation, Rental Agreement, while retaining previously approved pricing."), req("REQ-011", "Charges may be applied."),
+    req("REQ-012", "The agreement should identify customer insurance, LDW application and the related charges for the rental.")].join("\n\n");
+  const d = duplicateRequirements(doc);
+  eq("two areas stating the same requirement are found; short common statements and distinct ones are not", d.map((x) => x.ids), [["REQ-001", "REQ-010"]]);
+  eq("the note names them", /REQ-001, REQ-010/.test(formatDuplicateRequirements(d) ?? ""), true);
+}
 eq("too-short claims are skipped, not guessed at",
   citationIssues("- Equipment status is updated. *(GLD-FS-002@1)*", sources, others).checked, 0);
 eq("a citation to a source we cannot read is counted, not judged",

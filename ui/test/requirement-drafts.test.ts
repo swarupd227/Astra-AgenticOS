@@ -85,6 +85,19 @@ eq("text with no heading at all gets the area's", cleanArea("Nothing here.", are
   eq("DELETE in markup or with punctuation still deletes", ["**DELETE**", "DELETE.", "_Delete_"].map((d) => definedIds(mergeChanges(area3, `#### REQ-003 — C\n\n${d}`)!)), [["REQ-001", "REQ-002"], ["REQ-001", "REQ-002"], ["REQ-001", "REQ-002"]]);
 }
 
+// --- the Dependencies field: "Not Specified" or a verbatim source sentence ------------------------------------
+{
+  const { enforceDependencies } = await import("../src/requirement-drafts.js");
+  const src = "this creates a dependency on the ldw process ldw charges should be invoiced according to agreement rules";
+  const block = (id: string, dep: string) => `#### ${id} — x\n\n**Requirement Statement:** s.\n\n**Dependencies:** ${dep}\n\n**Open Questions:** None identified in source.`;
+  const area = ["### 6.1 A\n\n**Feature analysis**", block("REQ-001", "Not Specified."), block("REQ-002", "LDW process — “This creates a dependency on the LDW process.”"),
+    block("REQ-003", "REQ-001 — not stated as an explicit dependency in the source"), block("REQ-004", "Billing — “Billing depends entirely on the payment gateway being live.”"), block("REQ-005", "*Not specified in source.*")].join("\n\n---\n\n");
+  const r = enforceDependencies(area, src);
+  eq("an unquoted or invented dependency is reset; Not Specified and a verbatim one stay", r.reset, ["REQ-003", "REQ-004"]);
+  eq("the reset reads Not Specified, the rest of the requirement and the area are kept", [/REQ-003 — x[\s\S]*?\*\*Dependencies:\*\* Not Specified\.\n\n\*\*Open Questions:\*\*/.test(r.text), /dependency on the LDW process/.test(r.text), definedIds(r.text).length, r.text.startsWith("### 6.1 A")], [true, true, 5, true]);
+  eq("nothing to reset leaves the text exactly as it was", enforceDependencies(block("REQ-009", "Not Specified."), src).text, block("REQ-009", "Not Specified."));
+}
+
 // --- a fix at check_document, after the IDs are global -------------------------------------------------------
 {
   const { renumberNewIds } = await import("../src/requirement-drafts.js");

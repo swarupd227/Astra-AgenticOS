@@ -16,18 +16,18 @@ import {
 import { auditChange, formatAudit, proposalsWithoutTests } from "./audit.js";
 import { SectionedDoc, applyEdits, sectionKey, type Edit } from "./sections.js";
 import {
-  CHAPTER_SYSTEM, WRITER_SYSTEM, areaHeadings, areaPrompt, carryReview, chapterPrompt, cleanArea, definedIds, draftArea, draftChapter, extractSection, fixPrompt,
+  CHAPTER_SYSTEM, WRITER_SYSTEM, areaHeadings, enforceDependencies, areaPrompt, carryReview, chapterPrompt, cleanArea, definedIds, draftArea, draftChapter, extractSection, fixPrompt,
   fixChangesPrompt, headingFor, mergeChanges, pool, renumber, renumberNewIds, splitAreas, summarizeDrafts, type Area, type AreaResult, type Chapter, type WriteCall,
 } from "./requirement-drafts.js";
 import { contentKey, countCitations, countIds, destructiveSave, implausiblyShort } from "./guards.js";
 import {
   citationIssues, citationKey, citesTaskPrompt, constructsProhibitedBy, formatCitationReport, formatConflicts, formatDeviation,
-  coverageGaps, danglingReferences, fieldRowsAsLabels, dependencyIssues, formatCoverageGaps, formatDanglingReferences, formatOmittedDependencies, formatQuoteIssues, formatUngroundedFields, omittedDependencies, quoteIssues, ungroundedFields,
+  coverageGaps, danglingReferences, duplicateRequirements, formatDuplicateRequirements, fieldRowsAsLabels, dependencyIssues, formatCoverageGaps, formatDanglingReferences, formatOmittedDependencies, formatQuoteIssues, formatUngroundedFields, omittedDependencies, quoteIssues, ungroundedFields,
    formatDependencyIssues, formatInventedRoles, formatProhibited, formatStrengthIssues, inventedRoles,
   noCheckableCitations, prohibitedUsed, requirementBlocks, strengthIssues, templateDeviations, termConflicts, unaddressedConflicts,
   type TermConflict,
 } from "./source-checks.js";
-import { REVIEW_SYSTEM, REVIEW_TOOL, ReviewMemory, batchPrompt, coerceReview, formatReview, reviewDocument, sourcesBlock, type AskReviewer, type ReviewReport, type SourceText } from "./source-review.js";
+import { REVIEW_SCHEMA, REVIEW_SYSTEM, REVIEW_TOOL, ReviewMemory, batchPrompt, coerceReview, formatReview, reviewDocument, sourcesBlock, type AskReviewer, type ReviewReport, type SourceText } from "./source-review.js";
 import { formatGapCitations, formatHiddenGaps, formatNarrowedLists, gapCitationIssues, hiddenGaps, narrowedLists } from "./source-gaps.js";
 import { NEVER_INDEXED, unzipExcludeArgs, pruneUnindexed, countFiles } from "./workspace.js";
 import {
@@ -1040,6 +1040,9 @@ function documentChecks(
     if (whole) {
       const dangling = formatDanglingReferences(danglingReferences(doc, sourceTexts));
       if (dangling) notes.push(dangling);
+      // Areas are written by separate writers; nothing else stops two of them stating the same requirement.
+      const dupes = formatDuplicateRequirements(duplicateRequirements(doc));
+      if (dupes) notes.push(dupes);
     }
 
     const roles = formatInventedRoles(inventedRoles(doc, sourceTexts));
@@ -1335,6 +1338,10 @@ const DRAFT_CHAPTER_BUDGET_MS = Number(process.env.DRAFT_CHAPTER_BUDGET_MS ?? 24
 // Run 26 called it six times and hit the turn limit patching between them.
 const DRAFTED_CHECK_LIMIT = Number(process.env.DRAFTED_CHECK_LIMIT ?? 2);
 const DRAFT_MODEL = process.env.DRAFT_MODEL || "";
+// What counts as an area of the sources that must have a writer, and when an area is worth splitting (see splitAreas).
+const AREA_MIN_CHARS = Number(process.env.AREA_MIN_CHARS ?? 1500);
+const SPLIT_MIN_CHARS = Number(process.env.SPLIT_MIN_CHARS ?? 12000);
+const NOT_AN_AREA = /(definitions?|glossary|terms|abbreviations?|acronyms?|open (items?|questions?|issues?)|references?|appendix|annex|revision|change log|document (history|control))/i;
 const DRAFT_CALL_TIMEOUT_MS = Number(process.env.DRAFT_CALL_TIMEOUT_MS ?? 360_000);
 
 function draftRequirementsTool(): Anthropic.Tool {
@@ -1354,6 +1361,7 @@ function draftRequirementsTool(): Anthropic.Tool {
         chapter: { type: "string", description: "Title of the requirements chapter, e.g. \"6. Existing Requirements\". A short chapter heading section is created with it." },
         intro: { type: "string", description: "Optional: one or two sentences under the chapter heading (how requirements are organised, the format). No requirements here." },
         after: { type: "string", description: "Optional: the title of an existing section to place the chapter after. Omit to place it at the end of what is written so far." },
+        outline: { type: "array", items: { type: "string" }, description: "Every top-level section of the document, in the order the task gives them, titled exactly as the task names them (with numbers only if the task numbers them). The server places every section by it, whatever order you write them in." },
         areas: {
           type: "array",
           description: "The areas, in document order.",
@@ -1430,12 +1438,12 @@ async function startDraftRequirements(
   ctx: SectionContext & { memory: ReviewMemory }, input: Record<string, unknown>, refusedOnce: Set<string>
 ): Promise<{ text: string; isError?: boolean; job?: DraftJob }> {
   const artifact = String(input.artifact ?? "").trim();
-  const chapter = String(input.chapter ?? "").trim();
+  const chapter = String(input.chapter ?? "").replace(/^s*#{1,6}s*/, "").trim();
   if (!/\.md$/i.test(artifact)) return { isError: true, text: "Refused: `artifact` must be a Markdown file name ending in .md." };
   if (!chapter) return { isError: true, text: "Refused: give the requirements chapter a title (`chapter`)." };
   const raw = Array.isArray(input.areas) ? (input.areas as any[]) : [];
   let areas: Area[] = raw.filter((a) => a && typeof a === "object").map((a) => ({
-    section: String(a.section ?? "").trim(),
+    section: String(a.section ?? "").replace(/^s*#{1,6}s*/, "").trim(),
     scope: String(a.scope ?? "").trim(),
     sourceHeadings: (Array.isArray(a.source_headings) ? a.source_headings : [a.source_headings]).map((h: unknown) => String(h ?? "").trim()).filter(Boolean),
     taskSection: a.task_section ? String(a.task_section).trim() : undefined,
@@ -1449,14 +1457,17 @@ async function startDraftRequirements(
   if (unknown.length)
     return { isError: true, text: `Refused: no heading in the input documents matches ${unknown.join(", ")}. Use the headings as they appear in the sources. A scope item that no input document describes (only the task names it) is still an area: give it \`source_headings: []\` and it is written from the task prompt. The main areas of the input documents are:\n${available.map((a) => `- ${a.title} (${a.source})`).join("\n")}` };
   const used = new Set(extracts.flat().map((x) => sectionKey(x.e!.title)));
-  const unassigned = available.filter((a) => !used.has(sectionKey(a.title)));
+  // Only an area with requirement material must have a writer: a glossary, an open-items list or a few lines are
+  // sources for the writers, not areas of their own (on a held-out input, forcing them in made requirements of a glossary).
+  const substantial = available.filter((a) => !NOT_AN_AREA.test(a.title) && (extractSection(sources, a.title)?.text.length ?? 0) >= AREA_MIN_CHARS);
+  const unassigned = substantial.filter((a) => !used.has(sectionKey(a.title)));
   const key = `draft:${artifact}:${unassigned.map((u) => u.title).join("|")}`;
   if (unassigned.length && !refusedOnce.has(key)) {
     refusedOnce.add(key);
     return { isError: true, text: `Not started: these areas of the input documents belong to no area, so their requirements would be missing:\n${unassigned.map((a) => `- ${a.title} (${a.source})`).join("\n")}\n\nAdd them to an area (or a new one). If one is genuinely out of the approved scope, send the same call again and it will start; say so in your answer.` };
   }
   // One writer per source area: an area given several is split, so no single writer becomes the slowest chain.
-  const parts = splitAreas(areas, extracts.map((xs) => xs.map((x) => x.e!)), available);
+  const parts = splitAreas(areas, extracts.map((xs) => xs.map((x) => x.e!)), substantial, SPLIT_MIN_CHARS);
   if (parts.split.length) console.error(`[drafts] split into one writer per source area: ${parts.split.join("; ")}`);
   areas = parts.areas;
   const areaExtracts = parts.extracts;
@@ -1466,6 +1477,7 @@ async function startDraftRequirements(
   if (!doc) { doc = new SectionedDoc(); ctx.docs.set(artifact, doc); }
   const intro = String(input.intro ?? "").trim();
   const after = String(input.after ?? "").trim() || undefined;
+  if (Array.isArray(input.outline) && input.outline.length) doc.setOutline(input.outline.map((t: unknown) => String(t ?? "")));
   doc.set(chapter, `## ${chapter}${intro ? `\n\n${intro}` : ""}`, after && doc.has(after) ? after : undefined);
   let prev = chapter;
   for (const a of areas.slice(0, -1)) { doc.set(a.section, `### ${a.section}\n\n_Being drafted…_`, prev); prev = a.section; }
@@ -1478,7 +1490,7 @@ async function startDraftRequirements(
   const { write } = makeWriter(sources, WRITER_SYSTEM, ctx.perf);
   const promise = (async () => {
     const reviewerSystem = [{ type: "text", text: REVIEW_SYSTEM }, { type: "text", text: sourcesBlock(sources), cache_control: { type: "ephemeral" } }];
-    await Promise.all([warmCache(writerSystem(sources)), SOURCE_REVIEW ? warmCache(reviewerSystem, [REVIEW_TOOL]) : Promise.resolve()]);
+    await Promise.all([warmCache(writerSystem(sources)), SOURCE_REVIEW ? warmCache(reviewerSystem) : Promise.resolve()]);
     const ask = makeReviewer(sources, (ms, u) => ctx.perf?.reviewCall(ms, u));
     const memories = areas.map(() => new ReviewMemory());
     const results = await pool(areas, DRAFT_CONCURRENCY, async (area, i) => {
@@ -1499,6 +1511,15 @@ async function startDraftRequirements(
         return { area, text: `### ${area.section}\n\n_Not drafted: ${(e as Error).message}_`, reqs: 0, fixRounds: 0, openChecks: [], openReview: [], error: (e as Error).message } as AreaResult;
       }
     });
+    // Dependencies: "Not Specified", or a dependency with its verbatim source sentence. Nothing else goes in.
+    const normalizedSources = sourcesBlock(sources).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    for (const r of results) {
+      const d = enforceDependencies(r.text, normalizedSources);
+      if (d.reset.length) {
+        r.text = d.text;
+        console.error(`[drafts] ${r.area.section}: Dependencies reset to "Not Specified" on ${d.reset.join(", ")} (no verbatim source sentence)`);
+      }
+    }
     const { texts, ranges } = renumber(results.map((r) => r.text));
     results.forEach((r, i) => carryReview(r.text, texts[i], memories[i], ctx.memory));
     for (let i = 0; i < areas.length - 1; i++) doc!.set(areas[i].section, texts[i]);
@@ -1553,6 +1574,7 @@ function draftChaptersTool(): Anthropic.Tool {
       type: "object",
       properties: {
         artifact: { type: "string", description: "File name of the document, ending in .md." },
+        outline: { type: "array", items: { type: "string" }, description: "Optional (if already given to draft_requirements): every top-level section in the task's order and wording." },
         chapters: {
           type: "array",
           items: {
@@ -1575,11 +1597,12 @@ async function startDraftChapters(ctx: SectionContext, input: Record<string, unk
   if (!/\.md$/i.test(artifact)) return { isError: true, text: "Refused: `artifact` must be a Markdown file name ending in .md." };
   const chapters: Chapter[] = (Array.isArray(input.chapters) ? (input.chapters as any[]) : [])
     .filter((c) => c && typeof c === "object")
-    .map((c) => ({ section: String(c.section ?? "").trim(), instructions: String(c.instructions ?? "").trim() }))
+    .map((c) => ({ section: String(c.section ?? "").replace(/^s*#{1,6}s*/, "").trim(), instructions: String(c.instructions ?? "").trim() }))
     .filter((c) => c.section && c.instructions);
   if (!chapters.length) return { isError: true, text: "Refused: `chapters` is empty (each needs a section title and instructions)." };
   let doc = ctx.docs.get(artifact);
   if (!doc) { doc = new SectionedDoc(); ctx.docs.set(artifact, doc); }
+  if (Array.isArray(input.outline) && input.outline.length) doc.setOutline(input.outline.map((t: unknown) => String(t ?? "")));
   for (const c of chapters.slice(0, -1)) doc.set(c.section, `${headingFor(c.section)}\n\n_Being drafted…_`);
   const last = chapters[chapters.length - 1];
   const first = await handleWriteSection(ctx, { artifact, section: last.section, content: `${headingFor(last.section)}\n\n_Being drafted…_` });
@@ -1708,6 +1731,8 @@ const REVIEW_CALL_TIMEOUT_MS = Number(process.env.REVIEW_CALL_TIMEOUT_MS ?? 240_
 const STREAM_IDLE_MS = Number(process.env.STREAM_IDLE_MS ?? 90_000);
 /** Models that answered a forced tool choice with a 400, so the reviewer asks them by name. */
 const NO_FORCED_TOOL = new Set<string>();
+/** Models that answered a structured-output request with a 400, so the reviewer uses the tool instead. */
+const NO_STRUCTURED = new Set<string>();
 function makeReviewer(sources: SourceText[], onCall?: (ms: number, u: Usage) => void): AskReviewer {
   const system = [
     { type: "text", text: REVIEW_SYSTEM },
@@ -1718,6 +1743,26 @@ function makeReviewer(sources: SourceText[], onCall?: (ms: number, u: Usage) => 
     try {
       const t0 = Date.now();
       const model = REVIEW_MODEL || MODEL;
+      // First choice: a structured output. The API enforces the shape, so there is no tool to force or to skip.
+      if (!NO_STRUCTURED.has(model)) {
+        try {
+          const resp = await anthropic.messages.create({
+            model, max_tokens: 12000, system: system as any,
+            output_config: { format: { type: "json_schema", schema: REVIEW_SCHEMA as any } },
+            messages: [{ role: "user", content: batchPrompt(batch) }],
+          } as any, { timeout: REVIEW_CALL_TIMEOUT_MS, maxRetries: 2 }) as Anthropic.Message;
+          onCall?.(Date.now() - t0, usageOf(resp.usage));
+          const text = resp.content.filter((b) => b.type === "text").map((b: any) => b.text).join("");
+          let parsed: unknown;
+          try { parsed = JSON.parse(text); } catch { parsed = undefined; }
+          // Unparseable (cut off at max_tokens, say) is an unanswered batch: reviewDocument asks again, then names it.
+          return coerceReview(parsed);
+        } catch (e) {
+          if ((e as any)?.status !== 400) throw e;
+          NO_STRUCTURED.add(model);
+          console.error(`[review] ${model} does not accept structured output (${String((e as Error).message).slice(0, 120)}); using the review tool`);
+        }
+      }
       const call = (forced: boolean) => anthropic.messages.create({
         model,
         max_tokens: 12000,

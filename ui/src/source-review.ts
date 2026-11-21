@@ -95,6 +95,31 @@ export const REVIEW_TOOL = {
   },
 } as const;
 
+/**
+ * The same answer as a structured output (output_config.format). The shape is enforced by the API, so there is no
+ * forced tool choice (which Sonnet 5.5 and Opus 5.5 reject) and no reply that silently skips the tool. Every property
+ * is required and objects are closed, as structured outputs need; an absent quote or fix is an empty string.
+ */
+const ISSUE_SCHEMA = {
+  type: "object", additionalProperties: false, required: ["kind", "field", "problem", "source_wording", "fix"],
+  properties: {
+    kind: { type: "string", enum: ["strength", "merged", "dropped", "invented", "citation", "gap_ref", "dependency", "open_question", "name", "other"] },
+    field: { type: "string" }, problem: { type: "string" },
+    source_wording: { type: "string", description: "Verbatim source text that shows the problem; empty when the problem is an absence." },
+    fix: { type: "string", description: "Replacement wording; empty if none." },
+  },
+} as const;
+export const REVIEW_SCHEMA = {
+  type: "object", additionalProperties: false, required: ["results", "passed"],
+  properties: {
+    results: {
+      type: "array", description: "Only the requirements that have a problem.",
+      items: { type: "object", additionalProperties: false, required: ["req", "verdict", "issues"], properties: { req: { type: "string" }, verdict: { type: "string", enum: ["pass", "minor", "fail"] }, issues: { type: "array", items: ISSUE_SCHEMA } } },
+    },
+    passed: { type: "array", items: { type: "string" }, description: "The ID of every requirement with nothing to report." },
+  },
+} as const;
+
 /** The model's answer to REVIEW_TOOL as verdicts: its findings, plus a pass for each ID it listed as having none. */
 export function coerceReview(input: unknown): ReviewVerdict[] {
   const o = (input && typeof input === "object" ? input : {}) as { results?: unknown; passed?: unknown };

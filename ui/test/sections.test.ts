@@ -48,6 +48,12 @@ const eq = (label: string, got: unknown, want: unknown) => {
   d.set("5. Business Understanding", "u"); d.set("5.1 Business Objectives", "o"); d.set("7. Open Questions", "q"); d.set("Appendix", "a");
   eq("a numbered section goes before the first section numbered after it", d.titles(), ["1. Document Information", "5. Business Understanding", "5.1 Business Objectives", "6. Existing Requirements", "6.1 Billing", "6.2 Credit", "7. Open Questions", "Appendix"]);
   d.set("4.10 Late", "l");
+  // A task with unnumbered headings gives the order as an outline; the requirements chapter is started first.
+  const u = new SectionedDoc();
+  u.setOutline(["## Business Objectives", "Success Criteria", "Requirements", "Open Questions"]);
+  u.set("Requirements", "r"); u.set("Requirements — Billing", "b", "Requirements");
+  u.set("Open Questions", "q"); u.set("Business Objectives", "o"); u.set("Success Criteria", "s");
+  eq("unnumbered sections follow the outline, a chapter's sub-sections stay with it", u.titles(), ["Business Objectives", "Success Criteria", "Requirements", "Requirements — Billing", "Open Questions"]);
   eq("numbers compare as numbers, not text", d.titles().indexOf("4.10 Late"), 1);
 }
 

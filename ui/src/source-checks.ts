@@ -797,6 +797,47 @@ export function requirementText(doc: string): string {
 }
 
 /** One entry per requirement item: its heading or row and the lines under it. */
+/**
+ * Requirements that state the same thing: each area is written by its own writer, and nothing else stops two of
+ * them taking the same source item. Two statements are the same when, ignoring case and punctuation, one contains
+ * the other, or they differ only in words that carry no meaning ("the", "and"…). Short statements (under 8 words) are ignored: "Charges may be
+ * applied." recurs legitimately.
+ */
+export function duplicateRequirements(doc: string): { ids: string[]; statement: string }[] {
+  const items = requirementBlocks(doc).map((b) => {
+    const id = /\b[A-Z]{1,6}-\d{1,4}\b/.exec(b)?.[0] ?? "";
+    const s = /\*\*Requirement Statement:\*\*\s*([\s\S]*?)(?=\n\s*\n|\n\s*\*\*[A-Z]|$)/.exec(b)?.[1] ?? "";
+    const n = s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    return { id, s: s.trim(), n, w: new Set(n.split(" ").filter(Boolean)) };
+  }).filter((x) => x.id && x.w.size >= 8);
+  const out: { ids: string[]; statement: string }[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < items.length; i++) {
+    if (seen.has(items[i].id)) continue;
+    const group = [items[i].id];
+    for (let j = i + 1; j < items.length; j++) {
+      const a = items[i], b = items[j];
+      // Near-identical only. Per-item requirements ("Weekly Billing …" / "28-Day Billing …", "Invoice Forms …" /
+      // "Quote Forms …") differ by the one word that matters, and a word-overlap threshold flagged them in every run.
+      const STOP = new Set(["the", "a", "an", "and", "or", "of", "to", "in", "on", "at", "for", "is", "are", "be", "this", "that", "with", "as", "by", "it", "its", "also"]);
+      const diff = [...a.w].filter((x) => !b.w.has(x)).concat([...b.w].filter((x) => !a.w.has(x))).filter((x) => !STOP.has(x));
+      if (a.n.includes(b.n) || b.n.includes(a.n) || diff.length === 0) { group.push(b.id); seen.add(b.id); }
+    }
+    if (group.length > 1) out.push({ ids: group, statement: items[i].s.replace(/\s+/g, " ").slice(0, 140) });
+  }
+  return out;
+}
+
+export function formatDuplicateRequirements(d: { ids: string[]; statement: string }[], max = 10): string | null {
+  if (!d.length) return null;
+  return (
+    `⚠ **Requirements that say the same thing — ${d.length}:**\n` +
+    d.slice(0, max).map((x) => `- ${x.ids.join(", ")}: “${x.statement}”`).join("\n") +
+    (d.length > max ? `\n- …and ${d.length - max} more.` : "") +
+    `\nKeep one of each (the one in the area its source section belongs to) and delete the others with patch_section, or make each state what is distinct about it.`
+  );
+}
+
 export function requirementBlocks(doc: string): string[] {
   const lines = doc.split("\n");
   const starts = new Map<number, string>();

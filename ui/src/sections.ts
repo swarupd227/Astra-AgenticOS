@@ -50,12 +50,23 @@ export class SectionedDoc {
       // A numbered section with no anchor goes before the first section numbered after it, so chapters can be
       // written in any order (the requirements chapter is started first and drafted while "5.1" is written).
       const num = sectionNumber(title);
-      const later = anchor < 0 && num ? this.order.findIndex((k) => { const n = sectionNumber(this.parts.get(k)!.title); return !!n && compareNumbers(n, num) > 0; }) : -1;
+      let later = anchor < 0 && num ? this.order.findIndex((k) => { const n = sectionNumber(this.parts.get(k)!.title); return !!n && compareNumbers(n, num) > 0; }) : -1;
+      // A task that names its sections without numbers ("## Business Objectives", "## Requirements") gives their order
+      // as an outline instead: a section in the outline goes before the first section placed later in it.
+      const at = this.outline.get(key);
+      if (anchor < 0 && later < 0 && at !== undefined)
+        later = this.order.findIndex((k) => { const o = this.outline.get(k); return o !== undefined && o > at; });
       if (anchor >= 0) this.order.splice(anchor + 1, 0, key);
       else if (later >= 0) this.order.splice(later, 0, key);
       else this.order.push(key);
     }
     return existed;
+  }
+
+  private outline = new Map<string, number>();
+  /** The document's sections in the order the task gives them, for titles that carry no number. */
+  setOutline(titles: string[]) {
+    this.outline = new Map(titles.map((t, i) => [sectionKey(t.replace(/^\s*#{1,6}\s*/, "")), i]));
   }
 
   compose(): string {

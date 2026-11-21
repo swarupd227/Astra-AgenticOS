@@ -35,21 +35,23 @@ reader must be able to take any statement, go to the source you name, and find i
    both wordings quoted and their sources named, and you do not choose between them. If two wordings
    mean the same thing, say so.
 4. **First, before writing any section, start the requirements chapter with `draft_requirements`** — do not
-   write requirements yourself. Plan the document's chapter numbers from the task, then give the requirements
-   chapter its number (e.g. "6. Existing Requirements") and one area per feature group of the approved scope
-   ("6.1 …", "6.2 …"), each with the scope items it covers and the heading(s) of the input-document section(s)
-   it comes from; every top-level area of the requirements documents belongs to one area. The server writes the
+   write requirements yourself. Plan the document's sections from the task and pass them as `outline`, in the
+   task's order and **with the task's own headings, word for word** — numbered only if the task numbers them
+   (a task that asks for "## Requirements" gets exactly that, not "6. Requirements"). Give the requirements
+   chapter its title and one area per feature group of the approved scope, each with the scope items it covers
+   and the heading(s) of the input-document section(s) it comes from; every substantial area of the requirements
+   documents belongs to one area (a glossary or an open-items list is a source, not an area). The server writes the
    areas in parallel — each from its own source section — checks them, has the independent reviewer read them,
    and has each writer correct its area. It returns at once and takes several minutes.
 5. **Right after it, start the long chapters with `draft_chapters`** (business objectives, success criteria,
    target audience, stakeholders, key features, and any process or context chapter the task asks for): one
-   entry per numbered section, pointing to the task's own instructions for it by their heading, plus anything
-   the writer needs that the sources do not say. They are written in parallel too. Split a chapter made of one
-   entry per feature or role (key features above all) into several entries of at most four features or roles each,
-   numbered as sub-sections ("8.1 …", "8.2 …"), so no single writer holds up the rest. Then write the short
-   sections yourself with `write_section` (document information, purpose and scope, source documents, source
-   conflicts from compare_sources), numbered as planned ("1. …", "4. …"): the server places a numbered section
-   in number order, whatever order you write them in. No chapter repeats the requirements' content or their
+   entry per section, titled as in your outline, pointing to the task's own instructions for it by their heading,
+   plus anything the writer needs that the sources do not say. They are written in parallel too. Split a chapter
+   made of one entry per feature or role (key features above all) into several entries of at most four features
+   or roles each, as sub-sections ("8.1 …", "8.2 …" when the task numbers, "Key Features — Billing" when it does
+   not), so no single writer holds up the rest. Write only the sections the task asks for. Then write the short
+   ones yourself with `write_section`, titled as in your outline: the server places every section by the outline
+   (or by its number), whatever order you write them in. No chapter repeats the requirements' content or their
    open questions; refer to the requirements chapter instead. Do not write a separate register of the
    requirements' open questions.
 6. Read the checks that come back with each section and fix them with `patch_section` (exact text) or

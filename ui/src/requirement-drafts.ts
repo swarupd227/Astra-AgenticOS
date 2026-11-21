@@ -58,7 +58,7 @@ export const WRITER_SYSTEM =
   `You write ONE area of the requirements chapter of a Business Requirements Document, from the source documents above. Other writers handle the other areas at the same time; stay inside yours.\n\n` +
   `Write, in Markdown, in this order:\n` +
   `1. The area heading exactly as given to you.\n` +
-  `2. **Feature analysis** — a table \`| Aspect | From the sources |\` with a row only for each aspect a source actually describes for this area, chosen from: Business Objective, Business Outcome, Trigger, Actors, Inputs, Outputs, Lifecycle Position, Process Flow, Data Flow, Upstream Impact, Downstream Impact, User Journey, Entry Point, Exit Point, Displayed Information, User Actions, Screen Implications. Each value is a close paraphrase, a sentence or two, ending with its source in brackets, e.g. (inputs/Detailed-Requirements-1.md — Billing Methods › Our Understanding). After the table, one line: \`**Not specified in source:** \` followed by the aspects no source describes. If no source describes screens, add the line \`**UX:** Screen Design To Be Finalized — UI Details Not Available.\` Actors are named only as the sources name them.\n` +
+  `2. Only if the task asks for an analysis of each feature (lifecycle position, process or data flow, user journey, screens or the like; otherwise leave this out): **Feature analysis** — a table \`| Aspect | From the sources |\` with a row only for each aspect a source actually describes for this area, chosen from: Business Objective, Business Outcome, Trigger, Actors, Inputs, Outputs, Lifecycle Position, Process Flow, Data Flow, Upstream Impact, Downstream Impact, User Journey, Entry Point, Exit Point, Displayed Information, User Actions, Screen Implications. Each value is a close paraphrase, a sentence or two, ending with its source in brackets, e.g. (inputs/Detailed-Requirements-1.md — Billing Methods › Our Understanding). After the table, one line: \`**Not specified in source:** \` followed by the aspects no source describes. If no source describes screens, add the line \`**UX:** Screen Design To Be Finalized — UI Details Not Available.\` Actors are named only as the sources name them.\n` +
   `3. The requirements, each in exactly this form:\n\n` +
   `#### REQ-001 — <name of the source item; nothing added>\n\n` +
   `**Requirement Statement:** <what the source states>\n\n` +
@@ -200,12 +200,13 @@ export function extractSection(sources: SourceText[], heading: string): Extract 
  * so the parts stay together and in order; a category heading given beside them (the whole of "Personalization") is
  * dropped, since the parts cover it.
  */
-export function splitAreas(areas: Area[], extracts: Extract[][], available: { title: string }[]): { areas: Area[]; extracts: Extract[][]; split: string[] } {
+export function splitAreas(areas: Area[], extracts: Extract[][], available: { title: string }[], minChars = 0): { areas: Area[]; extracts: Extract[][]; split: string[] } {
   const areaKeys = new Set(available.map((a) => key(a.title)));
   const outA: Area[] = [], outE: Extract[][] = [], split: string[] = [];
   areas.forEach((a, i) => {
     const own = extracts[i].filter((e) => areaKeys.has(key(e.title)));
-    if (own.length < 2) { outA.push(a); outE.push(extracts[i]); return; }
+    // Splitting pays only for a long chain: a few short source sections are faster with one writer than with several.
+    if (own.length < 2 || own.reduce((n, e) => n + e.text.length, 0) < minChars) { outA.push(a); outE.push(extracts[i]); return; }
     split.push(a.section);
     const m = /^\s*(\d+(?:\.\d+)*)\.?\s+(.*)$/.exec(a.section);
     own.forEach((e, k) => {
@@ -296,6 +297,36 @@ export function renumber(texts: string[], start = 1): { texts: string[]; ranges:
     return map.size ? t.replace(/\bREQ-\d{1,4}\b/g, (m) => map.get(m) ?? m) : t;
   });
   return { texts: out, ranges };
+}
+
+/**
+ * The Dependencies field has two forms only: "Not Specified", or what it depends on followed by the source sentence
+ * that states it, in quotation marks, verbatim. A value with no quote, or whose quotes are not in the sources, is an
+ * inferred dependency, the most frequent failure of runs 17–29; it is reset to "Not Specified." rather than left for a
+ * reviewer to notice. `normalizedSources` is the sources lowercased with every run of non-alphanumerics a single space.
+ * Returns the text and the requirements whose Dependencies were reset.
+ */
+export function enforceDependencies(text: string, normalizedSources: string): { text: string; reset: string[] } {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const inSources = (q: string) => {
+    const parts = q.split(/…|\.{3}/).map(norm).filter((p) => p.length >= 12);
+    return parts.length > 0 && parts.every((p) => normalizedSources.includes(p));
+  };
+  const reset: string[] = [];
+  const out = splitArea(text);
+  if (!out.reqs.length) return { text, reset };
+  const reqs = out.reqs.map((r) => {
+    const m = /(\*\*Dependencies:\*\*[ \t]*)([\s\S]*?)(?=\n\s*\n\s*\*\*[A-Z][^*\n]*:\*\*|\n\s*\n\s*-{3,}|\s*$)/.exec(r.text);
+    if (!m) return r;
+    const value = m[2].trim();
+    if (!value || /^\*?_?not specified/i.test(value.replace(/^[*_\s]+/, ""))) return r;
+    const quotes = [...value.matchAll(/[“"]([^”"]{12,})[”"]/g)].map((x) => x[1]);
+    if (quotes.length && quotes.every(inSources)) return r;
+    reset.push(r.id);
+    return { ...r, text: r.text.slice(0, m.index) + `${m[1]}Not Specified.` + r.text.slice(m.index + m[0].length) };
+  });
+  if (!reset.length) return { text, reset };
+  return { text: [out.head.replace(/(\n\s*-{3,}\s*)+$/, "").trim(), ...reqs.map((r) => r.text.replace(/(\n\s*-{3,}\s*)+$/, "").trim())].join("\n\n---\n\n"), reset };
 }
 
 /**

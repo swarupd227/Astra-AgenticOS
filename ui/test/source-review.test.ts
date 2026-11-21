@@ -64,6 +64,14 @@ const docOf = (n: number, edit?: (i: number) => string) => `## 4. Requirements\n
   eq("passed as JSON text, or as a comma list, is read", [coerceReview({ results: [], passed: '["REQ-001","REQ-002"]' }).length, coerceReview({ results: [], passed: "REQ-001, REQ-002; REQ-003" }).length], [2, 3]);
   eq("things that are not IDs are ignored", coerceReview({ results: [], passed: ["REQ-001", "all the rest", 7, ""] }).map((v) => v.req), ["REQ-001"]);
   eq("nothing usable is nothing, not a crash", [coerceReview(undefined).length, coerceReview("text").length, coerceReview({}).length], [0, 0, 0]);
+  // A structured output has every field, with "" for an absent quote: an absence finding stays, an empty quote on a
+  // finding that needs one is dropped.
+  const structured = coerceReview({ results: [{ req: "REQ-001", verdict: "fail", issues: [
+    { kind: "invented", field: "Requirement Statement", problem: "no source states this", source_wording: "", fix: "" },
+    { kind: "strength", field: "Requirement Statement", problem: "shall for should", source_wording: "", fix: "" },
+  ] }], passed: ["REQ-002"] });
+  const v = verifiedIssues(structured[0].issues, SOURCES);
+  eq("a structured answer: empty quote counts as none", [structured.map((x) => x.req), v.kept.map((i) => i.kind), v.dropped], [["REQ-001", "REQ-002"], ["invented"], 1]);
 }
 
 // --- which requirements are read, in what batches ------------------------------------------------
