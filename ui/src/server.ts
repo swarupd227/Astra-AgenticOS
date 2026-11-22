@@ -24,7 +24,7 @@ import {
   citationIssues, citationKey, citesTaskPrompt, constructsProhibitedBy, formatCitationReport, formatConflicts, formatDeviation,
   coverageGaps, danglingReferences, duplicateRequirements, formatDuplicateRequirements, fieldRowsAsLabels, dependencyIssues, formatCoverageGaps, formatDanglingReferences, formatOmittedDependencies, formatOmittedItemSentences, formatUncheckedItems, formatQuoteIssues, formatUngroundedFields, omittedDependencies, omittedItemSentences, quoteIssues, ungroundedFields,
    formatDependencyIssues, formatInventedRoles, formatProhibited, formatStrengthIssues, inventedRoles,
-  formatDegradedSources, formatItemLedger, isClientDocument, itemLedger, degradedSources, noCheckableCitations, ownDocuments, prohibitedUsed, summarizeItemLedger, requirementBlocks, strengthIssues, templateDeviations, termConflicts, unaddressedConflicts,
+  formatDegradedSources, formatItemLedger, formatUncheckedDocuments, isClientDocument, itemLedger, degradedSources, noCheckableCitations, ownDocuments, prohibitedUsed, summarizeItemLedger, requirementBlocks, strengthIssues, templateDeviations, termConflicts, unaddressedConflicts,
   type TermConflict,
 } from "./source-checks.js";
 import { REVIEW_SCHEMA, REVIEW_SYSTEM, REVIEW_TOOL, ReviewMemory, batchPrompt, coerceReview, formatReview, reviewDocument, sourcesBlock, type AskReviewer, type ReviewReport, type SourceText } from "./source-review.js";
@@ -1335,6 +1335,10 @@ async function handleCheckDocument(ctx: SectionContext, input: Record<string, un
   if (second.text) notes.push(second.text);
   if (doc.citationRewrites)
     notes.push(`ℹ **${doc.citationRewrites} citation(s) were written as files under inputs/ (\`inputs/GLD-…\`) and corrected to the Golden Repository id.** A Golden Repository document is cited by its id, e.g. \`GLD-FS-002@1\`.`);
+  // Said here, where the writer reads the check, but not in documentChecks: a document with no headings can never be fixed
+  // by the writer, and as an open check it would mark every run "saved with checks still open".
+  const unchecked = formatUncheckedDocuments(itemLedger(fieldRowsAsLabels(composed), clientDocumentMap(documentSources(ctx.project, ctx.task))));
+  if (unchecked) notes.push(unchecked);
   // After the sections' own writers have had their rounds, the writer of the whole document fixes what matters and
   // stops: run 23 spent 68 turns (11 minutes) patching minor findings and weak citation matches one at a time.
   if (ctx.drafted || refixNote)

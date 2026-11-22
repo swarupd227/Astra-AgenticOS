@@ -1307,6 +1307,26 @@ const ANALYST_SECTION = /\b(?:our understanding|discovery|implications|build inp
 const EXCLUSION = /\b(?:out of (?:the )?(?:approved )?scope|excluded|not (?:in|part of) (?:the )?(?:approved )?scope)\b/i;
 
 /**
+ * Whether a line of the document excludes this item: the item's title, as whole words, within 8 words of the exclusion
+ * phrase. A short title ("Notes", "Status") counts only at two words or 8 characters, so an unrelated out-of-scope line
+ * that happens to contain the word does not exclude it.
+ */
+function excludedIn(lines: string[], title: string): boolean {
+  const t = words(title);
+  if (t.length < 2 && t.join(" ").length < 8) return false;
+  for (const line of lines) {
+    const w = words(line);
+    const phrase = words(EXCLUSION.exec(line)?.[0] ?? "");
+    const at = (needle: string[]) => w.findIndex((_, i) => needle.every((x, k) => w[i + k] === x));
+    const ti = at(t), pi = at(phrase);
+    if (ti < 0 || pi < 0) continue;
+    const gap = ti < pi ? pi - (ti + t.length) : ti - (pi + phrase.length);
+    if (gap <= 8) return true;
+  }
+  return false;
+}
+
+/**
  * Every requirement item of the client's documents with what became of it: covered (a requirement's Source Reference names
  * it), unresolved (no requirement names it, but one carries most of a sentence of it: a match to confirm, never a guessed
  * one), excluded (the document says it is out of scope), or not covered. An item is a heading with no sub-headings and text
@@ -1347,7 +1367,7 @@ export function itemLedger(doc: string, sources: Map<string, string>): ItemLedge
   };
   const blocks = requirementBlocks(doc);
   const blockSets = blocks.map((b) => bigramSet(b));
-  const exclusionLines = doc.split(/\r?\n/).filter((l) => EXCLUSION.test(l)).map((l) => ` ${words(l).join(" ")} `);
+  const exclusionLines = doc.split(/\r?\n/).filter((l) => EXCLUSION.test(l));
   const items: ItemDisposition[] = leaves.map((it) => {
     const e = cited.get(it);
     if (e) return { status: "covered", item: it.title, source: it.key, reqs: e.reqs };
@@ -1360,8 +1380,7 @@ export function itemLedger(doc: string, sources: Map<string, string>): ItemLedge
       const carried = itemSentences(it.body).every((s) => { const bg = bigramList(contentWords(s)); return bg.filter((b) => have.has(b)).length / bg.length >= 0.5; });
       return { status: carried ? "covered-via-parent" : "unresolved", item: it.title, source: it.key, reqs: ids };
     }
-    const title = ` ${words(it.title).join(" ")} `;
-    if (exclusionLines.some((l) => l.includes(title))) return { status: "excluded", item: it.title, source: it.key };
+    if (excludedIn(exclusionLines, it.title)) return { status: "excluded", item: it.title, source: it.key };
     // A requirement that carries most of one of the item's sentences without naming the item: unresolved, to confirm.
     // 0.6 of the sentence's word pairs, set on 2026-11-22 against runs 40 and 45 and a one-pass golden-only BRD: it marked
     // REQ-074 (named for an item, citing the Overview) and REQ-027 (four items merged) unresolved and nothing in run 45.
@@ -1385,6 +1404,16 @@ export function summarizeItemLedger(l: ItemLedger): string {
   const n = (s: ItemDisposition["status"]) => l.items.filter((x) => x.status === s).length;
   return `source items: ${l.items.length} — ${n("covered")} covered, ${n("covered-via-parent")} covered via parent, ${n("unresolved")} unresolved, ${n("excluded")} excluded, ${n("not-covered")} not covered` +
     (l.noItems.length ? `; not checked item by item (no headings): ${l.noItems.join(", ")}` : "");
+}
+
+/**
+ * The client documents with no headings to treat as items, said even when every item that could be checked is covered:
+ * otherwise "nothing missing" reads as full coverage of documents that were never checked item by item.
+ */
+export function formatUncheckedDocuments(l: ItemLedger): string | null {
+  const n = (s: ItemDisposition["status"]) => l.items.filter((x) => x.status === s).length;
+  if (!l.noItems.length || n("not-covered") || n("unresolved")) return null; // formatItemLedger already names them
+  return `ℹ **Not checked item by item: ${l.noItems.join(", ")}** (no headings to treat as items). The ${l.items.length} item(s) of the other documents are all accounted for; read these documents against the requirements yourself.`;
 }
 
 /** What the writer must act on: items no requirement covers, and matches to confirm. Null when there are none. */

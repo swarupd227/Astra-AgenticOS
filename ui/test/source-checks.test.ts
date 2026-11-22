@@ -13,7 +13,7 @@ import {
   citationIssues, citationKey, citesTaskPrompt, constructsProhibitedBy, extractDefinitions, formatCitationReport,
   formatInventedRoles, inventedRoles, noCheckableCitations, prohibitedUsed, templateDeviations, termConflicts,
   unaddressedConflicts, formatOmittedDependencies, omittedItemSentences, formatOmittedItemSentences, formatUncheckedItems, ownDocuments, isClientDocument,
-  fieldValue, itemLedger, formatItemLedger, summarizeItemLedger, degradedSources, formatDegradedSources,
+  fieldValue, itemLedger, formatItemLedger, formatUncheckedDocuments, summarizeItemLedger, degradedSources, formatDegradedSources,
 } from "../src/source-checks.js";
 
 let failures = 0;
@@ -708,6 +708,20 @@ eq("a mention nowhere near a prohibition does not count",
   eq('the report lists what is not covered', f.includes('- Credit Validation (inputs/dr.md)'), true);
   eq('the summary line names the unchecked document', summarizeItemLedger(l).includes('no headings): inputs/flow.md'), true);
   eq('nothing to act on, no finding', formatItemLedger({ items: [{ status: 'covered', item: 'A', source: 's', reqs: ['REQ-001'] }], noItems: [] }), null);
+  // All covered, but a document had no headings: that is still said, so silence does not read as full coverage.
+  const allCovered = { items: [{ status: 'covered' as const, item: 'A', source: 's', reqs: ['REQ-001'] }], noItems: ['GLD-FS-001'] };
+  eq('a document not checked item by item is named even when all else is covered', (formatUncheckedDocuments(allCovered) ?? '').includes('Not checked item by item: GLD-FS-001'), true);
+  eq('no unchecked document, no note', formatUncheckedDocuments({ items: allCovered.items, noItems: [] }), null);
+  eq('when items are missing, formatItemLedger names the unchecked document instead', formatUncheckedDocuments(l), null);
+  // Exclusion needs the title near the phrase, and a title long enough to mean something.
+  const SH = ['# Area', '## Admin', '### Requirement Breakdown', '#### Status', 'The record should show a status for each rental.',
+    '#### Export Feeds', 'Exports should be produced nightly for the finance warehouse.'].join('\n');
+  const shSrc = new Map([[citationKey('inputs/sh.md'), SH]]);
+  const st = (d: string) => Object.fromEntries(itemLedger(d, shSrc).items.map((x) => [x.item, x.status]));
+  eq('a one-word title in an unrelated out-of-scope line is not excluded', st('Order status reports are out of scope for this release.')['Status'], 'not-covered');
+  eq('a title far from the exclusion phrase is not excluded',
+    st('Export Feeds were discussed at length with the finance team during several workshops, and separately the mobile app is out of scope.')['Export Feeds'], 'not-covered');
+  eq('a title next to the exclusion phrase is excluded', st('Export Feeds are out of scope for Sprint 2.')['Export Feeds'], 'excluded');
 }
 
 {
