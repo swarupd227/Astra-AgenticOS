@@ -722,6 +722,8 @@ eq("a mention nowhere near a prohibition does not count",
   eq('a title far from the exclusion phrase is not excluded',
     st('Export Feeds were discussed at length with the finance team during several workshops, and separately the mobile app is out of scope.')['Export Feeds'], 'not-covered');
   eq('a title next to the exclusion phrase is excluded', st('Export Feeds are out of scope for Sprint 2.')['Export Feeds'], 'excluded');
+  eq('a title named twice is excluded when its second mention is near the phrase',
+    st('Export Feeds came up in the finance workshop that ran over two full days last month; after review, Export Feeds are out of scope.')['Export Feeds'], 'excluded');
 }
 
 {

@@ -1317,11 +1317,12 @@ function excludedIn(lines: string[], title: string): boolean {
   for (const line of lines) {
     const w = words(line);
     const phrase = words(EXCLUSION.exec(line)?.[0] ?? "");
-    const at = (needle: string[]) => w.findIndex((_, i) => needle.every((x, k) => w[i + k] === x));
-    const ti = at(t), pi = at(phrase);
-    if (ti < 0 || pi < 0) continue;
-    const gap = ti < pi ? pi - (ti + t.length) : ti - (pi + phrase.length);
-    if (gap <= 8) return true;
+    // Every place each occurs: a line may name the title twice, only once near the phrase.
+    const at = (needle: string[]) => w.flatMap((_, i) => (needle.length && needle.every((x, k) => w[i + k] === x) ? [i] : []));
+    for (const ti of at(t)) for (const pi of at(phrase)) {
+      const gap = ti < pi ? pi - (ti + t.length) : ti - (pi + phrase.length);
+      if (gap <= 8) return true;
+    }
   }
   return false;
 }
