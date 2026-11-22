@@ -24,7 +24,7 @@ import {
   citationIssues, citationKey, citesTaskPrompt, constructsProhibitedBy, formatCitationReport, formatConflicts, formatDeviation,
   coverageGaps, danglingReferences, duplicateRequirements, formatDuplicateRequirements, fieldRowsAsLabels, dependencyIssues, formatCoverageGaps, formatDanglingReferences, formatOmittedDependencies, formatOmittedItemSentences, formatUncheckedItems, formatQuoteIssues, formatUngroundedFields, omittedDependencies, omittedItemSentences, quoteIssues, ungroundedFields,
    formatDependencyIssues, formatInventedRoles, formatProhibited, formatStrengthIssues, inventedRoles,
-  isClientDocument, noCheckableCitations, ownDocuments, prohibitedUsed, requirementBlocks, strengthIssues, templateDeviations, termConflicts, unaddressedConflicts,
+  formatDegradedSources, formatItemLedger, isClientDocument, itemLedger, degradedSources, noCheckableCitations, ownDocuments, prohibitedUsed, summarizeItemLedger, requirementBlocks, strengthIssues, templateDeviations, termConflicts, unaddressedConflicts,
   type TermConflict,
 } from "./source-checks.js";
 import { REVIEW_SCHEMA, REVIEW_SYSTEM, REVIEW_TOOL, ReviewMemory, batchPrompt, coerceReview, formatReview, reviewDocument, sourcesBlock, type AskReviewer, type ReviewReport, type SourceText } from "./source-review.js";
@@ -1067,6 +1067,12 @@ function documentChecks(
       if (gaps) notes.push(gaps);
       const omitted = formatOmittedDependencies(omittedDependencies(doc, ownTexts));
       if (omitted) notes.push(omitted);
+      // Every item of the client's documents accounted for: covered, unresolved, excluded or not covered.
+      const ledger = formatItemLedger(itemLedger(doc, clientDocumentMap(allSources)));
+      if (ledger) notes.push(ledger);
+      // First, not last: a document written without a source it was given is the first thing to know.
+      const degraded = formatDegradedSources(sourceDegradation(project, task));
+      if (degraded) notes.unshift(degraded);
     }
   }
 
@@ -1416,6 +1422,11 @@ function draftRequirementsTool(): Anthropic.Tool {
  * with only GLD-FS items had no area writers at all and was written in one pass (8 of 11 fails were merged items).
  */
 const ownSources = ownDocuments;
+
+/** The client's own documents (not the task), keyed as a citation names them: `inputs/x.md` or `GLD-FS-002`. */
+function clientDocumentMap(all: { name: string; text: string }[]): Map<string, string> {
+  return new Map(ownSources(all).filter((s) => s.name !== "task prompt").map((s) => [citationKey(s.name.split(" ")[0]), s.text]));
+}
 
 /** The sources an area writer and its reviewer read: the task and this project's own documents. */
 function draftSources(project: Project | null, task: string): SourceText[] {
@@ -1890,6 +1901,22 @@ function compareSourcesTool(): Anthropic.Tool {
 }
 
 /** Everything a document-sourced deliverable may draw on: the task, this project's input documents, and the Golden items it can see. */
+/** What the project asked for but the run cannot use (see degradedSources). */
+function sourceDegradation(project: Project | null, task: string): string[] {
+  const inputs = project
+    ? walkFiles(inputsDirOf(project), project.artifactsDir).map((f) => {
+        try { return { path: f.path, text: fs.readFileSync(path.join(project.artifactsDir, f.path), "utf8") as string | null }; }
+        catch { return { path: f.path, text: null }; }
+      })
+    : [];
+  const visible = golden.selectedFor(project?.golden, project?.id);
+  const explicit = project?.golden?.mode === "subset" ? project.golden.itemIds ?? [] : [];
+  // Explicitly selected items count even when archived, so "selected but archived" is said rather than hidden.
+  const selected = [...visible, ...explicit.map((id) => golden.get(id)).filter((i): i is NonNullable<typeof i> => !!i && !visible.includes(i))]
+    .map((i) => ({ id: i.id, title: i.title, status: i.status, content: golden.readContent(i.id) }));
+  return degradedSources({ inputs, selected, selectedIds: explicit, task });
+}
+
 function documentSources(project: Project | null, task: string): { name: string; text: string }[] {
   const sources: { name: string; text: string }[] = [{ name: "task prompt", text: task }];
   if (project) {
@@ -2897,6 +2924,18 @@ async function runAgent(
       const line = `${d.citationRewrites} citation(s) in ${name} were written as files under inputs/ (inputs/GLD-…) and rewritten to the Golden Repository id`;
       console.error(`[citations] ${line}`);
       rawEmit({ type: "notice", message: line });
+    }
+    // What became of every source item, and what was asked for but not used: counted for the run, not only when open.
+    if (isDocAgent && lastDocSaved) {
+      const all = documentSources(project, userMessage);
+      const summary = summarizeItemLedger(itemLedger(fieldRowsAsLabels(lastDocSaved.content), clientDocumentMap(all)));
+      console.error(`[items] ${lastDocSaved.name}: ${summary}`);
+      rawEmit({ type: "notice", message: `${lastDocSaved.name}: ${summary}` });
+      const degraded = sourceDegradation(project, userMessage);
+      if (degraded.length) {
+        console.error(`[sources] asked for but not used: ${degraded.join("; ")}`);
+        rawEmit({ type: "notice", message: `Sources asked for but not used: ${degraded.join("; ")}` });
+      }
     }
   }
 

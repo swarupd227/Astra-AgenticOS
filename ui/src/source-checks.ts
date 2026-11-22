@@ -73,6 +73,41 @@ export function ownDocuments<T extends { name: string }>(all: T[]): T[] {
   return all.filter((s) => s.name === "task prompt" || (inputs ? /^inputs\//i.test(s.name) : isClientDocument(s.name)));
 }
 
+/**
+ * Sources that were asked for but cannot be used, each with why: an input that cannot be read or is empty; a Golden
+ * Repository item selected for the project (by id) that is missing, not published, or has no readable content; an item
+ * the task names that the project has not selected. Without this a run worked on less than it was given and said nothing.
+ */
+export function degradedSources(s: {
+  inputs: { path: string; text: string | null }[];
+  selected: { id: string; title: string; status: string; content: string | null }[];
+  selectedIds: string[];
+  task: string;
+}): string[] {
+  const out: string[] = [];
+  for (const f of s.inputs) {
+    if (f.text === null) out.push(`${f.path}: could not be read`);
+    else if (!f.text.trim()) out.push(`${f.path}: is empty`);
+  }
+  const byId = new Map(s.selected.map((i) => [i.id.toUpperCase(), i]));
+  for (const i of s.selected)
+    if (i.status === "published" && !(i.content ?? "").trim()) out.push(`${i.id} (${i.title}): selected, but its content could not be read`);
+  for (const id of s.selectedIds) {
+    const i = byId.get(id.toUpperCase());
+    if (!i) out.push(`${id}: selected for this project, but no such item is available`);
+    else if (i.status !== "published") out.push(`${i.id} (${i.title}): selected, but it is ${i.status}, not published`);
+  }
+  const named = new Set((s.task.match(/\bGLD-[A-Z]+-\d+\b/gi) ?? []).map((x) => x.toUpperCase()));
+  for (const id of named) if (!byId.has(id)) out.push(`${id}: named in the task, but not selected for this project`);
+  return [...new Set(out)];
+}
+
+export function formatDegradedSources(d: string[]): string | null {
+  return d.length
+    ? `⚠ **Sources asked for but not used — ${d.length}:**\n${d.map((x) => `- ${x}`).join("\n")}\nThe document was written without them. Say so in the document, or ask the user to fix the source.`
+    : null;
+}
+
 /** `GLD-FS-001@1` and `gld-fs-001` are the same citation. */
 export function citationKey(c: string): string {
   return /^gld-/i.test(c) ? c.replace(/@\d+$/, "").toUpperCase() : c.toLowerCase();
@@ -967,19 +1002,27 @@ export function formatCoverageGaps(g: { scopeLines: number; gaps: CoverageGap[] 
 
 export type OmittedDependency = { sentence: string };
 
-// The noun only: "depends on" turns up in every descriptive sentence, "a dependency on X" is a statement of one.
-const DEPENDS = /\bdependenc(?:y|ies)\b/i;
+// The noun with what it relates to: "depends on" turns up in every descriptive sentence, "a dependency on X" is a statement
+// of one. The noun alone is a topic: "Dependency handling for hidden fields." (a list of discovery areas) was reported as an
+// omitted dependency in three runs running.
+const DEPENDS = /\bdependenc(?:y|ies)\s+(?:on|upon|between|with)\b/i;
+/**
+ * Where a labelled field of a requirement ends: at the next labelled field — after a blank line or not, plain or bold, or as
+ * a bullet ("- **Open Questions:** …") — at a rule, or at the end of the block. Ending only at a blank line let a field
+ * written on consecutive lines swallow the next one.
+ */
+const FIELD_END = String.raw`(?=\n\s*(?:[-*]\s+)?(?:\*\*)?[A-Z][A-Za-z ]{2,40}(?:\*\*)?\s*:|\n\s*-{3,}|$)`;
+export const fieldValue = (block: string, label: string): string | null =>
+  new RegExp(String.raw`(?:\*\*)?${label}(?:\*\*)?\s*:(?:\*\*)?([\s\S]*?)${FIELD_END}`, "i").exec(block)?.[1] ?? null;
 const INSTRUCTION = /\b(?:do not|don't|must not|never|only (?:if|where|when|include)|avoid|ensure that|ensure the|should be stated|explain |identify dependencies|preserving)\b/i;
 
 /** Source sentences that state a dependency which appears nowhere in the document. */
 export function omittedDependencies(doc: string, sourceTexts: string[]): OmittedDependency[] {
   // Carried means held by a requirement's Dependencies field: a sentence quoted only in an appendix, or only under
   // Open Questions (graders marked "Not Specified" beside a quoted "This creates dependency on …" as a miss), does not count.
-  // The field, bold or plain, runs to the next labelled field, a rule or the end of the block.
-  const depField = /(?:\*\*)?Dependencies(?:\*\*)?\s*:(?:\*\*)?([\s\S]*?)(?=\n\s*\n\s*(?:\*\*)?[A-Z][A-Za-z ]{2,40}(?:\*\*)?\s*:|\n\s*-{3,}|$)/;
   // A field that opens "Not Specified" carries nothing, whatever it quotes after: a live run wrote "Not Specified.
   // (Recorded as a risk, not as a dependency: … “This creates dependency on …”)".
-  const carried = (b: string) => { const v = (depField.exec(b)?.[1] ?? "").trim(); return /^[*_\s]*not specified/i.test(v) ? "" : v; };
+  const carried = (b: string) => { const v = (fieldValue(b, "Dependencies") ?? "").trim(); return /^[*_\s]*not specified/i.test(v) ? "" : v; };
   const have = bigramSet(requirementBlocks(doc).map(carried).join("\n"));
   const out: OmittedDependency[] = [];
   const seen = new Set<string>();
@@ -1182,11 +1225,46 @@ export function omittedItemSentences(
   /** Filled with the cited items too long to check (over 2,500 characters), so they can be reported as unchecked, not passed. */
   unchecked: string[] = []
 ): OmittedItemSentence[] {
-  const items = [...sources].flatMap(([k, t]) => sourceItems(k, t));
+  const byItem = itemCitations(doc, [...sources].flatMap(([k, t]) => sourceItems(k, t)));
+  const out: OmittedItemSentence[] = [];
+  for (const [it, e] of byItem) {
+    // An area-sized section is not an item: its sentences belong to many requirements.
+    // A Gap, Decision or Risk is cited in Open Questions for what it asks, not carried sentence by sentence: on a
+    // Golden-Repository BRD they were a third of this check's flags ("Decision 5 | Examples: Any overdue invoice …").
+    if (NOT_AN_ITEM.test(it.title) || OPEN_ITEM.test(it.title)) continue;
+    if (it.body.length > 2500) { unchecked.push(`${it.title} (${e.reqs.join(", ")})`); continue; }
+    const have = bigramSet(e.text.join("\n"));
+    for (const s of itemSentences(it.body)) {
+      const bg = bigramList(contentWords(s));
+      if (bg.filter((b) => have.has(b)).length / bg.length < 0.5) out.push({ reqs: e.reqs, item: it.title, sentence: s });
+    }
+  }
+  return out;
+}
+
+/** The sentences of an item that a requirement must carry: not table rows, links, lead-ins, questions, the source's speculation. */
+function itemSentences(body: string): string[] {
+  const out: string[] = [];
+  for (const raw of joinLeadIns(body).split(/(?<=[.!?])\s+|\n+/).map((s) => plain(s).replace(/\s+/g, " ").trim())) {
+    if (raw.startsWith("|") || /\]\(https?:|https?:\/\//.test(raw) || /:\s*$/.test(raw)) continue;
+    // "This suggests <a conclusion>." is the source's speculation; "This suggests … may need to track: A, B, C" carries a list.
+    if (raw.includes("?") || (SOURCE_INFERENCE.test(raw) && !raw.includes(":"))) continue;
+    const s = raw.replace(SOURCE_COMMENTARY, "");
+    if (bigramList(contentWords(s)).length >= 3) out.push(s);
+  }
+  return out;
+}
+
+/**
+ * The source items each requirement cites: the headings its Source Reference names as a whole segment, in a source it
+ * cites. Of headings with the same title, the one whose own path the reference also names ("LDW Configuration" sits in
+ * two areas). Items with no text of their own are skipped.
+ */
+function itemCitations(doc: string, items: SourceItem[], requireBody = true): Map<SourceItem, { reqs: string[]; text: string[] }> {
   const byItem = new Map<SourceItem, { reqs: string[]; text: string[] }>();
   for (const block of requirementBlocks(doc)) {
     const id = DEFINES_ID.exec(block.split("\n")[0]);
-    const ref = /\*\*Source References?:?\*\*:?([\s\S]*?)(?=\n\s*\n\s*\*\*[A-Z]|$)/.exec(block)?.[1];
+    const ref = fieldValue(block, "Source References?") ?? undefined;
     if (!id || !ref) continue;
     const keys = citedKeys(ref);
     const segs = segmentsOf(ref);
@@ -1196,7 +1274,7 @@ export function omittedItemSentences(
     };
     // Each item the reference names as a whole segment; of headings with the same title, the one whose own path
     // the reference also names ("LDW Configuration" sits in two areas). Items with no text of their own are skipped.
-    const named = items.filter((it) => keys.includes(it.key) && it.body.trim() && has(it.title));
+    const named = items.filter((it) => keys.includes(it.key) && (!requireBody || it.body.trim()) && has(it.title));
     const best = new Map<string, { it: SourceItem; score: number }>();
     for (const it of named) {
       const score = it.path.filter(has).length;
@@ -1210,27 +1288,121 @@ export function omittedItemSentences(
       byItem.set(it, e);
     }
   }
-  const out: OmittedItemSentence[] = [];
-  for (const [it, e] of byItem) {
-    // An area-sized section is not an item: its sentences belong to many requirements.
-    // A Gap, Decision or Risk is cited in Open Questions for what it asks, not carried sentence by sentence: on a
-    // Golden-Repository BRD they were a third of this check's flags ("Decision 5 | Examples: Any overdue invoice …").
-    if (NOT_AN_ITEM.test(it.title) || OPEN_ITEM.test(it.title)) continue;
-    if (it.body.length > 2500) { unchecked.push(`${it.title} (${e.reqs.join(", ")})`); continue; }
-    const have = bigramSet(e.text.join("\n"));
-    const sentences = joinLeadIns(it.body).split(/(?<=[.!?])\s+|\n+/).map((s) => plain(s).replace(/\s+/g, " ").trim());
-    for (const raw of sentences) {
-      // Table rows, links and lead-ins that only introduce what follows are not sentences of the item.
-      if (raw.startsWith("|") || /\]\(https?:|https?:\/\//.test(raw) || /:\s*$/.test(raw)) continue;
-      // "This suggests <a conclusion>." is the source's speculation; "This suggests … may need to track: A, B, C" carries a list.
-      if (raw.includes("?") || (SOURCE_INFERENCE.test(raw) && !raw.includes(":"))) continue;
-      const s = raw.replace(SOURCE_COMMENTARY, "");
-      const bg = bigramList(contentWords(s));
-      if (bg.length < 3) continue;
-      if (bg.filter((b) => have.has(b)).length / bg.length < 0.5) out.push({ reqs: e.reqs, item: it.title, sentence: s });
-    }
+  return byItem;
+}
+
+// --- Every source item accounted for -------------------------------------------------------
+
+export type ItemDisposition =
+  | { status: "covered"; item: string; source: string; reqs: string[] }
+  /** No requirement names it; one names the item it sits under. Counted apart, so "covered" cannot hide a dropped child. */
+  | { status: "covered-via-parent"; item: string; source: string; reqs: string[] }
+  | { status: "unresolved"; item: string; source: string; reqs: string[] }
+  | { status: "excluded"; item: string; source: string }
+  | { status: "not-covered"; item: string; source: string };
+export type ItemLedger = { items: ItemDisposition[]; noItems: string[] };
+
+/** The analyst's own sections of a requirements document: their headings are commentary, not requirement items. */
+const ANALYST_SECTION = /\b(?:our understanding|discovery|implications|build inputs|information missing|requirement gaps|business decisions|risks?|ambiguit(?:y|ies)|glossary|definitions?|references?|appendix|open (?:items|questions)|assumptions?)\b/i;
+const EXCLUSION = /\b(?:out of (?:the )?(?:approved )?scope|excluded|not (?:in|part of) (?:the )?(?:approved )?scope)\b/i;
+
+/**
+ * Every requirement item of the client's documents with what became of it: covered (a requirement's Source Reference names
+ * it), unresolved (no requirement names it, but one carries most of a sentence of it: a match to confirm, never a guessed
+ * one), excluded (the document says it is out of scope), or not covered. An item is a heading with no sub-headings and text
+ * of its own, below the area level, outside the analyst's sections and open items. A document with no headings has no
+ * items to account for and is named, so its silence does not read as full coverage.
+ */
+export function itemLedger(doc: string, sources: Map<string, string>): ItemLedger {
+  const all = [...sources].flatMap(([k, t]) => {
+    const its = sourceItems(k, t);
+    const levels = t.split(/\r?\n/).map((l) => /^(#{1,6})\s/.exec(l)?.[1].length ?? 0);
+    const areaLevel = levels.includes(2) ? 2 : 1;
+    // Level of each item, to find leaves: an item is a leaf when the next heading is not below it.
+    const headingLevels = levels.filter(Boolean);
+    return its.map((it, i) => ({ it, level: headingLevels[i], next: headingLevels[i + 1] ?? 0, areaLevel }));
+  });
+  // The whole path is checked: a live source put "# Product & Screen Implications" at the top level inside an area.
+  const leaves = all.filter(({ it, level, next, areaLevel }) =>
+    level > areaLevel && !(next > level) && it.body.trim().length >= 20 &&
+    !NOT_AN_ITEM.test(it.title) && !OPEN_ITEM.test(it.title) && !ANALYST_SECTION.test(it.title) &&
+    !it.path.some((p) => ANALYST_SECTION.test(p) || OPEN_ITEM.test(p))).map((x) => x.it);
+  const noItems = [...sources.keys()].filter((k) => !leaves.some((it) => it.key === k));
+  const cited = itemCitations(doc, leaves);
+  // A requirement that cites an item covers its sub-headings too ("Equipment Class" under "LDW Configuration").
+  const citedParents = new Map<string, string[]>();
+  // Only a parent that is an item itself — below the area, with text of its own — not a container such as the area
+  // or "Requirement Breakdown", which every reference names on its way to the item.
+  const parents = all.filter(({ it, level, areaLevel }) => level > areaLevel && it.body.trim().length >= 20).map((x) => x.it);
+  for (const [it, e] of itemCitations(doc, parents, false)) {
+    const k = `${it.key}\n${[...it.path, it.title].join("\n")}`;
+    citedParents.set(k, [...(citedParents.get(k) ?? []), ...e.reqs]);
   }
-  return out;
+  const viaParent = (it: SourceItem): string[] | null => {
+    for (let n = it.path.length; n > 0; n--) {
+      const r = citedParents.get(`${it.key}\n${it.path.slice(0, n).join("\n")}`);
+      if (r) return r;
+    }
+    return null;
+  };
+  const blocks = requirementBlocks(doc);
+  const blockSets = blocks.map((b) => bigramSet(b));
+  const exclusionLines = doc.split(/\r?\n/).filter((l) => EXCLUSION.test(l)).map((l) => ` ${words(l).join(" ")} `);
+  const items: ItemDisposition[] = leaves.map((it) => {
+    const e = cited.get(it);
+    if (e) return { status: "covered", item: it.title, source: it.key, reqs: e.reqs };
+    const parent = viaParent(it);
+    if (parent) {
+      // Covered through the parent only if the parent's requirements carry what the child says (half or more of each of
+      // its sentences' word pairs); otherwise the child is unresolved — a parent citation must not hide a dropped child.
+      const ids = [...new Set(parent)];
+      const have = bigramSet(blocks.filter((b) => { const m = DEFINES_ID.exec(b.split("\n")[0]); return !!m && ids.includes(`${m[3]}-${m[4]}`); }).join("\n"));
+      const carried = itemSentences(it.body).every((s) => { const bg = bigramList(contentWords(s)); return bg.filter((b) => have.has(b)).length / bg.length >= 0.5; });
+      return { status: carried ? "covered-via-parent" : "unresolved", item: it.title, source: it.key, reqs: ids };
+    }
+    const title = ` ${words(it.title).join(" ")} `;
+    if (exclusionLines.some((l) => l.includes(title))) return { status: "excluded", item: it.title, source: it.key };
+    // A requirement that carries most of one of the item's sentences without naming the item: unresolved, to confirm.
+    // 0.6 of the sentence's word pairs, set on 2026-11-22 against runs 40 and 45 and a one-pass golden-only BRD: it marked
+    // REQ-074 (named for an item, citing the Overview) and REQ-027 (four items merged) unresolved and nothing in run 45.
+    const reqs = new Set<string>();
+    for (const s of itemSentences(it.body)) {
+      const bg = bigramList(contentWords(s));
+      blockSets.forEach((set, i) => {
+        if (bg.filter((b) => set.has(b)).length / bg.length >= 0.6) {
+          const id = DEFINES_ID.exec(blocks[i].split("\n")[0]);
+          if (id) reqs.add(`${id[3]}-${id[4]}`);
+        }
+      });
+    }
+    return reqs.size ? { status: "unresolved", item: it.title, source: it.key, reqs: [...reqs] } : { status: "not-covered", item: it.title, source: it.key };
+  });
+  return { items, noItems };
+}
+
+/** One line for the run's log and notice: every status counted, and the documents not checked item by item. */
+export function summarizeItemLedger(l: ItemLedger): string {
+  const n = (s: ItemDisposition["status"]) => l.items.filter((x) => x.status === s).length;
+  return `source items: ${l.items.length} — ${n("covered")} covered, ${n("covered-via-parent")} covered via parent, ${n("unresolved")} unresolved, ${n("excluded")} excluded, ${n("not-covered")} not covered` +
+    (l.noItems.length ? `; not checked item by item (no headings): ${l.noItems.join(", ")}` : "");
+}
+
+/** What the writer must act on: items no requirement covers, and matches to confirm. Null when there are none. */
+export function formatItemLedger(l: ItemLedger, max = 15): string | null {
+  const by = (s: ItemDisposition["status"]) => l.items.filter((x) => x.status === s);
+  const covered = by("covered"), viaParent = by("covered-via-parent"), unresolved = by("unresolved"), excluded = by("excluded"), missing = by("not-covered");
+  if (!missing.length && !unresolved.length) return null;
+  const lines: string[] = [];
+  lines.push(`${missing.length ? "⚠" : "ℹ"} **Source items: ${l.items.length} in the client's documents — ${covered.length} covered, ${viaParent.length} covered via parent, ${unresolved.length} unresolved, ${excluded.length} excluded, ${missing.length} not covered.**`);
+  if (missing.length)
+    lines.push(`Not covered by any requirement:\n` + missing.slice(0, max).map((x) => `- ${x.item} (${x.source})`).join("\n") + (missing.length > max ? `\n- …and ${missing.length - max} more.` : "") +
+      `\nWrite a requirement for each, citing the item's heading in its Source Reference, or say in the document why it is out of scope.`);
+  if (unresolved.length)
+    lines.push(`Unresolved — a requirement carries its text but does not cite the item; confirm and cite it:\n` +
+      unresolved.slice(0, max).map((x) => `- ${x.item} (${x.source}) — ${"reqs" in x ? x.reqs.join(", ") : ""}`).join("\n") + (unresolved.length > max ? `\n- …and ${unresolved.length - max} more.` : ""));
+  if (l.noItems.length)
+    lines.push(`ℹ Not checked item by item (no headings to treat as items): ${l.noItems.join(", ")}.`);
+  return lines.join("\n");
 }
 
 /** Cited items too long to check sentence by sentence: said, so that silence does not read as "nothing left out". */

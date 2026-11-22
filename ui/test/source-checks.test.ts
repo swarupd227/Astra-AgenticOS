@@ -13,6 +13,7 @@ import {
   citationIssues, citationKey, citesTaskPrompt, constructsProhibitedBy, extractDefinitions, formatCitationReport,
   formatInventedRoles, inventedRoles, noCheckableCitations, prohibitedUsed, templateDeviations, termConflicts,
   unaddressedConflicts, formatOmittedDependencies, omittedItemSentences, formatOmittedItemSentences, formatUncheckedItems, ownDocuments, isClientDocument,
+  fieldValue, itemLedger, formatItemLedger, summarizeItemLedger, degradedSources, formatDegradedSources,
 } from "../src/source-checks.js";
 
 let failures = 0;
@@ -638,6 +639,97 @@ eq("a mention nowhere near a prohibition does not count",
   const golden = [{ name: 'task prompt' }, { name: 'GLD-FS-001 (Operations Flow)' }, { name: 'GLD-FS-002 (Detailed Requirements)' }, { name: 'GLD-STD-003 (Naming)' }];
   eq('without inputs, the GLD-FS specs are the documents; a standard is not', names(ownDocuments(golden)), ['task prompt', 'GLD-FS-001 (Operations Flow)', 'GLD-FS-002 (Detailed Requirements)']);
   eq('isClientDocument takes a citation key too', [isClientDocument('GLD-FS-002'), isClientDocument('inputs/a.md'), isClientDocument('GLD-REF-001')], [true, true, false]);
+}
+
+{
+  // A field ends at the next labelled field however it is laid out: a blank line, a single newline, or a bullet.
+  const blank = '**Dependencies:** Not Specified.\n\n**Open Questions:** Risk 2 — “x”';
+  const single = '**Dependencies:** Not Specified.\n**Open Questions:** Risk 2 — “x”';
+  const bullet = '- **Dependencies:** Not Specified.\n- **Open Questions:** Risk 2 — “x”';
+  eq('field ends before the next field after a blank line', fieldValue(blank, 'Dependencies')?.trim(), 'Not Specified.');
+  eq('field ends before the next field on the next line', fieldValue(single, 'Dependencies')?.trim(), 'Not Specified.');
+  eq('field ends before the next bullet field', fieldValue(bullet, 'Dependencies')?.trim(), 'Not Specified.');
+  const hedged = ['This creates dependency on other sprint capabilities and related billing work.'];
+  for (const [name, layout] of [['single newline', '\n'], ['bullet', '\n- ']] as const) {
+    const d = ['#### REQ-021 — Charge Type', '', '**Requirement Statement:** Charges may be billed.', '',
+      `**Dependencies:** Not Specified.${layout}**Open Questions:** Risk 2 — “This creates dependency on other sprint capabilities and related billing work.”`].join('\n');
+    eq(`a dependency quoted only in Open Questions is still omitted (${name} layout)`, omittedDependencies(d, hedged).length, 1);
+  }
+  // Deliberately the noun only: verb forms describe a process in nearly every source sentence, so they are left to the
+  // writer brief (which names "depends on", "requires … first", "cannot … until") and are not reported here.
+  eq('verb forms are not reported by this check (by design)', omittedDependencies('#### REQ-001 — a', [
+    'Invoice generation depends on the billing cycle being configured for each agreement.',
+    'Delivery requires the agreement to be signed first by the customer.',
+    'Pickup cannot be scheduled until the rental has been called off.',
+  ]), []);
+  eq('the noun with a relation is reported', omittedDependencies('#### REQ-001 — a', ['This requirement has a strong dependency on Insurance and LDW functionality.']).length, 1);
+  // The noun alone names a topic, not a dependency.
+  eq('"Dependency handling for hidden fields." is not a stated dependency',
+    omittedDependencies('#### REQ-001 — a', ['The most critical discovery areas are: Dependency handling for hidden fields across every screen.']), []);
+}
+
+{
+  // Every source item accounted for.
+  const DR = [
+    '# Credit', '## Credit Limit Allocation', '### Requirement Breakdown',
+    '#### Credit Profile Management', 'The system should maintain customer credit limits and credit status.',
+    '#### Credit Validation', 'Credit checks should occur during quote and reservation creation.',
+    '#### LDW Configuration', 'LDW rates may vary by category and class.', '##### Equipment Class', 'More granular pricing control for each equipment class.',
+    '#### Collections Control', 'Past due invoices should impact future rental transactions.',
+    '#### Export Feeds', 'Exports should be produced nightly for the finance warehouse.',
+    '### Our Understanding', '#### Analyst Reading', 'The business wants to protect itself from financial risk exposure.',
+    '### Information Missing / Requirement Gaps', '#### Gap 1: Ownership', 'Who owns the credit limit and its approvals?',
+  ].join('\n');
+  const src = new Map([[citationKey('inputs/dr.md'), DR], [citationKey('inputs/flow.md'), 'Phase 1. Quotes are created.\nPhase 2. Reservations follow.']]);
+  const req = (id: string, item: string, text: string) =>
+    [`#### REQ-${id} — ${item}`, '', `**Requirement Statement:** ${text}`, '', `**Source Reference:** \`inputs/dr.md\` — Credit Limit Allocation › Requirement Breakdown › ${item}: “${text}”`, '', '---'].join('\n');
+  const doc = [
+    req('001', 'Credit Profile Management', 'The system should maintain customer credit limits and credit status.'),
+    req('002', 'LDW Configuration', 'LDW rates may vary by category and class. Class gives more granular pricing control for each equipment class.'),
+    // Carries Collections Control's sentence but cites another heading: unresolved.
+    ['#### REQ-003 — Overdue invoices', '', '**Requirement Statement:** Past due invoices should impact future rental transactions.', '',
+     '**Source Reference:** `inputs/dr.md` — Credit Limit Allocation › Requirement Overview: “Past due invoices should impact future rental transactions.”'].join('\n'),
+    '## Out of scope', '', 'Export Feeds is out of scope for this release.',
+  ].join('\n\n');
+  const l = itemLedger(doc, src);
+  const status = Object.fromEntries(l.items.map((x) => [x.item, x.status]));
+  eq('each requirement item gets a disposition; analyst sections and Gaps are not items', status, {
+    'Credit Profile Management': 'covered', 'Credit Validation': 'not-covered', 'Equipment Class': 'covered-via-parent',
+    'Collections Control': 'unresolved', 'Export Feeds': 'excluded',
+  });
+  eq('a sub-heading covered only through its cited parent is counted apart', l.items.find((x) => x.item === 'Equipment Class'), { status: 'covered-via-parent', item: 'Equipment Class', source: 'inputs/dr.md', reqs: ['REQ-002'] });
+  // The parent's requirement drops the child's sentence: the child is unresolved, not covered.
+  const dropped = itemLedger(doc.replaceAll(' Class gives more granular pricing control for each equipment class.', ''), src);
+  eq('a child the parent requirement does not carry is unresolved', dropped.items.find((x) => x.item === 'Equipment Class')?.status, 'unresolved');
+  eq('an unresolved item names the requirement that carries its text', l.items.find((x) => x.item === 'Collections Control'), { status: 'unresolved', item: 'Collections Control', source: 'inputs/dr.md', reqs: ['REQ-003'] });
+  eq('a document with no headings is named, not counted as covered', l.noItems, ['inputs/flow.md']);
+  const f = formatItemLedger(l) ?? '';
+  eq('the report counts every status', f.includes('5 in the client') && f.includes('1 covered, 1 covered via parent, 1 unresolved, 1 excluded, 1 not covered'), true);
+  eq('the report lists what is not covered', f.includes('- Credit Validation (inputs/dr.md)'), true);
+  eq('the summary line names the unchecked document', summarizeItemLedger(l).includes('no headings): inputs/flow.md'), true);
+  eq('nothing to act on, no finding', formatItemLedger({ items: [{ status: 'covered', item: 'A', source: 's', reqs: ['REQ-001'] }], noItems: [] }), null);
+}
+
+{
+  // Sources asked for but not used.
+  const d = degradedSources({
+    inputs: [{ path: 'inputs/a.md', text: 'ok' }, { path: 'inputs/b.md', text: null }, { path: 'inputs/c.md', text: '  ' }],
+    selected: [
+      { id: 'GLD-FS-001', title: 'Flow', status: 'published', content: 'text' },
+      { id: 'GLD-FS-002', title: 'Details', status: 'published', content: null },
+      { id: 'GLD-STD-003', title: 'Naming', status: 'archived', content: 'x' },
+    ],
+    selectedIds: ['GLD-STD-003', 'GLD-REF-009'],
+    task: 'Use GLD-FS-001 and GLD-FS-007 as the sources.',
+  });
+  eq('every source asked for but unusable is named, with why', d, [
+    'inputs/b.md: could not be read', 'inputs/c.md: is empty',
+    'GLD-FS-002 (Details): selected, but its content could not be read',
+    'GLD-STD-003 (Naming): selected, but it is archived, not published',
+    'GLD-REF-009: selected for this project, but no such item is available',
+    'GLD-FS-007: named in the task, but not selected for this project',
+  ]);
+  eq('nothing degraded, no finding', formatDegradedSources(degradedSources({ inputs: [{ path: 'inputs/a.md', text: 'ok' }], selected: [], selectedIds: [], task: '' })), null);
 }
 
 console.log(`source checks — ${failures} failure(s)`);
