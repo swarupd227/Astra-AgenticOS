@@ -24,7 +24,7 @@ import {
   citationIssues, citationKey, citesTaskPrompt, constructsProhibitedBy, formatCitationReport, formatConflicts, formatDeviation,
   coverageGaps, danglingReferences, duplicateRequirements, formatDuplicateRequirements, fieldRowsAsLabels, dependencyIssues, formatCoverageGaps, formatDanglingReferences, formatOmittedDependencies, formatOmittedItemSentences, formatUncheckedItems, formatQuoteIssues, formatUngroundedFields, omittedDependencies, omittedItemSentences, quoteIssues, ungroundedFields,
    formatDependencyIssues, formatInventedRoles, formatProhibited, formatStrengthIssues, inventedRoles,
-  formatDegradedSources, formatItemLedger, formatUncheckedDocuments, isClientDocument, itemLedger, degradedSources, noCheckableCitations, ownDocuments, prohibitedUsed, summarizeItemLedger, requirementBlocks, strengthIssues, templateDeviations, termConflicts, unaddressedConflicts,
+  flattenedSequences, formatFlattenedSequences, formatDegradedSources, formatItemLedger, formatUncheckedDocuments, isClientDocument, itemLedger, degradedSources, noCheckableCitations, ownDocuments, prohibitedUsed, summarizeItemLedger, requirementBlocks, strengthIssues, templateDeviations, termConflicts, unaddressedConflicts,
   type TermConflict,
 } from "./source-checks.js";
 import { REVIEW_SCHEMA, REVIEW_SYSTEM, REVIEW_TOOL, ReviewMemory, batchPrompt, coerceReview, formatReview, reviewDocument, sourcesBlock, type AskReviewer, type ReviewReport, type SourceText } from "./source-review.js";
@@ -1031,6 +1031,9 @@ function documentChecks(
     const longItems: string[] = [];
     const itemOmissions = formatOmittedItemSentences(omittedItemSentences(doc, cited, longItems));
     if (itemOmissions) notes.push(itemOmissions);
+    // Steps the source draws as a sequence, written as a plain list or out of order.
+    const sequences = formatFlattenedSequences(flattenedSequences(doc, cited));
+    if (sequences) notes.push(sequences);
     // Only on the whole document: an area writer told "not checked" has nothing to fix and would spend a round on it.
     const uncheckedItems = whole ? formatUncheckedItems(longItems) : null;
     if (uncheckedItems) notes.push(uncheckedItems);

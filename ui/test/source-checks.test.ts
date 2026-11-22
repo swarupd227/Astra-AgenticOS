@@ -13,7 +13,7 @@ import {
   citationIssues, citationKey, citesTaskPrompt, constructsProhibitedBy, extractDefinitions, formatCitationReport,
   formatInventedRoles, inventedRoles, noCheckableCitations, prohibitedUsed, templateDeviations, termConflicts,
   unaddressedConflicts, formatOmittedDependencies, omittedItemSentences, formatOmittedItemSentences, formatUncheckedItems, ownDocuments, isClientDocument,
-  fieldValue, itemLedger, formatItemLedger, formatUncheckedDocuments, summarizeItemLedger, degradedSources, formatDegradedSources,
+  fieldValue, flattenedSequences, formatFlattenedSequences, sourceSequences, itemLedger, formatItemLedger, formatUncheckedDocuments, summarizeItemLedger, degradedSources, formatDegradedSources,
 } from "../src/source-checks.js";
 
 let failures = 0;
@@ -746,6 +746,26 @@ eq("a mention nowhere near a prohibition does not count",
     'GLD-FS-007: named in the task, but not selected for this project',
   ]);
   eq('nothing degraded, no finding', formatDegradedSources(degradedSources({ inputs: [{ path: 'inputs/a.md', text: 'ok' }], selected: [], selectedIds: [], task: '' })), null);
+}
+
+{
+  // Sequences the source draws with arrows stay sequences.
+  eq('a vertical arrow chain of three or more steps is a sequence; a two-step rule is not', sourceSequences(
+    ['Potential statuses:', 'Available', '↓', 'Reserved', '↓', 'On Rent', '', 'Credit Status = Hold', '↓', 'Agreement Blocked', 'Quote → Reservation → Agreement'].join('\n')),
+    [['Available', 'Reserved', 'On Rent'], ['Quote', 'Reservation', 'Agreement']]);
+  const SRC = ['## Delivery', '### Requirement Breakdown', '#### Status Management', 'Potential statuses may include:', 'Available', '↓', 'Reserved', '↓', 'Delivered', '↓', 'On Rent',
+    '#### Section Ordering', 'Example:', 'Customer', '↓', 'Equipment', '↓', 'Pricing', 'Could become', 'Customer', '↓', 'Pricing', '↓', 'Equipment'].join('\n');
+  const src = new Map([[citationKey('inputs/d.md'), SRC]]);
+  const r = (item: string, statement: string) => [`#### REQ-077 — ${item}`, '', `**Requirement Statement:** ${statement}`, '',
+    `**Source Reference:** \`inputs/d.md\` — Delivery › Requirement Breakdown › ${item}: “Available ↓ Reserved ↓ Delivered ↓ On Rent”`].join('\n');
+  eq('steps written as a comma list are flagged', flattenedSequences(r('Status Management', 'Potential statuses may include: Available, Reserved, Delivered, On Rent.'), src).map((x) => x.problem), ['list']);
+  eq('steps out of order are flagged', flattenedSequences(r('Status Management', 'Statuses may include: Reserved, Available, Delivered, On Rent.'), src).map((x) => x.problem), ['order']);
+  eq('steps kept as a sequence pass', flattenedSequences(r('Status Management', 'Potential statuses may include: Available → Reserved → Delivered → On Rent.'), src), []);
+  eq('the Source Reference quoting the chain does not count as the requirement keeping it',
+    flattenedSequences(r('Status Management', 'Statuses are updated after delivery.'), src), []);
+  eq('alternative example orders of the same steps are not one order to keep',
+    flattenedSequences(r('Section Ordering', 'Sections may be reordered, for example Customer, Pricing, Equipment or Customer, Equipment, Pricing.'), src), []);
+  eq('the report gives the source order', (formatFlattenedSequences(flattenedSequences(r('Status Management', 'May include: Available, Reserved, Delivered, On Rent.'), src)) ?? '').includes('“Available → Reserved → Delivered → On Rent”'), true);
 }
 
 console.log(`source checks — ${failures} failure(s)`);

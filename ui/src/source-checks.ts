@@ -1291,6 +1291,80 @@ function itemCitations(doc: string, items: SourceItem[], requireBody = true): Ma
   return byItem;
 }
 
+// --- Sequences kept as sequences -------------------------------------------------------------
+
+export type FlattenedSequence = { req: string; item: string; sequence: string[]; problem: "order" | "list" };
+
+const ARROW_LINE = /^\s*(?:↓|⬇|→|->|⟶|=>)\s*$/;
+const SEQUENCE_MARK = /→|->|↓|⟶|=>|>|\bthen\b|\bfollowed by\b|\bbecomes\b|\bmoves to\b/i;
+
+/**
+ * The chains a source draws with arrows, one step per line and an arrow line between ("Available / ↓ / Reserved / ↓ /
+ * Scheduled for Delivery …"), or on one line ("Quote → Reservation → Agreement"). Only chains of three or more steps: a
+ * two-step "condition ↓ effect" pair is a rule, not a sequence.
+ */
+export function sourceSequences(text: string): string[][] {
+  const out: string[][] = [];
+  const lines = text.split(/\r?\n/).map((l) => plain(l).trim()).filter(Boolean);
+  let chain: string[] = [];
+  let lastWasArrow = false;
+  const flush = () => { if (chain.length >= 3) out.push(chain); chain = []; };
+  for (const l of lines) {
+    if (ARROW_LINE.test(l)) { lastWasArrow = chain.length > 0; continue; }
+    const inline = l.split(/\s*(?:→|->|⟶|=>)\s*/).map((x) => x.trim()).filter(Boolean);
+    if (inline.length >= 3 && inline.every((x) => x.length <= 60)) { flush(); out.push(inline); lastWasArrow = false; continue; }
+    if (lastWasArrow && l.length <= 60) chain.push(l);
+    else { flush(); chain = l.length <= 60 ? [l] : []; }
+    lastWasArrow = false;
+  }
+  flush();
+  return out;
+}
+
+/**
+ * A source sequence that a requirement citing its item lists out of order, or as a plain list with nothing marking the
+ * sequence between the steps. Twice in a row graders marked "Available ↓ Reserved ↓ … ↓ On Rent" written as "Available,
+ * Reserved, …, On Rent" (runs 45 and 46): the order is part of what the source says. Only requirements citing the item
+ * that holds the chain are compared, so the same words in another list ("credit checks during Quote, Reservation,
+ * Agreement") are not taken for it.
+ */
+export function flattenedSequences(doc: string, sources: Map<string, string>): FlattenedSequence[] {
+  const items = [...sources].flatMap(([k, t]) => sourceItems(k, t));
+  const out: FlattenedSequence[] = [];
+  for (const [it, e] of itemCitations(doc, items)) {
+    const seqs = sourceSequences(it.body);
+    // Two chains of the same steps in different orders are examples of a choice ("Customer → Equipment → Pricing" and
+    // "Customer → Pricing → Equipment" under Section Ordering), not one order to keep.
+    const setKey = (s: string[]) => s.map((x) => x.toLowerCase()).sort().join("\n");
+    const alternatives = new Set(seqs.map(setKey).filter((k, i, all) => all.indexOf(k) !== i));
+    for (const seq of seqs.filter((s) => !alternatives.has(setKey(s)))) {
+      e.text.forEach((block, bi) => {
+        // The requirement's own words: the Source Reference quotes the source and would match itself.
+        const own = block.replace(/(?:\*\*)?Source References?(?:\*\*)?\s*:[\s\S]*?(?=\n\s*(?:[-*]\s+)?(?:\*\*)?[A-Z][A-Za-z ]{2,40}(?:\*\*)?\s*:|\n\s*-{3,}|$)/i, "");
+        const low = own.toLowerCase();
+        const found = seq.map((s, i) => ({ i, at: low.indexOf(s.toLowerCase()) })).filter((x) => x.at >= 0);
+        if (found.length < 3) return;
+        const byPos = [...found].sort((a, b) => a.at - b.at);
+        const req = e.reqs[bi];
+        if (byPos.some((x, k) => k > 0 && x.i < byPos[k - 1].i)) { out.push({ req, item: it.title, sequence: seq, problem: "order" }); return; }
+        const gaps = byPos.slice(1).map((x, k) => low.slice(byPos[k].at + seq[byPos[k].i].length, x.at));
+        if (!gaps.some((g) => SEQUENCE_MARK.test(g))) out.push({ req, item: it.title, sequence: seq, problem: "list" });
+      });
+    }
+  }
+  return out;
+}
+
+export function formatFlattenedSequences(f: FlattenedSequence[], max = 10): string | null {
+  if (!f.length) return null;
+  return (
+    `⚠ **Source sequences not kept as sequences — ${f.length}:**\n` +
+    f.slice(0, max).map((x) => `- ${x.req} — ${x.item}: ${x.problem === "order" ? "steps out of the source's order" : "steps listed without their order"}; the source reads “${x.sequence.join(" → ")}”`).join("\n") +
+    (f.length > max ? `\n- …and ${f.length - max} more.` : "") +
+    `\nWrite the steps in the source's order as a sequence (A → B → C), keeping its hedge ("may include", "potential").`
+  );
+}
+
 // --- Every source item accounted for -------------------------------------------------------
 
 export type ItemDisposition =
