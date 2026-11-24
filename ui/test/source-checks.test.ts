@@ -632,6 +632,14 @@ eq("a mention nowhere near a prohibition does not count",
 }
 
 {
+  // A document's own area-level section (a form's "## Constraints" field) is not an item: each requirement carries the
+  // one constraint it states, not every sentence of the field.
+  const form = new Map([[citationKey('inputs/form.md'), ['# Project form', '## Constraints', 'First-party data only.', 'No credit decisions are made by the system.', 'Human in the loop for every outreach.'].join('\n')]]);
+  const req = ['#### REQ-001 — Data boundary', '', '**Requirement Statement:** First-party data only.', '', '**Source Reference:** `inputs/form.md` — Constraints: “First-party data only.”'].join('\n');
+  eq('an area-level section is not an item whose every sentence a requirement must carry', omittedItemSentences(req, form), []);
+}
+
+{
   // Which documents requirements come from: uploaded inputs when there are any, Golden Repository specs only otherwise.
   const names = (xs: { name: string }[]) => xs.map((x) => x.name);
   const mixed = [{ name: 'task prompt' }, { name: 'inputs/Detailed-Requirements-1.md' }, { name: 'GLD-FS-002 (Detailed Requirements)' }, { name: 'GLD-REF-001 (ERP)' }];

@@ -1252,19 +1252,21 @@ const OPEN_ITEM = /^\s*(?:gap|decision|risk|assumption|open (?:item|question))\s
 const segmentsOf = (s: string) =>
   s.replace(/[*_`]/g, "").split(/[›>—–:“”"|;/()[\]]+|\s-\s/).map((x) => words(x).join(" ")).filter(Boolean);
 
-type SourceItem = { key: string; title: string; path: string[]; body: string };
+type SourceItem = { key: string; title: string; path: string[]; body: string; level?: number; areaLevel?: number };
 
 /** Every heading of a source with its own text up to the next heading, and the headings above it. */
 function sourceItems(key: string, text: string): SourceItem[] {
   const out: SourceItem[] = [];
   const stack: { level: number; title: string }[] = [];
   let cur: SourceItem | null = null;
+  // The document's area level: its "##" headings, or its "#" headings when it has no "##" (as areaHeadings does).
+  const areaLevel = /^##\s/m.test(text) ? 2 : 1;
   for (const line of text.split(/\r?\n/)) {
     const h = /^(#{1,6})\s+(.*)$/.exec(line);
     if (h) {
       const level = h[1].length, title = h[2].replace(/[*_`#]/g, "").trim();
       while (stack.length && stack[stack.length - 1].level >= level) stack.pop();
-      cur = { key, title, path: stack.map((s) => s.title), body: "" };
+      cur = { key, title, path: stack.map((s) => s.title), body: "", level, areaLevel };
       out.push(cur);
       stack.push({ level, title });
     } else if (cur) cur.body += line + "\n";
@@ -1292,6 +1294,9 @@ export function omittedItemSentences(
     // A Gap, Decision or Risk is cited in Open Questions for what it asks, not carried sentence by sentence: on a
     // Golden-Repository BRD they were a third of this check's flags ("Decision 5 | Examples: Any overdue invoice …").
     if (NOT_AN_ITEM.test(it.title) || OPEN_ITEM.test(it.title)) continue;
+    // A document's own sections at area level are not items either: a project form's "## Constraints" field holds many
+    // constraints, and each requirement carries the one it states, not the whole field (59 false findings in one run).
+    if ((it.level ?? 99) <= (it.areaLevel ?? 0)) continue;
     if (it.body.length > 2500) { unchecked.push(`${it.title} (${e.reqs.join(", ")})`); continue; }
     const have = bigramSet(e.text.join("\n"));
     for (const s of itemSentences(it.body)) {
