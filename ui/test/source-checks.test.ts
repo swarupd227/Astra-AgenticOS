@@ -632,6 +632,13 @@ eq("a mention nowhere near a prohibition does not count",
 }
 
 {
+  // A role word that starts a record or screen name is not a role.
+  eq('"Staff Notes" in a list of data domains is not an invented role',
+    inventedRoles('### 8.1.2 Core Data Fields: Loan, Card, Digital, Catalog, Suppression and Staff Notes', ['Data domains: loan, card, catalog.']), []);
+  eq('an invented role is still found', inventedRoles('The Collections Supervisor approves each waiver.', ['Waivers need approval.']), ['Collections Supervisor']);
+}
+
+{
   // A document's own area-level section (a form's "## Constraints" field) is not an item: each requirement carries the
   // one constraint it states, not every sentence of the field.
   const form = new Map([[citationKey('inputs/form.md'), ['# Project form', '## Constraints', 'First-party data only.', 'No credit decisions are made by the system.', 'Human in the loop for every outreach.'].join('\n')]]);

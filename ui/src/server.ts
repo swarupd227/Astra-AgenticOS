@@ -1781,8 +1781,10 @@ async function fixAreasFromReview(
 const SOURCE_REVIEW = (process.env.SOURCE_REVIEW ?? "on") !== "off";
 const REVIEW_MODEL = process.env.REVIEW_MODEL || "";
 const REVIEW_BATCH = Number(process.env.REVIEW_BATCH ?? 8);
-// Batches read side by side after the first, which goes alone so the sources are in the prompt cache.
-const REVIEW_CONCURRENCY = Number(process.env.REVIEW_CONCURRENCY ?? 5);
+// Batches read side by side after the first, which goes alone so the sources are in the prompt cache. 12, not 5: once the
+// reviewer read every requirement-like item (about 130 on a 216K-character BRD, 17 batches) five at a time took four
+// waves, about 3 minutes per check; drafting already runs 16 calls side by side without rate limiting.
+const REVIEW_CONCURRENCY = Number(process.env.REVIEW_CONCURRENCY ?? 12);
 
 /** The section of a document built with write_section that holds a requirement. */
 function sectionOfIn(doc: SectionedDoc | undefined): (req: string) => string {

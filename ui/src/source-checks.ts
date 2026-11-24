@@ -612,9 +612,10 @@ const ROLE_WORD =
   "Team|Teams|Manager|Managers|Leadership|Owner|Owners|User|Users|Administrator|Administrators|Representative|Representatives|" +
   "Officer|Lead|Director|Analyst|Approver|Approvers|Staff|Department|Executive|Executives|Dispatcher|Controller|Clerk|" +
   "Technician|Supervisor|Coordinator|Specialist|Planner|Operator";
-// The lookahead drops a role word that is really the start of another noun ("User Experience").
+// The lookahead drops a role word that is really the start of another noun ("User Experience"), including a record or
+// screen about that role ("Staff Notes" in a list of data domains was reported as the invented role "Suppression and Staff").
 const ROLE = new RegExp(
-  `\\b((?:[A-Z][A-Za-z]+(?:\\s*[/&]\\s*|\\s+and\\s+|\\s+)){1,3}(?:${ROLE_WORD}))\\b(?!\\s+(?:Experience|Interface|Interfaces|Stor|Account|Group|Profile|Journey|Guide|Role|Roles|Type|Types))`,
+  `\\b((?:[A-Z][A-Za-z]+(?:\\s*[/&]\\s*|\\s+and\\s+|\\s+)){1,3}(?:${ROLE_WORD}))\\b(?!\\s+(?:Experience|Interface|Interfaces|Stor|Account|Group|Profile|Journey|Guide|Role|Roles|Type|Types|Notes?|Records?|Data|Fields?|Details|Directory|Portal|Views?|Dashboards?|Reports?|Screens?))`,
   "g"
 );
 const LEADING_NOISE = new Set(["the", "a", "an", "this", "that", "each", "every", "all", "any", "our", "their", "its", "both", "for", "as", "by", "with", "when", "if", "where", "who", "and", "or", "to", "of", "in", "on", "per"]);
