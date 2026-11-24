@@ -137,6 +137,9 @@ const verdictFor = (b: { req: string }, issue = false): ReviewVerdict =>
     eq("it names the requirement, its section, the problem, the source and the fix", [/REQ-001\*\* \(section “4\. Requirements”\)/.test(text), /shall for should/.test(text), /Source: “The system should verify/.test(text), /Fix: The system should verify equipment availability\./.test(text)], [true, true, true, true]);
     eq("it tells the writer to patch, not rewrite", /patch_section/.test(text) && /do not rewrite whole sections/.test(text), true);
     eq("nothing is said when there is nothing", formatReview({ read: 3, total: 3, findings: [], stillOpen: [], droppedClaims: 0, missing: [] }), null);
+    // A round that re-read nothing says why, rather than "checked 0 of 26".
+    const unchanged = formatReview({ read: 0, total: 26, findings: [], stillOpen: ["NFR-04"], droppedClaims: 0, missing: [] }) ?? "";
+    eq("an unchanged round says the rest were read before", unchanged.includes("read 0 new or changed requirements of 26 (the other 26 were read in an earlier round and have not changed)"), true);
   }
   eq("the batch prompt carries every requirement by its ID", /Requirement 2: REQ-002/.test(batchPrompt([{ req: "REQ-001", block: "a" }, { req: "REQ-002", block: "b" }])), true);
 

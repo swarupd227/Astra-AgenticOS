@@ -1566,6 +1566,13 @@ const VLANGS = { cs: "csharp", json: "json", xml: "xml", ts: "typescript", js: "
 async function openViewer(p) {
   $("#viewer-title").textContent = p;
   $("#viewer-download").href = "/api/artifacts/download?path=" + encodeURIComponent(p);
+  // A Markdown deliverable (a BRD, an ADR) can also be taken as Word, or saved as PDF from a print-ready page.
+  const isMd = /\.(md|markdown)$/i.test(p);
+  $("#viewer-download").textContent = isMd ? "Markdown" : "Download";
+  for (const [id, fmt] of [["#viewer-download-docx", "docx"], ["#viewer-download-pdf", "pdf"]]) {
+    $(id).hidden = !isMd;
+    $(id).href = "/api/artifacts/download?path=" + encodeURIComponent(p) + "&format=" + fmt;
+  }
   const body = $("#viewer-body");
   body.innerHTML = `<div class="thinking"><span class="spin"></span> Loading…</div>`;
   $("#viewer-backdrop").hidden = false;

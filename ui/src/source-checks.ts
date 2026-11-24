@@ -212,6 +212,11 @@ function citationUnits(md: string): Unit[] {
  */
 const ABSENCE_OR_INFERENCE = /\b(?:(?:is|are|was|were)\s+not\s+(?:specified|stated|named|defined|provided|given|described|identified|documented)\b|not\s+specified\s+in\s+(?:the\s+)?source|no\s+source\s+(?:states|names|defines|gives|describes)|the\s+sources?\s+(?:do|does)\s+not\b|(?:is|are)\s+inferred\b|inferred\s+from\b|this\s+document\s+(?:reads|infers|interprets)\b|(?:the\s+)?document's\s+(?:own\s+)?(?:reading|interpretation|inference))/i;
 
+// Tested after a trailing "(" is cut: "The system shall X (`inputs/a.md`)" leaves "…X (", a claim like any other.
+const LEAD_IN = /(?:\b(?:of|from|in|by|per|to|see|at|under)|[:,])\s*$/i;
+const PROVENANCE = /\b(?:are|is|were|was)\s+(?:drawn|taken|carried|derived|sourced)\s+from\b|\bcomes?\s+from\b|\bas entered in\b/i;
+const OWN_QUESTION = /^\s*(?:[-*+]\s+|\d+[.)]\s+|\|\s*)?(?:\*\*)?(?:OQ|Q|GAP|ISSUE|SC)-?\d+\b|^\s*(?:[-*+]\s+|\d+[.)]\s+|\|\s*)?(?:\*\*)?Whether\b/i;
+
 export function citationIssues(
   artifact: string, sources: Map<string, string>, others: Map<string, string> = new Map()
 ): CitationReport {
@@ -229,17 +234,33 @@ export function citationIssues(
     // nothing to the source; checking its wording against the source can only fail. Run 25's writer spent 24 patches
     // on "This role name is not specified in the source documents. It is inferred from the activities described in …".
     if (ABSENCE_OR_INFERENCE.test(u.claim)) continue;
+    // A sentence that says where content comes from, its citation its object ("Technical requirements come from the
+    // Constraints field of `inputs/…`:"), or a lead-in to the list or table that follows, attributes nothing itself:
+    // with its citations cut away it ends "…field of", "…designs," or "( , Glossary):", and on a Kinective BRD such lines
+    // were most of 94 "not found" citations. The items under it are units of their own and are checked.
+    // A trailing "Source:" label is how a claim introduces its own citation ("… billing. Source: inputs/a.md"), not a lead-in.
+    const tail = u.claim.replace(/[\s*_`(]+$/, "").replace(/\b(?:sources?|source references?|ref(?:erence)?)\s*:\s*$/i, "").replace(/[\s*_`(]+$/, "");
+    if (LEAD_IN.test(tail.replace(/\(\s*[,;\s]*\)\s*:?$/, ":")) || /:\s*[*_]*\s*$/.test(u.text.split("\n").pop() ?? "")) continue;
+    // The same for a sentence about provenance ("Data requirements are drawn from the Golden Repository data items"),
+    // and for an open question or gap: the document's own question, not wording it attributes to the source.
+    if (PROVENANCE.test(u.claim) || OWN_QUESTION.test(u.text)) continue;
     // A statement that is itself a recorded conflict quotes two sources side by side; its quotes are checked verbatim.
     if (/^\s*source conflict identified\b/i.test(u.claim)) continue;
     const claimBigrams = bigramList(contentWords(u.claim));
     if (claimBigrams.length < MIN_BIGRAMS) continue;
 
+    // A claim with several citations is supported when one of them holds its wording; the others are context
+    // ("TECH-02 … (form, Constraints; GLD-REF-135, BR-19; GLD-REF-141)"). Reported against each of the others, one
+    // well-cited row became three "not found" findings.
+    const score = (c: string) => claimBigrams.filter((b) => setFor(c, sources).has(b)).length / claimBigrams.length;
+    const known = cites.filter((c) => sources.has(c));
+    const supported = known.length > 1 && known.some((c) => score(c) >= WEAK_BELOW);
     for (const c of cites) {
       if (!sources.has(c)) { report.unverifiable++; continue; }
       report.checked++;
-      const have = setFor(c, sources);
-      const score = claimBigrams.filter((b) => have.has(b)).length / claimBigrams.length;
-      if (score >= WEAK_BELOW) continue;
+      const s = score(c);
+      if (s >= WEAK_BELOW || supported) continue;
+      const scoreOf = s;
 
       let foundIn: string | undefined;
       for (const [label] of others) {
@@ -247,8 +268,8 @@ export function citationIssues(
         if (s >= 0.6) { foundIn = label; break; }
       }
       report.issues.push({
-        kind: score < NOT_FOUND_BELOW ? "not-found" : "weak",
-        citation: c, claim: u.claim.replace(/\s+/g, " ").slice(0, 140), score: +score.toFixed(2), ...(foundIn ? { foundIn } : {}),
+        kind: scoreOf < NOT_FOUND_BELOW ? "not-found" : "weak",
+        citation: c, claim: u.claim.replace(/\s+/g, " ").slice(0, 140), score: +scoreOf.toFixed(2), ...(foundIn ? { foundIn } : {}),
       });
     }
   }
@@ -498,16 +519,22 @@ export function danglingReferences(doc: string, sourceTexts: string[] = []): Dan
     }
   }
 
+  // An ID inside a longer one is not an ID of its own: "GLD-REF-135" was read as "REF-135", never defined. And a
+  // one-letter prefix is still the source's own ID: "Crossroads R-11" from a risk register was reported as dangling.
+  const ID = /(?<![A-Za-z0-9]-)\b([A-Z]{1,6})-(\d{1,4})\b/g;
   const fromSources = new Set<string>();
-  for (const t of sourceTexts) for (const m of t.matchAll(/\b[A-Z]{2,6}-\d{1,4}\b/g)) fromSources.add(m[0]);
+  for (const t of sourceTexts) for (const m of t.matchAll(ID)) fromSources.add(m[0]);
   const defined = new Set<string>();
   const referenced = new Set<string>();
   for (const l of lines) {
     // An ID defines itself when it opens the item and is followed by its title or text, not by a bare aside:
     // "- OQ-012 (to be raised with Finance)" mentions OQ-012 and says nothing about what it is.
-    const lead = /^\s*(?:#{1,6}\s+|[-*+]\s+|\|\s*|\d+\.\s+)?(?:\*\*|__)?\s*([A-Z]{1,6}-\d{1,4})(?:\*\*|__)?\s*(?:[—–:.|-]\s*)?(?![(\[])(\S.*)?$/.exec(l);
+    // The \b keeps the ID whole: without it "SC-01 (placeholder)" backtracked to define "SC-0", titled "1 (placeholder)".
+    const lead = /^\s*(?:#{1,6}\s+|[-*+]\s+|\|\s*|\d+\.\s+)?(?:\*\*|__)?\s*([A-Z]{1,6}-\d{1,4})\b(?:\*\*|__)?\s*(?:[—–:.|-]\s*)?(?![(\[])(\S.*)?$/.exec(l);
     if (lead && (lead[2] ?? "").trim().length >= 3) defined.add(lead[1]);
     else if (lead && /^\s*(?:#{1,6}\s+|\|)/.test(l)) defined.add(lead[1]); // a bare heading or table cell is a definition
+    // A table row whose first cell is the ID, a bracketed note after it ("| SC-01 (placeholder) | …"), defines it too.
+    else if (/^\s*\|\s*(?:\*\*|__)?([A-Z]{1,6}-\d{1,4})(?:\*\*|__)?\s*\([^|]*\)\s*\|/.test(l)) defined.add(/([A-Z]{1,6}-\d{1,4})/.exec(l)![1]);
     else {
       // Run 20's writer opened each requirement with a bold ID on a line of its own and an "| Requirement ID | REQ-004 |"
       // row under it; both define the ID, and without them 66 requirements were reported as "never defined".
@@ -515,7 +542,7 @@ export function danglingReferences(doc: string, sourceTexts: string[] = []): Dan
       if (own) defined.add(own[1]);
     }
   }
-  for (const m of doc.matchAll(/\b([A-Z]{1,6})-(\d{1,4})\b/g)) {
+  for (const m of doc.matchAll(ID)) {
     if (m[1] === "GLD" || fromSources.has(m[0])) continue;
     referenced.add(m[0]);
   }
@@ -895,6 +922,39 @@ export function formatDuplicateRequirements(d: { ids: string[]; statement: strin
     (d.length > max ? `\n- …and ${d.length - max} more.` : "") +
     `\nKeep one of each (the one in the area its source section belongs to) and delete the others with patch_section, or make each state what is distinct about it.`
   );
+}
+
+/** Prefixes of requirement-like items a BRD defines: functional, non-functional, technical, integration, data, business rules. */
+const REVIEWABLE_PREFIX = /^(?:REQ|RQ|FR|NFR|TR|TECH|IR|INT|DR|DATA|BR|R)$/;
+
+/**
+ * Every requirement-like item of the document, whatever its prefix, for the independent reviewer. requirementBlocks keeps
+ * to the one prefix a document uses most: on a BRD with REQ-001…016 and NFR-01…26 it was the NFR rows alone, so the
+ * reviewer never read the REQ, TECH or INT items written outside the drafted areas.
+ */
+export function reviewableBlocks(doc: string): string[] {
+  const lines = doc.split("\n");
+  const starts = new Map<number, string>();
+  const count = new Map<string, number>();
+  lines.forEach((l, i) => {
+    const m = DEFINES_ID.exec(l);
+    if (m) { starts.set(i, m[3]); count.set(m[3], (count.get(m[3]) ?? 0) + 1); }
+  });
+  const prefixes = new Set([...count.entries()].filter(([p, n]) => REVIEWABLE_PREFIX.test(p) && n >= 3).map(([p]) => p));
+  if (!prefixes.size) return requirementBlocks(doc);
+  const blocks: string[][] = [];
+  const seen = new Set<string>();
+  let on = false;
+  lines.forEach((l, i) => {
+    if (starts.has(i)) {
+      const id = `${starts.get(i)}-${DEFINES_ID.exec(l)![4]}`;
+      // An ID listed again later (a traceability table, a summary) is a mention, not a second item to review.
+      on = prefixes.has(starts.get(i)!) && !seen.has(id);
+      if (on) { seen.add(id); blocks.push([]); }
+    } else if (/^#{1,6}\s/.test(l)) on = false;
+    if (on) blocks[blocks.length - 1].push(l);
+  });
+  return blocks.map((b) => b.join("\n"));
 }
 
 export function requirementBlocks(doc: string): string[] {

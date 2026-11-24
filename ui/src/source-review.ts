@@ -12,7 +12,7 @@
  * sources, or the finding is dropped), and how the findings are put to the writer.
  */
 import { createHash } from "node:crypto";
-import { requirementBlocks } from "./source-checks.js";
+import { reviewableBlocks } from "./source-checks.js";
 
 export type IssueKind = "strength" | "merged" | "dropped" | "invented" | "citation" | "gap_ref" | "dependency" | "open_question" | "name" | "other";
 
@@ -243,7 +243,7 @@ export async function reviewDocument(opts: {
 }): Promise<ReviewReport> {
   const { doc, sources, memory, ask } = opts;
   const size = opts.batchSize ?? 8, maxRounds = opts.maxRounds ?? 2;
-  const all = requirementBlocks(doc)
+  const all = reviewableBlocks(doc)
     .map((block) => ({ req: /\b[A-Z]{1,6}-\d{1,4}\b/.exec(block)?.[0] ?? "", block }))
     .filter((b) => b.req);
   const due = all.filter((b) => memory.needsReading(b.req, b.block, maxRounds));
@@ -299,7 +299,11 @@ export function formatReview(r: ReviewReport, sectionOf: (req: string) => string
     }
   }
   return (
-    `⚠ **Independent review — a second reader, who did not write these, checked ${r.read} of ${r.total} requirement${r.total === 1 ? "" : "s"} against the sources and found problems in ${r.findings.length}` +
+    // Said as what happened: "checked 0 of 26" read as a reviewer that did nothing, when all 26 had been read in an
+    // earlier round and were unchanged.
+    `⚠ **Independent review — a second reader, who did not write these, read ${r.read} new or changed requirement${r.read === 1 ? "" : "s"} of ${r.total}` +
+    `${r.total > r.read ? ` (the other ${r.total - r.read} were read in an earlier round and have not changed)` : ""}` +
+    ` and found problems in ${r.findings.length}` +
     `${fails ? ` (${fails} failing)` : ""}:**\n\n${lines.join("\n")}` +
     (r.findings.length > max ? `\n\n…and ${r.findings.length - max} more.` : "") +
     (r.stillOpen.length ? `\n\nReported earlier and not yet changed: ${r.stillOpen.join(", ")}.` : "") +

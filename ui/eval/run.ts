@@ -86,7 +86,7 @@ async function runOnce(c: EvalCase, dir: string): Promise<{ evidence: RunEvidenc
     if (failure) throw new Error(`the run failed: ${failure}`);
     const seconds = Math.round((Date.now() - started) / 1000);
 
-    const art = await json(await fetch(`${BASE}/api/artifacts/content?path=${encodeURIComponent(c.saveAs)}`, { headers: { cookie } }));
+    const art = await json(await fetch(`${BASE}/api/artifacts/content?raw=1&path=${encodeURIComponent(c.saveAs)}`, { headers: { cookie } }));
     if (!art.ok) throw new Error(`the agent did not save ${c.saveAs}: ${art.error}`);
 
     // Keep what the agent actually wrote: a score alone cannot be debugged.
@@ -154,3 +154,4 @@ async function main() {
 }
 
 main().catch((e) => { console.error(e.message); process.exit(2); });
+

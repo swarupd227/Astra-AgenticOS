@@ -15,6 +15,7 @@ import {
 } from "./evidence.js";
 import { auditChange, formatAudit, proposalsWithoutTests } from "./audit.js";
 import { SectionedDoc, applyEdits, sectionKey, type Edit } from "./sections.js";
+import { documentTitle, parseMarkdown, presentGoldenCitations, toDocx, toPrintHtml } from "./doc-export.js";
 import {
   CHAPTER_SYSTEM, WRITER_SYSTEM, areaHeadings, enforceDependencies, areaPrompt, carryReview, chapterPrompt, cleanArea, definedIds, draftArea, draftChapter, extractSection, fixPrompt,
   fixChangesPrompt, headingFor, mergeChanges, pool, renumber, renumberNewIds, splitAreas, summarizeDrafts, type Area, type AreaResult, type Chapter, type WriteCall,
@@ -24,7 +25,7 @@ import {
   citationIssues, citationKey, citesTaskPrompt, constructsProhibitedBy, formatCitationReport, formatConflicts, formatDeviation,
   coverageGaps, danglingReferences, duplicateRequirements, formatDuplicateRequirements, fieldRowsAsLabels, dependencyIssues, formatCoverageGaps, formatDanglingReferences, formatOmittedDependencies, formatOmittedItemSentences, formatUncheckedItems, formatQuoteIssues, formatUngroundedFields, omittedDependencies, omittedItemSentences, quoteIssues, ungroundedFields,
    formatDependencyIssues, formatInventedRoles, formatProhibited, formatStrengthIssues, inventedRoles,
-  flattenedSequences, formatFlattenedSequences, formatDegradedSources, formatItemLedger, formatUncheckedDocuments, isClientDocument, itemLedger, degradedSources, noCheckableCitations, ownDocuments, prohibitedUsed, summarizeItemLedger, requirementBlocks, strengthIssues, templateDeviations, termConflicts, unaddressedConflicts,
+  flattenedSequences, formatFlattenedSequences, formatDegradedSources, formatItemLedger, formatUncheckedDocuments, isClientDocument, itemLedger, degradedSources, noCheckableCitations, ownDocuments, prohibitedUsed, summarizeItemLedger, requirementBlocks, reviewableBlocks, strengthIssues, templateDeviations, termConflicts, unaddressedConflicts,
   type TermConflict,
 } from "./source-checks.js";
 import { REVIEW_SCHEMA, REVIEW_SYSTEM, REVIEW_TOOL, ReviewMemory, batchPrompt, coerceReview, formatReview, reviewDocument, sourcesBlock, type AskReviewer, type ReviewReport, type SourceText } from "./source-review.js";
@@ -1876,7 +1877,7 @@ async function independentReviewReport(
   const all = documentSources(ctx.project, ctx.task);
   const own = new Set(ownSources(all).map((s) => s.name));
   const sources = all.filter((s) => own.has(s.name) || content.includes(s.name.split(" ")[0]));
-  if (sources.length < 2 || requirementBlocks(content).length < 3) return { text: null };
+  if (sources.length < 2 || reviewableBlocks(content).length < 3) return { text: null };
   ctx.emit?.({ type: "notice", message: "An independent reviewer is reading the requirements against their sources…" });
   const started = Date.now();
   const report = await reviewDocument({
@@ -4177,22 +4178,53 @@ app.get("/api/artifacts", (req, res) => {
   res.json({ projectId: p?.id, files });
 });
 
+/** A Markdown deliverable as a reader sees it: Golden Repository citations as short labels with a reference table. */
+function forReader(abs: string, text: string): string {
+  if (!/\.(md|markdown)$/i.test(abs) || !/\bGLD-[A-Z]+-\d+/.test(text)) return text;
+  return presentGoldenCitations(text, (id) => {
+    const i = golden.get(id);
+    return i ? { title: i.title, path: i.sourceName, version: i.version } : undefined;
+  });
+}
+
 app.get("/api/artifacts/content", (req, res) => {
   try {
     const { state } = sessionOf(req, res);
     const abs = safeArtifactPath(String(req.query.path || ""), projects.find((x) => x.id === state.projectId) ?? null);
     if (!fs.existsSync(abs)) return res.status(404).json({ ok: false, error: "Not found" });
-    res.json({ ok: true, path: req.query.path, content: fs.readFileSync(abs, "utf8") });
+    const text = fs.readFileSync(abs, "utf8");
+    // raw=1 is the stored text, with the citations the checks and evaluation scripts verify.
+    res.json({ ok: true, path: req.query.path, content: req.query.raw === "1" ? text : forReader(abs, text) });
   } catch (e) {
     res.status(400).json({ ok: false, error: (e as Error).message });
   }
 });
 
-app.get("/api/artifacts/download", (req, res) => {
+app.get("/api/artifacts/download", async (req, res) => {
   try {
     const { state } = sessionOf(req, res);
     const abs = safeArtifactPath(String(req.query.path || ""), projects.find((x) => x.id === state.projectId) ?? null);
     if (!fs.existsSync(abs)) return res.status(404).send("Not found");
+    // A Markdown deliverable can also be taken as Word, or as a page the browser saves as PDF (see doc-export.ts).
+    const format = String(req.query.format || "").toLowerCase();
+    if ((format === "docx" || format === "pdf") && /\.(md|markdown)$/i.test(abs)) {
+      const blocks = parseMarkdown(forReader(abs, fs.readFileSync(abs, "utf8")));
+      const base = path.basename(abs).replace(/\.(md|markdown)$/i, "");
+      const title = documentTitle(blocks, base);
+      if (format === "docx") {
+        const buf = await toDocx(blocks, title);
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        res.setHeader("Content-Disposition", `attachment; filename="${base.replace(/[^\w.-]+/g, "_")}.docx"`);
+        return res.send(buf);
+      }
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.send(toPrintHtml(blocks, title));
+    }
+    if (/\.(md|markdown)$/i.test(abs) && req.query.raw !== "1") {
+      res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${path.basename(abs).replace(/[^\w.-]+/g, "_")}"`);
+      return res.send(forReader(abs, fs.readFileSync(abs, "utf8")));
+    }
     res.download(abs, path.basename(abs));
   } catch (e) {
     res.status(400).send((e as Error).message);

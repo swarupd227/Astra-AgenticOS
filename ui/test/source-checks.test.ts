@@ -13,7 +13,7 @@ import {
   citationIssues, citationKey, citesTaskPrompt, constructsProhibitedBy, extractDefinitions, formatCitationReport,
   formatInventedRoles, inventedRoles, noCheckableCitations, prohibitedUsed, templateDeviations, termConflicts,
   unaddressedConflicts, formatOmittedDependencies, omittedItemSentences, formatOmittedItemSentences, formatUncheckedItems, ownDocuments, isClientDocument,
-  fieldValue, flattenedSequences, formatFlattenedSequences, sourceSequences, itemLedger, formatItemLedger, formatUncheckedDocuments, summarizeItemLedger, degradedSources, formatDegradedSources,
+  reviewableBlocks, fieldValue, flattenedSequences, formatFlattenedSequences, sourceSequences, itemLedger, formatItemLedger, formatUncheckedDocuments, summarizeItemLedger, degradedSources, formatDegradedSources,
 } from "../src/source-checks.js";
 
 let failures = 0;
@@ -766,6 +766,40 @@ eq("a mention nowhere near a prohibition does not count",
   eq('alternative example orders of the same steps are not one order to keep',
     flattenedSequences(r('Section Ordering', 'Sections may be reordered, for example Customer, Pricing, Equipment or Customer, Equipment, Pricing.'), src), []);
   eq('the report gives the source order', (formatFlattenedSequences(flattenedSequences(r('Status Management', 'May include: Available, Reserved, Delivered, On Rent.'), src)) ?? '').includes('“Available → Reserved → Delivered → On Rent”'), true);
+}
+
+{
+  // The reviewer reads every requirement-like item, not only the most common prefix; an ID listed again later is not a second item.
+  const doc = ['## 6.1 Functional', '#### REQ-001 — A', 'The system shall do A.', '#### REQ-002 — B', 'The system shall do B.', '#### REQ-003 — C', 'The system shall do C.',
+    '## 6.2 Non-functional', '| ID | Requirement |', '| --- | --- |', ...Array.from({ length: 5 }, (_, k) => `| NFR-0${k + 1} | Page load ${k} seconds |`),
+    '## 6.3 Technical', '| ID | Requirement |', '| --- | --- |', '| TECH-01 | Built on the platform |', '| TECH-02 | Runs in the cloud |', '| TECH-03 | Uses one database |',
+    '## 12 Traceability', '| ID | Summary |', '| --- | --- |', '| REQ-001 | A again |', '## Open questions', '- OQ-1 — what about D?'].join('\n');
+  const ids = reviewableBlocks(doc).map((b) => /\b[A-Z]{1,6}-\d{1,4}\b/.exec(b)![0]);
+  eq('every requirement-like prefix is reviewed, each item once', ids, ['REQ-001', 'REQ-002', 'REQ-003', 'NFR-01', 'NFR-02', 'NFR-03', 'NFR-04', 'NFR-05', 'TECH-01', 'TECH-02', 'TECH-03']);
+}
+
+{
+  // Undefined-ID check: an ID inside a longer one is not an ID; a source's one-letter IDs are its own; a table row
+  // "| SC-01 (placeholder) |" defines SC-01, not SC-0.
+  const doc = ['## 1 Intro', 'Cited as GLD-REF-135@1 and GLD-REF-136.', 'Platform risk Crossroads R-11 applies.',
+    '| ID | Criterion |', '| --- | --- |', '| SC-01 (placeholder) | Billing works |', '| SC-02 (placeholder) | Credit works |', 'See SC-01 and SC-02.'].join('\n');
+  eq('no false dangling IDs', danglingReferences(doc, ['Risk register: R-11 platform cut.']).ids, []);
+  eq('a real dangling ID is still found', danglingReferences(doc + '\nAs SC-03 requires.', []).ids, ['SC-03']);
+}
+
+{
+  // Citation check: sentences about provenance, lead-ins, the document's own questions, and the other citations of a
+  // supported claim are not reported; an ordinary claim with its citation in brackets still is.
+  const src = new Map([[citationKey('inputs/form.md'), 'The system shall ingest source data from core, LOS and ancillary systems.'],
+    [citationKey('inputs/rules.md'), 'Every action is recorded with the data used and the rule behind it.']]);
+  const nf = (doc: string) => citationIssues(doc, src).issues.filter((i) => i.kind === 'not-found').length;
+  eq('a provenance sentence ending in its citation is not a claim', nf('Technical requirements come from the Constraints field of `inputs/form.md`:'), 0);
+  eq('a lead-in ending with a colon is not a claim', nf('The rules carried into this document from the platform documents (`inputs/rules.md`):'), 0);
+  eq("the document's own open question is not a claim", nf('| OQ-3 | Whether the nightly benchmark is final in later waves | `inputs/form.md` |'), 0);
+  eq('a claim found in one of its citations is not reported against the others',
+    nf('The system shall ingest source data from core, LOS and ancillary systems (`inputs/form.md`; `inputs/rules.md`).'), 0);
+  eq('an unsupported claim with its citation in brackets is still reported',
+    nf('The system shall price every loan automatically using bureau scores and external enrichment data (`inputs/form.md`).'), 1);
 }
 
 console.log(`source checks — ${failures} failure(s)`);
