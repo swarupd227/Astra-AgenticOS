@@ -118,6 +118,8 @@ const doc = (...reqs: string[]) => `## 4. Requirements\n\n${reqs.join("")}${reqs
   eq("a short form is the same item ('misc' for miscellaneous)", narrowedLists(doc(req("REQ-001", "None.", "The reservation holds the customer, job site, contact, dates, equipment requirement and miscellaneous charges.")), new Map([["inputs/billing.md", DOC.replace("-   Pricing", "-   Misc Charges")]])).length, 0);
   eq("a list under a Gap heading is questions, not an enumeration", narrowedLists(doc(req("REQ-001", "None.", "The customer, job site, contact, dates and equipment requirement.")),
     new Map([["inputs/billing.md", "#### Gap 1: Reservation\n\nThe reservation holds:\n\n- Customer\n- Job Site\n- Contact\n- Dates\n- Equipment Requirement\n- Pricing\n"]])).length, 0);
+  eq("a list whose short lead-in shares one generic word with the requirement is a different list", narrowedLists(doc(req("REQ-001", "None.", "Fields become mandatory for the customer, job site and PO number when a condition is met.")),
+    new Map([["inputs/billing.md", "Examples\n\nAgreement Screen\n\nVisible Fields:\n\n- Customer\n- Job Site\n- PO Number\n- Billing Method\n"]])).length, 0);
   eq("nothing is said when there is nothing", formatNarrowedLists([]), null);
   eq("what is said names the items left out", /not named: Pricing/.test(formatNarrowedLists(narrow) ?? ""), true);
 }

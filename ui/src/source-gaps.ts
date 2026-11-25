@@ -227,7 +227,8 @@ export function narrowedLists(doc: string, sources: Map<string, string>): Narrow
       for (const l of listsOf.get(k)!) {
         if (l.items.length < 4 || l.items.length > 20) continue;
         const lead = stems(l.lead);
-        if (lead.size && sharedCount(lead, about) / lead.size < 0.5) continue;
+        // A short lead-in ("Visible Fields") must be wholly in the requirement's words: one shared generic word ("fields") does not make it that list.
+        if (lead.size && sharedCount(lead, about) / lead.size < (lead.size <= 2 ? 1 : 0.5)) continue;
         const present = l.items.filter((it) => { const s = stems(it); return s.size > 0 && [...s].every((w) => named(claim, w)); });
         const missing = l.items.filter((it) => !present.includes(it));
         if (present.length < 3 || !missing.length || present.length * 2 <= l.items.length) continue;
