@@ -29,6 +29,7 @@ import {
   type TermConflict,
 } from "./source-checks.js";
 import { REVIEW_SCHEMA, REVIEW_SYSTEM, REVIEW_TOOL, ReviewMemory, batchPrompt, coerceReview, formatReview, reviewDocument, sourcesBlock, type AskReviewer, type ReviewReport, type SourceText } from "./source-review.js";
+import { COVERAGE_SCHEMA, COVERAGE_SYSTEM, CoverageMemory, formatCoverage, requirementDigest, reviewCoverage, type AskCoverage } from "./source-coverage.js";
 import { formatGapCitations, formatHiddenGaps, formatNarrowedLists, gapCitationIssues, hiddenGaps, narrowedLists } from "./source-gaps.js";
 import { NEVER_INDEXED, unzipExcludeArgs, pruneUnindexed, countFiles } from "./workspace.js";
 import {
@@ -1182,6 +1183,8 @@ type SectionContext = {
   paths: Map<string, string>;
   /** What the independent reviewer has read this run (only check_document uses it). */
   review?: ReviewMemory;
+  /** What the second reader of documents with no headings has read this run. */
+  coverage?: CoverageMemory;
   emit?: (e: any) => void;
   perf?: RunPerf;
   /** check_document only: send the reviewer's findings back to the drafted areas' writers; returns a note when areas changed. */
@@ -1341,7 +1344,12 @@ async function handleCheckDocument(ctx: SectionContext, input: Record<string, un
     notes.push(`ℹ **${doc.citationRewrites} citation(s) were written as files under inputs/ (\`inputs/GLD-…\`) and corrected to the Golden Repository id.** A Golden Repository document is cited by its id, e.g. \`GLD-FS-002@1\`.`);
   // Said here, where the writer reads the check, but not in documentChecks: a document with no headings can never be fixed
   // by the writer, and as an open check it would mark every run "saved with checks still open".
-  const unchecked = formatUncheckedDocuments(itemLedger(fieldRowsAsLabels(composed), clientDocumentMap(documentSources(ctx.project, ctx.task))));
+  const clientDocs = clientDocumentMap(documentSources(ctx.project, ctx.task));
+  const ledger = itemLedger(fieldRowsAsLabels(composed), clientDocs);
+  // A document with no headings has no items to count, so a second reader reads it against the requirements instead.
+  const coverage = await coverageNote(ctx, composed, clientDocs, ledger.noItems);
+  if (coverage) notes.push(coverage);
+  const unchecked = formatUncheckedDocuments(ledger);
   if (unchecked) notes.push(unchecked);
   // After the sections' own writers have had their rounds, the writer of the whole document fixes what matters and
   // stops: run 23 spent 68 turns (11 minutes) patching minor findings and weak citation matches one at a time.
@@ -1860,6 +1868,50 @@ function makeReviewer(sources: SourceText[], onCall?: (ms: number, u: Usage) => 
       return [];
     }
   };
+}
+
+/** Asks the model about one part of a document with no headings; null when it gave no usable answer. */
+function makeCoverageReader(onCall?: (ms: number, u: Usage) => void): AskCoverage {
+  return async (chunk, digest) => {
+    try {
+      const t0 = Date.now();
+      const resp = await anthropic.messages.create({
+        model: REVIEW_MODEL || MODEL, max_tokens: 8000,
+        system: [{ type: "text", text: COVERAGE_SYSTEM }, { type: "text", text: `REQUIREMENTS OF THE BRD:
+${digest}`, cache_control: { type: "ephemeral" } }] as any,
+        output_config: { format: { type: "json_schema", schema: COVERAGE_SCHEMA as any } },
+        messages: [{ role: "user", content: `PART OF ${chunk.source}:
+
+${chunk.text}` }],
+      } as any, { timeout: REVIEW_CALL_TIMEOUT_MS, maxRetries: 2 }) as Anthropic.Message;
+      onCall?.(Date.now() - t0, usageOf(resp.usage));
+      const parsed = JSON.parse(resp.content.filter((b) => b.type === "text").map((b: any) => b.text).join(""));
+      return Array.isArray(parsed?.gaps) ? parsed.gaps : null;
+    } catch (e) {
+      console.error(`[coverage] reader call failed: ${(e as Error).message}`);
+      return null;
+    }
+  };
+}
+
+/** What the second reader found in the client documents that have no headings; null when there are none, it is off, or it found nothing. */
+async function coverageNote(
+  ctx: { project: Project | null; coverage?: CoverageMemory; emit?: (e: any) => void; perf?: RunPerf },
+  doc: string, clientDocs: Map<string, string>, noItems: string[]
+): Promise<string | null> {
+  if (!SOURCE_REVIEW || !ctx.project || !noItems.length) return null;
+  const blocks = reviewableBlocks(doc);
+  if (blocks.length < 3) return null;
+  ctx.emit?.({ type: "notice", message: "A second reader is reading the documents with no headings against the requirements…" });
+  const started = Date.now();
+  const r = await reviewCoverage({
+    documents: noItems.map((source) => ({ source, text: clientDocs.get(source) ?? "" })).filter((d) => d.text),
+    digest: requirementDigest(blocks), memory: ctx.coverage ?? new CoverageMemory(), concurrency: REVIEW_CONCURRENCY,
+    ask: makeCoverageReader((ms, u) => ctx.perf?.reviewCall(ms, u)),
+  });
+  ctx.perf?.reviewRound(Date.now() - started);
+  console.error(`[coverage] ${r.chunks} part(s), ${r.read} read, ${r.findings.length} finding(s), ${r.droppedClaims} unverifiable claim(s) dropped, ${r.unreturned} unreturned, ${Math.round((Date.now() - started) / 1000)}s`);
+  return formatCoverage(r);
 }
 
 /** What the second reader found in a document, worded for the writer; null when there is nothing to say or it is switched off. */
@@ -2477,6 +2529,7 @@ async function runAgent(
   let reviewRounds = 0;
   /** Which requirements the independent reviewer has read, so a requirement is read again only when it changes. */
   const reviewMemory = new ReviewMemory();
+  const coverageMemory = new CoverageMemory();
   /** Saves refused once as destructive; the same content sent again is allowed. */
   const refusedSaves = new Set<string>();
   let lastDocSaved: { name: string; content: string } | null = null;
@@ -2838,7 +2891,7 @@ async function runAgent(
                   return r.changed ? `**${r.changed} drafted section(s) were corrected by their own writers** from the reviewer's findings and the server's checks before these checks ran; what follows is what is still open.${resets}` : null;
                 }
               : undefined;
-            resultText = (drafted ? `${drafted}\n\n---\n\n` : "") + (await handleCheckDocument({ ...sctx, review: reviewMemory, refixAreas, drafted: draftJobs.length > 0 }, args)).text;
+            resultText = (drafted ? `${drafted}\n\n---\n\n` : "") + (await handleCheckDocument({ ...sctx, review: reviewMemory, coverage: coverageMemory, refixAreas, drafted: draftJobs.length > 0 }, args)).text;
             const d = sectionDocs.get(String(args.artifact ?? "").trim());
             if (d) lastDocSaved = { name: String(args.artifact).trim(), content: d.compose() };
             if (draftJobs.length && checksDone >= DRAFTED_CHECK_LIMIT)
