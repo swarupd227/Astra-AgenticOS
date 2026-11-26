@@ -5,7 +5,7 @@
  *
  * Synthetic text only. Each check is tested on the shape it must flag and the near-miss it must leave alone.
  */
-import { formatGapCitations, formatHiddenGaps, formatNarrowedLists, gapCitationIssues, hiddenGaps, narrowedLists, sourceItems } from "../src/source-gaps.js";
+import { cutOffGapLists, formatCutOffLists, formatGapCitations, formatHiddenGaps, formatNarrowedLists, gapCitationIssues, hiddenGaps, narrowedLists, sourceItems } from "../src/source-gaps.js";
 
 let failures = 0;
 const fail = (m: string) => { console.error(m); failures++; };
@@ -106,6 +106,19 @@ const doc = (...reqs: string[]) => `## 4. Requirements\n\n${reqs.join("")}${reqs
   eq("'Not specified' counts as none", hiddenGaps(doc(req("REQ-001", "Not specified in source.", subject)), SOURCES).length, 1);
   eq("a credit question does not attach to a billing requirement", hiddenGaps(doc(req("REQ-001", "None.", "The system shall let users approve credit exceptions when billing the agreement.")), SOURCES).length, 0);
   eq("nothing is said when there is nothing", formatHiddenGaps([]), null);
+}
+
+// --- a Gap's list quoted partway ---------------------------------------------------------
+{
+  const src = new Map([["inputs/billing.md", ["#### Gap 6: Insurance Change Management", "", "The requirement addresses insurance expiry.", "", "However it does not define what happens when:", "", "-   Insurance expires during an active rental.", "-   Insurance is replaced during a rental.", "-   Coverage limits change.", "", "These are common business scenarios.", ""].join(String.fromCharCode(10))]]);
+  const ask = (oq: string) => cutOffGapLists(doc(req("REQ-001", oq, "The system shall validate insurance during an active rental.")), src);
+  const cut = ask("Gap 6: Insurance Change Management — “However it does not define what happens when:”");
+  eq("a quote that stops at the colon is reported with what it left out", cut.map((c) => [c.ref, c.missing.length]), [["Gap 6", 3]]);
+  eq("one entry of three is reported with the other two", ask("Gap 6: Insurance Change Management — “Insurance expires during an active rental.”").map((c) => c.missing.length), [2]);
+  eq("the whole list is quiet", ask("Gap 6: Insurance Change Management — “However it does not define what happens when: Insurance expires during an active rental. Insurance is replaced during a rental. Coverage limits change.”"), []);
+  eq("an item cited by its title, with its list not taken up, is quiet", ask("Gap 6: Insurance Change Management — “The requirement addresses insurance expiry.”"), []);
+  eq("what is said names the entries", /Coverage limits change/.test(formatCutOffLists(cut) ?? ""), true);
+  eq("nothing is said when there is nothing", formatCutOffLists([]), null);
 }
 
 // --- 3. Narrowed lists -------------------------------------------------------------------------

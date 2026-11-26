@@ -121,6 +121,78 @@ export function formatGapCitations(r: { checked: number; issues: GapCitationIssu
   );
 }
 
+// --- 1b. A Gap or Decision quoted without the whole of its list -------------------------------
+
+export type CutOffList = { requirement: string; ref: string; lead: string; missing: string[] };
+
+const spaced = (s: string) => ` ${s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `;
+
+/** The lists inside one Gap's or Decision's text: each line ending in a colon with the bullets under it. */
+function listsOfItem(text: string): { lead: string; items: string[] }[] {
+  const lines = text.split("\n");
+  const out: { lead: string; items: string[] }[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!/:\s*(?:\*\*|__)?\s*$/.test(lines[i])) continue;
+    const items: string[] = [];
+    for (let j = i + 1; j < lines.length; j++) {
+      const m = LIST_ITEM.exec(lines[j]);
+      if (m) items.push(m[1].replace(/[*_]+/g, "").trim());
+      else if (lines[j].trim()) break;
+    }
+    if (items.length >= 2) out.push({ lead: lines[i].replace(/[*_]+/g, "").trim(), items });
+  }
+  return out;
+}
+
+/**
+ * Open Questions that take up a Gap's or Decision's list and stop partway: the quote ends at "does not define what happens
+ * when:" with the scenarios missing, or gives one of three questions. Graders marked four of 30 requirements for this on one
+ * run while every statement passed. A list is taken up when the field has the words of its lead-in or one of its entries;
+ * every entry must then be somewhere in the requirement.
+ */
+export function cutOffGapLists(doc: string, sources: Map<string, string>): CutOffList[] {
+  const out: CutOffList[] = [];
+  const itemsOf = new Map<string, SourceItem[]>();
+  for (const block of requirementBlocks(doc)) {
+    const r = requirementsOf(block)[0];
+    if (!r) continue;
+    const oq = field(r, /^open questions?$/);
+    if (!oq) continue;
+    const files = r.cited.filter((k) => isClientDocument(k) && sources.has(k));
+    const items = files.flatMap((k) => { if (!itemsOf.has(k)) itemsOf.set(k, sourceItems(sources.get(k)!, k)); return itemsOf.get(k)!; });
+    const asked = spaced(oq), whole = spaced(block), words = stems(oq);
+    const seen = new Set<string>();
+    for (const m of oq.matchAll(REF)) {
+      const kind = /^g/i.test(m[1]) ? "Gap" : "Decision";
+      for (const n of [m[2], ...(m[3].match(/\d+/g) ?? [])].map(Number)) {
+        const ref = `${kind} ${n}`;
+        if (seen.has(ref)) continue;
+        seen.add(ref);
+        // The sources number their items afresh in every area: the one meant is the one whose words the field shares most.
+        const best = items.filter((i) => i.kind === kind && i.n === n).map((i) => ({ i, s: sharedCount(words, stems(i.text)) })).sort((a, b) => b.s - a.s)[0];
+        if (!best || best.s < 3) continue;
+        for (const l of listsOfItem(best.i.text)) {
+          const tail = spaced(l.lead).trim().split(" ").slice(-5).join(" ");
+          const takenUp = asked.includes(` ${tail} `) || l.items.some((it) => spaced(it).length >= 14 && asked.includes(spaced(it)));
+          const missing = l.items.filter((it) => !whole.includes(spaced(it)));
+          if (takenUp && missing.length) out.push({ requirement: r.id, ref, lead: l.lead, missing: missing.slice(0, 6) });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+export function formatCutOffLists(c: CutOffList[], max = 12): string | null {
+  if (!c.length) return null;
+  return (
+    `⚠ **A Gap or Decision is quoted without the whole of its list — ${c.length}:**\n` +
+    c.slice(0, max).map((x) => `- ${x.requirement}, ${x.ref} (“${x.lead.length > 90 ? "…" + x.lead.slice(-90) : x.lead}”): missing ${x.missing.map((s) => `“${s}”`).join("; ")}`).join("\n") +
+    (c.length > max ? `\n- …and ${c.length - max} more.` : "") +
+    `\nAdd the missing entries to Open Questions as the source words them. A quote that stops at the colon, or gives one question of three, loses what the client has to decide.`
+  );
+}
+
 // --- 2. "None" where the source lists a gap about this ------------------------------------
 
 export type HiddenGap = { requirement: string; items: string[] };

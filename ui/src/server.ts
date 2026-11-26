@@ -30,7 +30,7 @@ import {
 } from "./source-checks.js";
 import { REVIEW_SCHEMA, REVIEW_SYSTEM, REVIEW_TOOL, ReviewMemory, batchPrompt, coerceReview, formatReview, reviewDocument, sourcesBlock, type AskReviewer, type ReviewReport, type SourceText } from "./source-review.js";
 import { COVERAGE_SCHEMA, COVERAGE_SYSTEM, CoverageMemory, formatCoverage, requirementDigest, reviewCoverage, type AskCoverage } from "./source-coverage.js";
-import { formatGapCitations, formatHiddenGaps, formatNarrowedLists, gapCitationIssues, hiddenGaps, narrowedLists } from "./source-gaps.js";
+import { cutOffGapLists, formatCutOffLists, formatGapCitations, formatHiddenGaps, formatNarrowedLists, gapCitationIssues, hiddenGaps, narrowedLists } from "./source-gaps.js";
 import { NEVER_INDEXED, unzipExcludeArgs, pruneUnindexed, countFiles } from "./workspace.js";
 import {
   unprovenClaims,
@@ -1025,6 +1025,8 @@ function documentChecks(
     // What the requirements say about the gaps, decisions and lists in their sources.
     const gapRefs = formatGapCitations(gapCitationIssues(doc, cited));
     if (gapRefs) notes.push(gapRefs);
+    const cutOff = formatCutOffLists(cutOffGapLists(doc, cited));
+    if (cutOff) notes.push(cutOff);
     const hidden = formatHiddenGaps(hiddenGaps(doc, cited));
     if (hidden) notes.push(hidden);
     const narrowed = formatNarrowedLists(narrowedLists(doc, cited));
