@@ -147,8 +147,10 @@ function listsOfItem(text: string): { lead: string; items: string[] }[] {
 /**
  * Open Questions that take up a Gap's or Decision's list and stop partway: the quote ends at "does not define what happens
  * when:" with the scenarios missing, or gives one of three questions. Graders marked four of 30 requirements for this on one
- * run while every statement passed. A list is taken up when the field has the words of its lead-in or one of its entries;
- * every entry must then be somewhere in the requirement.
+ * run while every statement passed. A list is taken up when the field has the words of its lead-in or one of its entries,
+ * and a Decision's "Possible options:" by citing the Decision at all; every entry must then be somewhere in the requirement.
+ * Other lists of a cited item ("Examples:", "Potential statuses may include:") illustrate it and are left alone: asking for
+ * all of them raised the findings on one document from 2 to 15, three of four on graded requirements that graders passed.
  */
 export function cutOffGapLists(doc: string, sources: Map<string, string>): CutOffList[] {
   const out: CutOffList[] = [];
@@ -173,7 +175,9 @@ export function cutOffGapLists(doc: string, sources: Map<string, string>): CutOf
         if (!best || best.s < 3) continue;
         for (const l of listsOfItem(best.i.text)) {
           const tail = spaced(l.lead).trim().split(" ").slice(-5).join(" ");
-          const takenUp = asked.includes(` ${tail} `) || l.items.some((it) => spaced(it).length >= 14 && asked.includes(spaced(it)));
+          // A Decision's options are what the client chooses between: citing the Decision takes them up, whatever is quoted.
+          const options = kind === "Decision" && /^possible\b/i.test(l.lead);
+          const takenUp = options || asked.includes(` ${tail} `) || l.items.some((it) => spaced(it).length >= 14 && asked.includes(spaced(it)));
           const missing = l.items.filter((it) => !whole.includes(spaced(it)));
           if (takenUp && missing.length) out.push({ requirement: r.id, ref, lead: l.lead, missing: missing.slice(0, 6) });
         }

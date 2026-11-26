@@ -119,6 +119,10 @@ const doc = (...reqs: string[]) => `## 4. Requirements\n\n${reqs.join("")}${reqs
   eq("an item cited by its title, with its list not taken up, is quiet", ask("Gap 6: Insurance Change Management — “The requirement addresses insurance expiry.”"), []);
   eq("what is said names the entries", /Coverage limits change/.test(formatCutOffLists(cut) ?? ""), true);
   eq("nothing is said when there is nothing", formatCutOffLists([]), null);
+  const opts = new Map([["inputs/billing.md", ["#### Decision 2", "", "What hierarchy should determine the final billing rate during an active rental?", "", "Possible levels:", "", "-   Category", "-   Class", "-   Customer", "", "#### Gap 4: Rental Statuses", "", "The requirement does not define statuses during an active rental.", "", "Potential statuses may include:", "", "-   Draft", "-   Closed", ""].join(String.fromCharCode(10))]]);
+  const cite = (oq: string) => cutOffGapLists(doc(req("REQ-001", oq, "The system shall apply the billing rate by category and class during an active rental.")), opts);
+  eq("citing a Decision takes up its possible options, whatever is quoted", cite("Decision 2 — “What hierarchy should determine the final billing rate?”").map((c) => c.missing), [["Customer"]]);
+  eq("another cited list that was not quoted is an illustration and is left alone", cite("Gap 4: Rental Statuses — “The requirement does not define statuses during an active rental.”"), []);
 }
 
 // --- 3. Narrowed lists -------------------------------------------------------------------------
