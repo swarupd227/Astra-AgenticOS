@@ -14,7 +14,7 @@ import { createHash } from "node:crypto";
 export type CoverageGap = { quote: string; why: string };
 export type CoverageChunk = { source: string; text: string };
 /** Asks the model about one chunk of one document, given the digest of the requirements. Null: no usable answer. */
-export type AskCoverage = (chunk: CoverageChunk, digest: string) => Promise<CoverageGap[] | null>;
+export type AskCoverage = (chunk: CoverageChunk, digest: string, task: string) => Promise<CoverageGap[] | null>;
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 const sha = (s: string) => createHash("sha1").update(s).digest("hex");
@@ -24,6 +24,8 @@ export const COVERAGE_SYSTEM =
   `Find statements in that part of the document that bind the business or the system and that no requirement in the digest carries:\n` +
   `- Binding means the document says something must, should or may be done, held, recorded, validated, restricted or allowed, states a rule, a condition, a limit, a list of things to capture, or an order of steps that matters. A statement that only explains the business, describes how things are today, or narrates what a stage achieves is background: leave it.\n` +
   `- A requirement carries a statement when its wording says the same thing, even in other words or merged with related statements. Do not report a statement because the requirement is worded differently.\n` +
+  `- The task the BRD was written for follows the digest. It sets the scope: a statement about something the task or the BRD puts out of scope (a lifecycle stage, an area, a feature the task says not to cover) is not a gap, whatever it obliges. Report only statements inside the scope.
+` +
   `- Report only what you can show: quote the document's own sentence verbatim in quote (one sentence, or one list item with its lead-in), and say in why what it obliges and which requirement came closest, if any. A quote that is not in the part you were given is discarded.\n` +
   `- Report nothing for a part that has no uncovered binding statement. An empty list is a good answer.`;
 
@@ -84,7 +86,7 @@ async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Prom
 }
 
 export async function reviewCoverage(opts: {
-  documents: { source: string; text: string }[]; digest: string; memory: CoverageMemory; ask: AskCoverage; concurrency?: number; chunkSize?: number;
+  documents: { source: string; text: string }[]; digest: string; task?: string; memory: CoverageMemory; ask: AskCoverage; concurrency?: number; chunkSize?: number;
 }): Promise<CoverageReport> {
   const { digest, memory, ask } = opts;
   const chunks = opts.documents.flatMap((d) => chunksOf(d.source, d.text, opts.chunkSize));
@@ -95,7 +97,7 @@ export async function reviewCoverage(opts: {
     const same = memory.sameDigest(c, digest);
     let gaps = same;
     if (!gaps) {
-      const got = await ask(c, digest) ?? await ask(c, digest); // a bad answer is asked once more, then named, never read as clean
+      const got = await ask(c, digest, opts.task ?? "") ?? await ask(c, digest, opts.task ?? ""); // a bad answer is asked once more, then named, never read as clean
       if (!got) { unreturned++; return; }
       read++;
       const text = norm(c.text);

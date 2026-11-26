@@ -1872,13 +1872,16 @@ function makeReviewer(sources: SourceText[], onCall?: (ms: number, u: Usage) => 
 
 /** Asks the model about one part of a document with no headings; null when it gave no usable answer. */
 function makeCoverageReader(onCall?: (ms: number, u: Usage) => void): AskCoverage {
-  return async (chunk, digest) => {
+  return async (chunk, digest, task) => {
     try {
       const t0 = Date.now();
       const resp = await anthropic.messages.create({
         model: REVIEW_MODEL || MODEL, max_tokens: 8000,
         system: [{ type: "text", text: COVERAGE_SYSTEM }, { type: "text", text: `REQUIREMENTS OF THE BRD:
-${digest}`, cache_control: { type: "ephemeral" } }] as any,
+${digest}
+
+THE TASK THE BRD WAS WRITTEN FOR:
+${task}`, cache_control: { type: "ephemeral" } }] as any,
         output_config: { format: { type: "json_schema", schema: COVERAGE_SCHEMA as any } },
         messages: [{ role: "user", content: `PART OF ${chunk.source}:
 
@@ -1896,7 +1899,7 @@ ${chunk.text}` }],
 
 /** What the second reader found in the client documents that have no headings; null when there are none, it is off, or it found nothing. */
 async function coverageNote(
-  ctx: { project: Project | null; coverage?: CoverageMemory; emit?: (e: any) => void; perf?: RunPerf },
+  ctx: { project: Project | null; task?: string; coverage?: CoverageMemory; emit?: (e: any) => void; perf?: RunPerf },
   doc: string, clientDocs: Map<string, string>, noItems: string[]
 ): Promise<string | null> {
   if (!SOURCE_REVIEW || !ctx.project || !noItems.length) return null;
@@ -1906,7 +1909,7 @@ async function coverageNote(
   const started = Date.now();
   const r = await reviewCoverage({
     documents: noItems.map((source) => ({ source, text: clientDocs.get(source) ?? "" })).filter((d) => d.text),
-    digest: requirementDigest(blocks), memory: ctx.coverage ?? new CoverageMemory(), concurrency: REVIEW_CONCURRENCY,
+    digest: requirementDigest(blocks), task: ctx.task ?? "", memory: ctx.coverage ?? new CoverageMemory(), concurrency: REVIEW_CONCURRENCY,
     ask: makeCoverageReader((ms, u) => ctx.perf?.reviewCall(ms, u)),
   });
   ctx.perf?.reviewRound(Date.now() - started);

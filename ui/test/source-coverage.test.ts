@@ -64,6 +64,13 @@ const WITH_RULE = `${para(1)}\n\n${RULE} Nothing else is stated here, but the pa
   eq("a part that came back clean is not read again, whatever is added", asks.length, n);
 }
 
+// --- the task, which sets the scope, goes to the reader
+{
+  let seen = "";
+  await reviewCoverage({ documents: [{ source: "a.md", text: WITH_RULE }], digest: "d", task: "Anything outside this list is out of scope.", memory: new CoverageMemory(), ask: async (_c, _d, t) => { seen = t; return []; } });
+  eq("the reader is given the task", seen, "Anything outside this list is out of scope.");
+}
+
 // --- a bad answer is never read as clean ------------------------------------------------------------
 {
   let n = 0;
